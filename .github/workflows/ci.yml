@@ -20,19 +20,17 @@ jobs:
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Set up Python
-        uses: actions/setup-python@v5.6.0
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
         with:
+          enable-cache: true
           python-version: ${{ matrix.python-version }}
-
-      - name: Install maturin
-        run: pip install maturin
 
       - name: Run Rust tests
         run: cargo test --workspace
 
       - name: Install Serpen (development)
-        run: maturin develop --release
+        run: uvx maturin develop --release
 
       - name: Smoke test CLI
         run: |
