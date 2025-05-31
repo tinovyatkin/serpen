@@ -20,6 +20,15 @@ jobs:
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Use a shared cache key across different Python versions
+          # to avoid rebuilding Rust dependencies for each Python version
+          shared-key: rust-deps
+          # Cache even on build failures to speed up subsequent runs
+          cache-on-failure: true
+
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
         with:
