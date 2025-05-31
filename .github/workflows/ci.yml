@@ -30,17 +30,17 @@ jobs:
         run: cargo test --workspace
 
       - name: Install Serpen (development)
-        run: uvx maturin develop --release
+        run: uv run --with maturin -- maturin develop --release
 
       - name: Smoke test CLI
         run: |
-          python -m serpen --help
-          serpen --version
+          uv run python -m serpen --help
+          uv run serpen --version
 
       - name: E2E bundle test
         run: |
           mkdir bundle-test
-          python -m serpen \
+          uv run python -m serpen \
             --entry crates/serpen/tests/fixtures/simple_project/main.py \
             --output bundle-test/out.py
-          python bundle-test/out.py
+          uv run python bundle-test/out.py
