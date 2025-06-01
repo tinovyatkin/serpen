@@ -94,3 +94,10 @@ opt-level = "s"
 [profile.release]
 lto = true
 codegen-units = 1
+
+# https://docs.rs/insta/latest/insta/#optional-faster-runs
+[profile.dev.package.insta]
+opt-level = 3
+
+[profile.dev.package.similar]
+opt-level = 3
