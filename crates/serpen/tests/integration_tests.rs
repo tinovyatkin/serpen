@@ -221,7 +221,8 @@ fn test_dependency_graph() {
     graph.add_dependency("models.user", "main").unwrap();
 
     // Collect graph information
-    let modules = graph.get_modules();
+    let mut modules = graph.get_modules();
+    modules.sort_by(|a, b| a.name.cmp(&b.name));
     let module_count = modules.len();
     let mut dependencies_info = Vec::new();
 
