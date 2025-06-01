@@ -405,10 +405,9 @@ impl CodeEmitter {
             ctx.first_party_imports
         );
 
-        if !all_first_party && !contains_unused {
-            // Preserve statement if it contains non-first-party imports and no unused imports
-            ctx.output_lines
-                .extend(ctx.statement.lines().map(str::to_string));
+        if all_first_party {
+            // Skip statements with only first-party imports
+            log::debug!("Skipping import (all first-party): {}", trimmed);
         } else if contains_unused {
             // Rewrite import statement to remove unused imports
             if let Some(rewritten) =
@@ -417,14 +416,10 @@ impl CodeEmitter {
                 ctx.output_lines.push(rewritten);
             }
         } else {
-            log::debug!(
-                "Skipping import (first-party: {}, unused: {}): {}",
-                all_first_party,
-                contains_unused,
-                trimmed
-            );
+            // Preserve statement if it contains non-first-party imports and no unused imports
+            ctx.output_lines
+                .extend(ctx.statement.lines().map(str::to_string));
         }
-        // Skip statements with only first-party imports or unused imports
     }
 
     /// Rewrite an import statement to remove only unused imports while preserving used ones
@@ -532,27 +527,43 @@ impl CodeEmitter {
     /// Extract module names from an import statement
     fn extract_import_modules(&self, statement: &str) -> Vec<String> {
         if statement.starts_with("from ") {
-            if let Some(module_part) = statement
-                .strip_prefix("from ")
-                .and_then(|s| s.split(" import ").next())
-            {
-                // Strip comments from module name
-                let mut clean_module = module_part.split('#').next().unwrap_or(module_part).trim();
-                if clean_module == "." {
-                    clean_module = "";
-                }
-                vec![clean_module.to_string()]
-            } else {
-                vec![]
-            }
-        } else if let Some(imports_part) = statement.strip_prefix("import ") {
-            imports_part
+            return self.extract_from_import_module(statement);
+        }
+
+        if let Some(imports_part) = statement.strip_prefix("import ") {
+            return imports_part
                 .split(',')
                 .map(|import_item| self.extract_original_module_name(import_item))
-                .collect()
-        } else {
-            vec![]
+                .collect();
         }
+
+        vec![]
+    }
+
+    /// Extract module name from a "from ... import" statement
+    ///
+    /// Inspired by ruff's import parsing patterns:
+    /// https://github.com/astral-sh/ruff/tree/main/crates/ruff_python_parser/src/parser/statement.rs
+    fn extract_from_import_module(&self, statement: &str) -> Vec<String> {
+        let module_part = statement
+            .strip_prefix("from ")
+            .and_then(|s| s.split(" import ").next());
+
+        let Some(module_part) = module_part else {
+            return vec![];
+        };
+
+        // Strip comments from module name
+        let clean_module = module_part.split('#').next().unwrap_or(module_part).trim();
+
+        // Handle relative imports: "." becomes empty string
+        let normalized_module = if clean_module == "." {
+            ""
+        } else {
+            clean_module
+        };
+
+        vec![normalized_module.to_string()]
     }
 
     /// Extract import name from an import item, handling comments and aliases
