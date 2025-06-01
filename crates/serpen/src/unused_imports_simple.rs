@@ -47,15 +47,14 @@ impl UnusedImportAnalyzer {
         let parsed = parse(source, Mode::Module, "module")?;
 
         if let Mod::Module(module) = parsed {
-            // First pass: collect all bindings
+            // First pass: collect all bindings recursively
             for stmt in &module.body {
-                self.collect_imports(stmt);
-                self.collect_exports(stmt);
+                self.collect_imports_recursive(stmt);
             }
 
-            // Second pass: track usage
+            // Second pass: track usage recursively
             for stmt in &module.body {
-                self.track_usage_in_statement(stmt);
+                self.track_usage_recursive(stmt);
             }
         }
 
@@ -458,6 +457,117 @@ impl UnusedImportAnalyzer {
         side_effect_patterns
             .iter()
             .any(|&pattern| module_name.starts_with(pattern))
+    }
+
+    /// Recursively collect imports and exports in nested statements
+    fn collect_imports_recursive(&mut self, stmt: &Stmt) {
+        self.collect_imports(stmt);
+        self.collect_exports(stmt);
+        match stmt {
+            Stmt::FunctionDef(func_def) => {
+                for nested in &func_def.body {
+                    self.collect_imports_recursive(nested);
+                }
+            }
+            Stmt::AsyncFunctionDef(async_def) => {
+                for nested in &async_def.body {
+                    self.collect_imports_recursive(nested);
+                }
+            }
+            Stmt::ClassDef(class_def) => {
+                for nested in &class_def.body {
+                    self.collect_imports_recursive(nested);
+                }
+            }
+            Stmt::For(for_stmt) => {
+                for nested in &for_stmt.body {
+                    self.collect_imports_recursive(nested);
+                }
+                for nested in &for_stmt.orelse {
+                    self.collect_imports_recursive(nested);
+                }
+            }
+            Stmt::AsyncFor(async_for_stmt) => {
+                for nested in &async_for_stmt.body {
+                    self.collect_imports_recursive(nested);
+                }
+                for nested in &async_for_stmt.orelse {
+                    self.collect_imports_recursive(nested);
+                }
+            }
+            Stmt::If(if_stmt) => {
+                for nested in &if_stmt.body {
+                    self.collect_imports_recursive(nested);
+                }
+                for nested in &if_stmt.orelse {
+                    self.collect_imports_recursive(nested);
+                }
+            }
+            Stmt::While(while_stmt) => {
+                for nested in &while_stmt.body {
+                    self.collect_imports_recursive(nested);
+                }
+                for nested in &while_stmt.orelse {
+                    self.collect_imports_recursive(nested);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Recursively track usage in nested statements
+    fn track_usage_recursive(&mut self, stmt: &Stmt) {
+        self.track_usage_in_statement(stmt);
+        match stmt {
+            Stmt::FunctionDef(func_def) => {
+                for nested in &func_def.body {
+                    self.track_usage_recursive(nested);
+                }
+            }
+            Stmt::AsyncFunctionDef(async_def) => {
+                for nested in &async_def.body {
+                    self.track_usage_recursive(nested);
+                }
+            }
+            Stmt::ClassDef(class_def) => {
+                for nested in &class_def.body {
+                    self.track_usage_recursive(nested);
+                }
+            }
+            Stmt::For(for_stmt) => {
+                for nested in &for_stmt.body {
+                    self.track_usage_recursive(nested);
+                }
+                for nested in &for_stmt.orelse {
+                    self.track_usage_recursive(nested);
+                }
+            }
+            Stmt::AsyncFor(async_for_stmt) => {
+                for nested in &async_for_stmt.body {
+                    self.track_usage_recursive(nested);
+                }
+                for nested in &async_for_stmt.orelse {
+                    self.track_usage_recursive(nested);
+                }
+            }
+            Stmt::If(if_stmt) => {
+                for nested in &if_stmt.body {
+                    self.track_usage_recursive(nested);
+                }
+                for nested in &if_stmt.orelse {
+                    self.track_usage_recursive(nested);
+                }
+            }
+            Stmt::While(while_stmt) => {
+                for nested in &while_stmt.body {
+                    self.track_usage_recursive(nested);
+                }
+                for nested in &while_stmt.orelse {
+                    self.track_usage_recursive(nested);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Debug method to access imported names
