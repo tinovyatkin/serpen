@@ -413,9 +413,12 @@ impl CodeEmitter {
             if let Some(rewritten) =
                 self.rewrite_import_without_unused(trimmed, ctx.unused_import_names)
             {
-                // Capture the leading whitespace from the original statement
-                let leading_whitespace = ctx.statement.len() - ctx.statement.trim_start().len();
-                let original_indent = &ctx.statement[..leading_whitespace];
+                // Capture the leading whitespace from the original statement safely
+                let original_indent: String = ctx
+                    .statement
+                    .chars()
+                    .take_while(|c| c.is_whitespace())
+                    .collect();
 
                 // Prepend the original indentation to the rewritten statement
                 let indented_rewritten = format!("{}{}", original_indent, rewritten);
