@@ -180,6 +180,7 @@ impl CodeEmitter {
       }
     }
 
+    log::debug!("Collected first-party imports: {:?}", first_party_imports);
     Ok(first_party_imports)
   }
 
@@ -238,10 +239,26 @@ impl CodeEmitter {
     }
   }
 
-  /// Check if a line starts a triple-quoted string
+  /// Check if a line starts a triple-quoted string (multi-line)
   fn is_triple_quote_start(&self, line: &str) -> bool {
     let trimmed = line.trim_start();
-    trimmed.starts_with("'''") || trimmed.starts_with("\"\"\"")
+
+    // Check for triple quotes
+    if trimmed.starts_with("'''") {
+      // Count occurrences of ''' in the line
+      let count = trimmed.matches("'''").count();
+      // If there's only one occurrence, it's the start of a multi-line string
+      return count == 1;
+    }
+
+    if trimmed.starts_with("\"\"\"") {
+      // Count occurrences of """ in the line
+      let count = trimmed.matches("\"\"\"").count();
+      // If there's only one occurrence, it's the start of a multi-line string
+      return count == 1;
+    }
+
+    false
   }
 
   /// Check if the current statement should be continued (backslash or unmatched parentheses)
@@ -274,13 +291,27 @@ impl CodeEmitter {
 
     // Check if all modules in this import are first-party; if so, skip
     let modules = self.extract_import_modules(trimmed);
+    log::debug!(
+      "Processing import statement: '{}', extracted modules: {:?}",
+      trimmed,
+      modules
+    );
+
     let all_first_party = modules
       .iter()
       .all(|module_name| first_party_imports.contains(module_name));
 
+    log::debug!(
+      "All modules first-party: {}, first_party_imports: {:?}",
+      all_first_party,
+      first_party_imports
+    );
+
     if !all_first_party {
       // Preserve statement if it contains non-first-party imports
       output_lines.extend(statement.lines().map(str::to_string));
+    } else {
+      log::debug!("Skipping first-party import: {}", trimmed);
     }
     // Skip statements with only first-party imports
   }
