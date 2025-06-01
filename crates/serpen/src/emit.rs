@@ -409,6 +409,13 @@ impl CodeEmitter {
             // Preserve statement if it contains non-first-party imports and no unused imports
             ctx.output_lines
                 .extend(ctx.statement.lines().map(str::to_string));
+        } else if contains_unused {
+            // Rewrite import statement to remove unused imports
+            if let Some(rewritten) =
+                self.rewrite_import_without_unused(trimmed, ctx.unused_import_names)
+            {
+                ctx.output_lines.push(rewritten);
+            }
         } else {
             log::debug!(
                 "Skipping import (first-party: {}, unused: {}): {}",
@@ -418,6 +425,108 @@ impl CodeEmitter {
             );
         }
         // Skip statements with only first-party imports or unused imports
+    }
+
+    /// Rewrite an import statement to remove only unused imports while preserving used ones
+    /// Returns None if all imports are unused (statement should be skipped)
+    /// Returns Some(rewritten_statement) if any imports are still used
+    fn rewrite_import_without_unused(
+        &self,
+        statement: &str,
+        unused_import_names: &HashSet<String>,
+    ) -> Option<String> {
+        let trimmed = statement.trim();
+
+        // Handle inline comments - split statement and comment parts
+        let (import_part, comment_part) = if let Some(comment_pos) = trimmed.find('#') {
+            let import_text = trimmed[..comment_pos].trim();
+            let comment_text = &trimmed[comment_pos..];
+            (import_text, Some(comment_text))
+        } else {
+            (trimmed, None)
+        };
+
+        if import_part.starts_with("from ") && import_part.contains(" import ") {
+            self.rewrite_from_import(import_part, comment_part, unused_import_names)
+        } else if let Some(imports_part) = import_part.strip_prefix("import ") {
+            self.rewrite_simple_import(imports_part, comment_part, unused_import_names)
+        } else {
+            // Not a recognized import format, preserve as-is
+            Some(statement.to_string())
+        }
+    }
+
+    /// Rewrite a "from module import ..." statement
+    fn rewrite_from_import(
+        &self,
+        import_part: &str,
+        comment_part: Option<&str>,
+        unused_import_names: &HashSet<String>,
+    ) -> Option<String> {
+        let module_and_imports = import_part.strip_prefix("from ")?;
+        let (module_part, imports_part) = module_and_imports.split_once(" import ")?;
+
+        let used_imports = self.filter_used_imports(imports_part, unused_import_names);
+
+        if used_imports.is_empty() {
+            return None; // All imports are unused
+        }
+
+        let mut result = format!(
+            "from {} import {}",
+            module_part.trim(),
+            used_imports.join(", ")
+        );
+        self.append_comment_if_present(&mut result, comment_part);
+        Some(result)
+    }
+
+    /// Rewrite a simple "import ..." statement
+    fn rewrite_simple_import(
+        &self,
+        imports_part: &str,
+        comment_part: Option<&str>,
+        unused_import_names: &HashSet<String>,
+    ) -> Option<String> {
+        let used_imports = self.filter_used_imports(imports_part, unused_import_names);
+
+        if used_imports.is_empty() {
+            return None; // All imports are unused
+        }
+
+        let mut result = format!("import {}", used_imports.join(", "));
+        self.append_comment_if_present(&mut result, comment_part);
+        Some(result)
+    }
+
+    /// Append comment to result string if present
+    fn append_comment_if_present(&self, result: &mut String, comment_part: Option<&str>) {
+        if let Some(comment) = comment_part {
+            result.push_str("  ");
+            result.push_str(comment);
+        }
+    }
+
+    /// Filter out unused imports from a comma-separated list, preserving used ones with their aliases and spacing
+    fn filter_used_imports(
+        &self,
+        imports_part: &str,
+        unused_import_names: &HashSet<String>,
+    ) -> Vec<String> {
+        imports_part
+            .split(',')
+            .filter_map(|import_item| {
+                let trimmed_item = import_item.trim();
+                let import_name = self.extract_import_name(trimmed_item);
+
+                // Keep this import if it's not in the unused set
+                if !unused_import_names.contains(&import_name) {
+                    Some(trimmed_item.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Extract module names from an import statement
@@ -444,15 +553,19 @@ impl CodeEmitter {
     }
 
     /// Extract import name from an import item, handling comments and aliases
+    /// Returns the alias name if present (what the import is known as in the code),
+    /// otherwise returns the original module name
     fn extract_import_name(&self, import_item: &str) -> String {
         // Strip comments first
         let clean_item = import_item.split('#').next().unwrap_or(import_item);
-        clean_item
-            .split(" as ")
-            .next() // Get the original name (before "as" if present)
-            .unwrap_or(clean_item)
-            .trim()
-            .to_string()
+
+        // If there's an alias (import X as Y), return the alias name (Y)
+        // Otherwise return the original name (X)
+        if let Some(as_pos) = clean_item.find(" as ") {
+            clean_item[as_pos + 4..].trim().to_string()
+        } else {
+            clean_item.trim().to_string()
+        }
     }
 
     /// Check if import parts contain any unused names
@@ -541,5 +654,100 @@ impl CodeEmitter {
                 third_party_imports.insert(package_name.to_string());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use std::collections::HashSet;
+
+    fn create_test_emitter() -> CodeEmitter {
+        let config = Config::default();
+        let resolver = ModuleResolver::new(config).unwrap();
+        CodeEmitter::new(resolver, false, false)
+    }
+
+    #[test]
+    fn test_rewrite_simple_import_with_unused() {
+        let emitter = create_test_emitter();
+        let mut unused = HashSet::new();
+        unused.insert("sys".to_string());
+
+        let result = emitter.rewrite_import_without_unused("import os, sys", &unused);
+        assert_eq!(result, Some("import os".to_string()));
+    }
+
+    #[test]
+    fn test_rewrite_from_import_with_unused() {
+        let emitter = create_test_emitter();
+        let mut unused = HashSet::new();
+        unused.insert("Counter".to_string());
+
+        let result = emitter
+            .rewrite_import_without_unused("from collections import defaultdict, Counter", &unused);
+        assert_eq!(
+            result,
+            Some("from collections import defaultdict".to_string())
+        );
+    }
+
+    #[test]
+    fn test_rewrite_import_all_unused() {
+        let emitter = create_test_emitter();
+        let mut unused = HashSet::new();
+        unused.insert("os".to_string());
+        unused.insert("sys".to_string());
+
+        let result = emitter.rewrite_import_without_unused("import os, sys", &unused);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_rewrite_import_with_comment() {
+        let emitter = create_test_emitter();
+        let mut unused = HashSet::new();
+        unused.insert("sys".to_string());
+
+        let result =
+            emitter.rewrite_import_without_unused("import os, sys  # System imports", &unused);
+        assert_eq!(result, Some("import os  # System imports".to_string()));
+    }
+
+    #[test]
+    fn test_rewrite_from_import_with_comment() {
+        let emitter = create_test_emitter();
+        let mut unused = HashSet::new();
+        unused.insert("PurePath".to_string());
+
+        let result = emitter.rewrite_import_without_unused(
+            "from pathlib import Path, PurePath  # Path utilities",
+            &unused,
+        );
+        assert_eq!(
+            result,
+            Some("from pathlib import Path  # Path utilities".to_string())
+        );
+    }
+
+    #[test]
+    fn test_rewrite_import_none_unused() {
+        let emitter = create_test_emitter();
+        let unused = HashSet::new(); // No unused imports
+
+        let result = emitter.rewrite_import_without_unused("import os, sys", &unused);
+        assert_eq!(result, Some("import os, sys".to_string()));
+    }
+
+    #[test]
+    fn test_rewrite_import_with_aliases() {
+        let emitter = create_test_emitter();
+        let mut unused = HashSet::new();
+        unused.insert("pd".to_string()); // pandas alias is unused
+
+        let result =
+            emitter.rewrite_import_without_unused("import numpy as np, pandas as pd", &unused);
+        assert_eq!(result, Some("import numpy as np".to_string()));
     }
 }
