@@ -121,54 +121,77 @@ impl UnusedImportAnalyzer {
                 }
 
                 for alias in &import_from_stmt.names {
-                    let imported_name = alias.name.as_str();
-                    let local_name = alias
-                        .asname
-                        .as_ref()
-                        .map(|n| n.as_str())
-                        .unwrap_or(imported_name);
-
-                    let qualified_name = if module_name.is_empty() {
-                        imported_name.to_string()
-                    } else {
-                        format!("{}.{}", module_name, imported_name)
-                    };
-
-                    let is_side_effect = self.is_side_effect_import(&qualified_name);
-
-                    self.imported_names.insert(
-                        local_name.to_string(),
-                        ImportInfo {
-                            name: local_name.to_string(),
-                            qualified_name,
-                            is_star_import: false,
-                            is_side_effect,
-                        },
-                    );
+                    self.process_import_from_alias(alias, module_name);
                 }
             }
             _ => {}
         }
     }
 
+    /// Process a single alias from an import_from statement
+    fn process_import_from_alias(&mut self, alias: &ast::Alias, module_name: &str) {
+        let imported_name = alias.name.as_str();
+        let local_name = alias
+            .asname
+            .as_ref()
+            .map(|n| n.as_str())
+            .unwrap_or(imported_name);
+
+        let qualified_name = if module_name.is_empty() {
+            imported_name.to_string()
+        } else {
+            format!("{}.{}", module_name, imported_name)
+        };
+
+        let is_side_effect = self.is_side_effect_import(&qualified_name);
+
+        self.imported_names.insert(
+            local_name.to_string(),
+            ImportInfo {
+                name: local_name.to_string(),
+                qualified_name,
+                is_star_import: false,
+                is_side_effect,
+            },
+        );
+    }
+
     /// Collect names exported via __all__
     fn collect_exports(&mut self, stmt: &Stmt) {
         if let Stmt::Assign(assign) = stmt {
-            for target in &assign.targets {
-                if let ast::Expr::Name(name_expr) = target {
-                    if name_expr.id.as_str() == "__all__" {
-                        // Extract names from __all__ assignment
-                        if let ast::Expr::List(list_expr) = assign.value.as_ref() {
-                            for element in &list_expr.elts {
-                                if let ast::Expr::Constant(const_expr) = element {
-                                    if let ast::Constant::Str(s) = &const_expr.value {
-                                        self.exported_names.insert(s.to_string());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            self.process_all_assignment(assign);
+        }
+    }
+
+    /// Process __all__ assignment to extract exported names
+    fn process_all_assignment(&mut self, assign: &ast::StmtAssign) {
+        if !self.is_all_assignment(assign) {
+            return;
+        }
+        self.extract_names_from_all_assignment(assign);
+    }
+
+    /// Check if this assignment targets __all__
+    fn is_all_assignment(&self, assign: &ast::StmtAssign) -> bool {
+        assign.targets.iter().any(|target| {
+            matches!(target, ast::Expr::Name(name_expr) if name_expr.id.as_str() == "__all__")
+        })
+    }
+
+    /// Extract names from __all__ assignment value
+    fn extract_names_from_all_assignment(&mut self, assign: &ast::StmtAssign) {
+        if let ast::Expr::List(list_expr) = assign.value.as_ref() {
+            for element in &list_expr.elts {
+                self.process_all_list_element(element);
+            }
+        }
+    }
+
+    /// Process a single element in __all__ list
+    fn process_all_list_element(&mut self, element: &ast::Expr) {
+        if let ast::Expr::Constant(const_expr) = element {
+            if let ast::Constant::Str(s) = &const_expr.value {
+                self.exported_names.insert(s.to_string());
             }
         }
     }
@@ -180,42 +203,10 @@ impl UnusedImportAnalyzer {
                 // Skip import statements themselves
             }
             Stmt::FunctionDef(func_def) => {
-                // Track usage in function body
-                for stmt in &func_def.body {
-                    self.track_usage_in_statement(stmt);
-                }
-                // Track usage in decorators
-                for decorator in &func_def.decorator_list {
-                    self.track_usage_in_expression(decorator);
-                }
-                // Track usage in arguments default values
-                for default in func_def.args.defaults() {
-                    self.track_usage_in_expression(default);
-                }
-                // Track usage in argument type annotations
-                for arg in &func_def.args.args {
-                    if let Some(annotation) = &arg.def.annotation {
-                        self.track_usage_in_expression(annotation);
-                    }
-                }
-                // Track usage in return type annotation
-                if let Some(returns) = &func_def.returns {
-                    self.track_usage_in_expression(returns);
-                }
+                self.process_function_def(func_def);
             }
             Stmt::AsyncFunctionDef(async_func_def) => {
-                // Track usage in function body
-                for stmt in &async_func_def.body {
-                    self.track_usage_in_statement(stmt);
-                }
-                // Track usage in decorators
-                for decorator in &async_func_def.decorator_list {
-                    self.track_usage_in_expression(decorator);
-                }
-                // Track usage in arguments default values
-                for default in async_func_def.args.defaults() {
-                    self.track_usage_in_expression(default);
-                }
+                self.process_async_function_def(async_func_def);
             }
             Stmt::ClassDef(class_def) => {
                 // Track usage in class body
@@ -394,6 +385,53 @@ impl UnusedImportAnalyzer {
             _ => {
                 // For other expression types, we can add more specific handling later
             }
+        }
+    }
+
+    /// Process function definition statement to track usage
+    fn process_function_def(&mut self, func_def: &ast::StmtFunctionDef) {
+        // Track usage in function body
+        for stmt in &func_def.body {
+            self.track_usage_in_statement(stmt);
+        }
+        // Track usage in decorators
+        for decorator in &func_def.decorator_list {
+            self.track_usage_in_expression(decorator);
+        }
+        // Track usage in arguments default values
+        for default in func_def.args.defaults() {
+            self.track_usage_in_expression(default);
+        }
+        // Track usage in argument type annotations
+        self.process_function_arg_annotations(&func_def.args);
+        // Track usage in return type annotation
+        if let Some(returns) = &func_def.returns {
+            self.track_usage_in_expression(returns);
+        }
+    }
+
+    /// Process function argument annotations
+    fn process_function_arg_annotations(&mut self, args: &ast::Arguments) {
+        for arg in &args.args {
+            if let Some(annotation) = &arg.def.annotation {
+                self.track_usage_in_expression(annotation);
+            }
+        }
+    }
+
+    /// Process async function definition statement to track usage
+    fn process_async_function_def(&mut self, async_func_def: &ast::StmtAsyncFunctionDef) {
+        // Track usage in function body
+        for stmt in &async_func_def.body {
+            self.track_usage_in_statement(stmt);
+        }
+        // Track usage in decorators
+        for decorator in &async_func_def.decorator_list {
+            self.track_usage_in_expression(decorator);
+        }
+        // Track usage in arguments default values
+        for default in async_func_def.args.defaults() {
+            self.track_usage_in_expression(default);
         }
     }
 
