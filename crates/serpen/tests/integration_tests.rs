@@ -97,7 +97,7 @@ fn test_requirements_generation() {
                 let requirements = std::fs::read_to_string(&requirements_path).unwrap();
                 output.push_str("=== REQUIREMENTS.TXT ===\n");
                 output.push_str(&requirements);
-                output.push_str("=== END REQUIREMENTS.TXT ===");
+                output.push_str("\n=== END REQUIREMENTS.TXT ===");
             } else {
                 output.push_str("No requirements.txt file was generated.");
             }
