@@ -5,6 +5,7 @@ use std::path::Path;
 
 use crate::dependency_graph::ModuleNode;
 use crate::resolver::{ImportType, ModuleResolver};
+use crate::unused_imports_simple::UnusedImportAnalyzer;
 use rustpython_parser::ast::{Mod, Stmt};
 use rustpython_parser::{Mode, parse};
 
@@ -73,8 +74,33 @@ impl CodeEmitter {
             "".to_string(),
         ];
 
+        // Collect all unused imports from all modules
+        let mut all_unused_imports = HashSet::new();
+        for module in modules {
+            let source = fs::read_to_string(&module.path)
+                .with_context(|| format!("Failed to read module file: {:?}", module.path))?;
+
+            let mut unused_analyzer = UnusedImportAnalyzer::new();
+            let unused_imports = unused_analyzer.analyze_file(&source).unwrap_or_else(|err| {
+                log::warn!(
+                    "Failed to analyze unused imports in {:?}: {}",
+                    module.path,
+                    err
+                );
+                Vec::new()
+            });
+
+            for import in unused_imports {
+                all_unused_imports.insert(import.name);
+            }
+        }
+
         // Collect all third-party imports that need to be preserved
-        let (third_party_imports, stdlib_imports) = self.collect_import_sets(modules);
+        let (mut third_party_imports, mut stdlib_imports) = self.collect_import_sets(modules);
+
+        // Filter out unused imports from preserved imports
+        third_party_imports.retain(|import| !all_unused_imports.contains(import));
+        stdlib_imports.retain(|import| !all_unused_imports.contains(import));
 
         // Add preserved imports at the top
         if !stdlib_imports.is_empty() || !third_party_imports.is_empty() {
@@ -126,10 +152,35 @@ impl CodeEmitter {
         Ok(output.join("\n"))
     }
 
-    /// Process a single module file, removing inlined imports
+    /// Process a single module file, removing inlined imports and unused imports
     fn process_module_file(&mut self, file_path: &Path, _module_name: &str) -> Result<String> {
         let source = fs::read_to_string(file_path)
             .with_context(|| format!("Failed to read module file: {:?}", file_path))?;
+
+        // Analyze for unused imports
+        log::info!("STARTING UNUSED IMPORT ANALYSIS for {:?}", file_path);
+        let mut unused_analyzer = UnusedImportAnalyzer::new();
+        let unused_imports = unused_analyzer.analyze_file(&source).unwrap_or_else(|err| {
+            log::warn!(
+                "Failed to analyze unused imports in {:?}: {}",
+                file_path,
+                err
+            );
+            Vec::new()
+        });
+
+        // Create a set of unused import names for quick lookup
+        let unused_import_names: HashSet<String> = unused_imports
+            .iter()
+            .map(|import| import.name.clone())
+            .collect();
+
+        log::info!(
+            "FOUND {} unused imports in {:?}: {:?}",
+            unused_imports.len(),
+            file_path,
+            unused_import_names
+        );
 
         // Collect first-party imports using AST for accuracy
         let first_party_imports = self.collect_first_party_imports_from_file(&source)?;
@@ -162,7 +213,12 @@ impl CodeEmitter {
             }
 
             // Logical statement ready - process it
-            self.process_logical_statement(&joined, &first_party_imports, &mut output_lines);
+            self.process_logical_statement(
+                &joined,
+                &first_party_imports,
+                &unused_import_names,
+                &mut output_lines,
+            );
             buf.clear();
         }
 
@@ -281,6 +337,7 @@ impl CodeEmitter {
         &self,
         statement: &str,
         first_party_imports: &HashSet<String>,
+        unused_import_names: &HashSet<String>,
         output_lines: &mut Vec<String>,
     ) {
         let trimmed = statement.trim();
@@ -305,19 +362,28 @@ impl CodeEmitter {
             .iter()
             .all(|module_name| first_party_imports.contains(module_name));
 
+        // Check if any of the imported names are unused
+        let contains_unused = self.check_if_import_contains_unused(trimmed, unused_import_names);
+
         log::debug!(
-            "All modules first-party: {}, first_party_imports: {:?}",
+            "All modules first-party: {}, contains unused: {}, first_party_imports: {:?}",
             all_first_party,
+            contains_unused,
             first_party_imports
         );
 
-        if !all_first_party {
-            // Preserve statement if it contains non-first-party imports
+        if !all_first_party && !contains_unused {
+            // Preserve statement if it contains non-first-party imports and no unused imports
             output_lines.extend(statement.lines().map(str::to_string));
         } else {
-            log::debug!("Skipping first-party import: {}", trimmed);
+            log::debug!(
+                "Skipping import (first-party: {}, unused: {}): {}",
+                all_first_party,
+                contains_unused,
+                trimmed
+            );
         }
-        // Skip statements with only first-party imports
+        // Skip statements with only first-party imports or unused imports
     }
 
     /// Extract module names from an import statement
@@ -327,18 +393,73 @@ impl CodeEmitter {
                 .strip_prefix("from ")
                 .and_then(|s| s.split(" import ").next())
             {
-                vec![module_part.trim().to_string()]
+                // Strip comments from module name
+                let clean_module = module_part.split('#').next().unwrap_or(module_part).trim();
+                vec![clean_module.to_string()]
             } else {
                 vec![]
             }
         } else if let Some(imports_part) = statement.strip_prefix("import ") {
             imports_part
                 .split(',')
-                .map(|s| s.split(" as ").next().unwrap_or(s).trim().to_string())
+                .map(|s| {
+                    // Strip comments and aliases
+                    let clean_name = s.split('#').next().unwrap_or(s).trim();
+                    clean_name
+                        .split(" as ")
+                        .next()
+                        .unwrap_or(clean_name)
+                        .trim()
+                        .to_string()
+                })
                 .collect()
         } else {
             vec![]
         }
+    }
+
+    /// Check if an import statement contains any unused imported names
+    fn check_if_import_contains_unused(
+        &self,
+        statement: &str,
+        unused_import_names: &HashSet<String>,
+    ) -> bool {
+        if statement.starts_with("from ") && statement.contains(" import ") {
+            // Handle "from module import name1, name2" statements
+            if let Some(imports_part) = statement.split(" import ").nth(1) {
+                // Parse the imported names (handle aliases and multiple imports)
+                for import_item in imports_part.split(',') {
+                    // Strip comments first
+                    let clean_item = import_item.split('#').next().unwrap_or(import_item);
+                    let name = clean_item
+                        .split(" as ")
+                        .next() // Get the original name (before "as" if present)
+                        .unwrap_or(clean_item)
+                        .trim();
+
+                    if unused_import_names.contains(name) {
+                        return true;
+                    }
+                }
+            }
+        } else if let Some(imports_part) = statement.strip_prefix("import ") {
+            // Handle "import module1, module2" statements
+            for import_item in imports_part.split(',') {
+                // Strip comments first
+                let clean_item = import_item.split('#').next().unwrap_or(import_item);
+                let name = clean_item
+                    .split(" as ")
+                    .next() // Get the original name (before "as" if present)
+                    .unwrap_or(clean_item)
+                    .trim();
+
+                if unused_import_names.contains(name) {
+                    return true;
+                }
+            }
+        }
+
+        false
     }
 
     /// Safely format an import statement, validating the input
