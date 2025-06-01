@@ -29,4 +29,6 @@ build/
 dist/
 *.egg-info/
 *.so
-
++*.whl
++venv/
++.venv/

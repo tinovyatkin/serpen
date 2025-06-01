@@ -202,9 +202,15 @@ impl CodeEmitter {
     import_from_stmt: &rustpython_parser::ast::StmtImportFrom,
     imports: &mut HashSet<String>,
   ) {
-    let Some(ref module) = import_from_stmt.module else {
+    // Handle relative imports (e.g., `from . import x`) as first-party
+    if import_from_stmt.module.is_none() {
+      if import_from_stmt.level.is_some() {
+        // Insert empty string marker for relative import
+        imports.insert(String::new());
+      }
       return;
-    };
+    }
+    let module = import_from_stmt.module.as_ref().unwrap();
 
     let module_name = module.as_str();
     if matches!(

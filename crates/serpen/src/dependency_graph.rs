@@ -194,13 +194,13 @@ impl DependencyGraph {
 
     // Create new graph with only reachable modules
     let mut filtered_graph = DependencyGraph::new();
-    let mut index_mapping = HashMap::new();
+    let mut _index_mapping = HashMap::new();
 
     // Add all reachable nodes
     for &old_index in &visited {
       let module = self.graph[old_index].clone();
       let new_index = filtered_graph.add_module(module);
-      index_mapping.insert(old_index, new_index);
+      _index_mapping.insert(old_index, new_index);
     }
 
     // Add all edges between reachable nodes
