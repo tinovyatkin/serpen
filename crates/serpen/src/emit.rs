@@ -607,34 +607,28 @@ impl CodeEmitter {
         }
     }
 
-    /// Check if import parts contain any unused names
-    fn has_unused_import_in_parts(
-        &self,
-        imports_part: &str,
-        unused_import_names: &HashSet<String>,
-    ) -> bool {
-        imports_part.split(',').any(|import_item| {
-            let name = self.extract_import_name(import_item);
-            unused_import_names.contains(&name)
-        })
-    }
-
     /// Check if an import statement contains any unused imported names
     fn check_if_import_contains_unused(
         &self,
         statement: &str,
         unused_import_names: &HashSet<String>,
     ) -> bool {
-        if statement.starts_with("from ") && statement.contains(" import ") {
-            // Handle "from module import name1, name2" statements
-            if let Some(imports_part) = statement.split(" import ").nth(1) {
-                return self.has_unused_import_in_parts(imports_part, unused_import_names);
-            }
-        } else if let Some(imports_part) = statement.strip_prefix("import ") {
-            // Handle "import module1, module2" statements
-            return self.has_unused_import_in_parts(imports_part, unused_import_names);
+        // Use RustPython AST to detect unused imports accurately
+        if let Ok(rustpython_parser::ast::Mod::Module(module)) =
+            parse(statement, Mode::Module, "<emit>")
+        {
+            return module.body.iter().any(|stmt| match stmt {
+                Stmt::Import(import_stmt) => import_stmt.names.iter().any(|alias| {
+                    let name = alias.asname.as_ref().unwrap_or(&alias.name).to_string();
+                    unused_import_names.contains(&name)
+                }),
+                Stmt::ImportFrom(import_from) => import_from.names.iter().any(|alias| {
+                    let name = alias.asname.as_ref().unwrap_or(&alias.name).to_string();
+                    unused_import_names.contains(&name)
+                }),
+                _ => false,
+            });
         }
-
         false
     }
 
