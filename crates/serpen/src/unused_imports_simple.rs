@@ -108,6 +108,11 @@ impl UnusedImportAnalyzer {
                     .map(|m| m.as_str())
                     .unwrap_or("");
 
+                // Skip __future__ imports
+                if module_name == "__future__" {
+                    return;
+                }
+
                 // Check if this is a star import
                 if import_from_stmt.names.len() == 1
                     && import_from_stmt.names[0].name.as_str() == "*"
