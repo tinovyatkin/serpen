@@ -39,6 +39,11 @@ impl UnusedImportAnalyzer {
 
     /// Analyze a Python source file for unused imports
     pub fn analyze_file(&mut self, source: &str) -> Result<Vec<UnusedImport>> {
+        // Clear state from any previous analysis to ensure independence
+        self.imported_names.clear();
+        self.used_names.clear();
+        self.exported_names.clear();
+
         let parsed = parse(source, Mode::Module, "module")?;
 
         if let Mod::Module(module) = parsed {
@@ -543,5 +548,49 @@ def main():
         // - json is neither exported nor used
         assert_eq!(unused_imports.len(), 1);
         assert_eq!(unused_imports[0].name, "json");
+    }
+
+    #[test]
+    fn test_multiple_file_analysis_independence() {
+        let mut analyzer = UnusedImportAnalyzer::new();
+
+        // First file analysis - import os but don't use it
+        let source1 = r#"
+import os
+import sys
+
+def main():
+    print(sys.version)
+"#;
+
+        let unused_imports1 = analyzer.analyze_file(source1).unwrap();
+        assert_eq!(unused_imports1.len(), 1);
+        assert_eq!(unused_imports1[0].name, "os");
+
+        // Second file analysis - import json but don't use it
+        // The previous state should not affect this analysis
+        let source2 = r#"
+import json
+import pathlib
+
+def process():
+    p = pathlib.Path(".")
+    return p
+"#;
+
+        let unused_imports2 = analyzer.analyze_file(source2).unwrap();
+        assert_eq!(unused_imports2.len(), 1);
+        assert_eq!(unused_imports2[0].name, "json");
+
+        // Third file analysis - no unused imports
+        let source3 = r#"
+import math
+
+def calculate(x):
+    return math.sqrt(x)
+"#;
+
+        let unused_imports3 = analyzer.analyze_file(source3).unwrap();
+        assert_eq!(unused_imports3.len(), 0);
     }
 }
