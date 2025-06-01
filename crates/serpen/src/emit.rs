@@ -565,8 +565,8 @@ impl CodeEmitter {
         // Strip comments from module name
         let clean_module = module_part.split('#').next().unwrap_or(module_part).trim();
 
-        // Handle relative imports: "." becomes empty string
-        let normalized_module = if clean_module == "." {
+        // Handle relative imports: any module starting with '.' becomes empty string
+        let normalized_module = if clean_module.starts_with('.') {
             ""
         } else {
             clean_module
