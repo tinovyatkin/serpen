@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use log::{debug, info, warn};
-use regex::Regex;
+use rustpython_parser::ast::{Mod, Stmt, StmtImportFrom};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,6 +20,7 @@ struct DiscoveryParams<'a> {
   resolver: &'a mut ModuleResolver,
   modules_to_process: &'a mut ModuleQueue,
   processed_modules: &'a ProcessedModules,
+  queued_modules: &'a mut HashSet<String>,
 }
 
 pub struct Bundler {
@@ -43,7 +44,14 @@ impl Bundler {
 
     // Auto-detect the entry point's directory as a source directory
     if let Some(entry_dir) = entry_path.parent() {
-      let entry_dir = entry_dir.to_path_buf();
+      // Canonicalize the path to avoid duplicates due to different lexical representations
+      let entry_dir = match entry_dir.canonicalize() {
+        Ok(canonical_path) => canonical_path,
+        Err(_) => {
+          // Fall back to the original path if canonicalization fails (e.g., path doesn't exist)
+          entry_dir.to_path_buf()
+        }
+      };
       if !self.config.src.contains(&entry_dir) {
         debug!("Adding entry directory to src paths: {:?}", entry_dir);
         self.config.src.insert(0, entry_dir);
@@ -184,8 +192,10 @@ impl Bundler {
   ) -> Result<DependencyGraph> {
     let mut graph = DependencyGraph::new();
     let mut processed_modules = ProcessedModules::new();
+    let mut queued_modules = HashSet::new();
     let mut modules_to_process = ModuleQueue::new();
     modules_to_process.push((entry_module_name.to_string(), entry_path.to_path_buf()));
+    queued_modules.insert(entry_module_name.to_string());
 
     // Store module data for phase 2
     type ModuleData = (String, PathBuf, Vec<String>);
@@ -214,6 +224,7 @@ impl Bundler {
           resolver,
           modules_to_process: &mut modules_to_process,
           processed_modules: &processed_modules,
+          queued_modules: &mut queued_modules,
         };
         self.process_import_for_discovery(&import, &mut params);
       }
@@ -252,48 +263,90 @@ impl Bundler {
     Ok(graph)
   }
 
-  /// Extract import statements from a Python file using regex parsing
-  fn extract_imports(&self, file_path: &Path) -> Result<Vec<String>> {
+  /// Extract import statements from a Python file using AST parsing
+  /// This handles all import variations including multi-line, aliased, relative, and parenthesized imports
+  pub fn extract_imports(&self, file_path: &Path) -> Result<Vec<String>> {
     let source = fs::read_to_string(file_path)
       .with_context(|| format!("Failed to read file: {:?}", file_path))?;
 
+    let parsed = rustpython_parser::parse(
+      &source,
+      rustpython_parser::Mode::Module,
+      file_path.to_string_lossy().as_ref(),
+    )
+    .with_context(|| format!("Failed to parse Python file: {:?}", file_path))?;
+
     let mut imports = Vec::new();
 
-    // Regex patterns for different import types
-    let import_re = Regex::new(r"^import\s+([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)")
-      .expect("Invalid regex");
-    let from_import_re =
-      Regex::new(r"^from\s+([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s+import")
-        .expect("Invalid regex");
-
-    for line in source.lines() {
-      let trimmed = line.trim();
-
-      // Skip comments and empty lines
-      if trimmed.starts_with('#') || trimmed.is_empty() {
-        continue;
+    if let Mod::Module(module) = parsed {
+      for stmt in module.body.iter() {
+        self.extract_imports_from_statement(stmt, &mut imports);
       }
-
-      // Extract modules from both import types
-      self.extract_module_from_line(trimmed, &import_re, &mut imports);
-      self.extract_module_from_line(trimmed, &from_import_re, &mut imports);
     }
 
     Ok(imports)
   }
 
-  /// Helper method to add module to discovery queue if not already processed
+  /// Extract import module names from a single AST statement
+  fn extract_imports_from_statement(&self, stmt: &Stmt, imports: &mut Vec<String>) {
+    if let Stmt::Import(import_stmt) = stmt {
+      for alias in &import_stmt.names {
+        imports.push(alias.name.to_string());
+      }
+    } else if let Stmt::ImportFrom(import_from_stmt) = stmt {
+      self.process_import_from_statement(import_from_stmt, imports);
+    }
+  }
+
+  /// Process a "from ... import ..." statement to extract module names
+  fn process_import_from_statement(
+    &self,
+    import_from_stmt: &StmtImportFrom,
+    imports: &mut Vec<String>,
+  ) {
+    if let Some(ref module) = import_from_stmt.module {
+      let level = import_from_stmt.level.map(|i| i.to_u32()).unwrap_or(0);
+      let module_name = self.format_module_name(module, level);
+      imports.push(module_name);
+    } else if let Some(level_int) = import_from_stmt.level {
+      let level = level_int.to_u32();
+      if level > 0 {
+        imports.push(".".repeat(level as usize));
+      }
+    }
+  }
+
+  /// Format module name based on relative import level
+  fn format_module_name(&self, module: &str, level: u32) -> String {
+    if level > 0 {
+      if module.is_empty() {
+        ".".to_string()
+      } else {
+        let dots = ".".repeat(level as usize);
+        format!("{}{}", dots, module)
+      }
+    } else {
+      module.to_string()
+    }
+  }
+
+  /// Helper method to add module to discovery queue if not already processed or queued
   fn add_to_discovery_queue_if_new(
     &self,
     import: &str,
     import_path: PathBuf,
     discovery_params: &mut DiscoveryParams,
   ) {
-    if !discovery_params.processed_modules.contains(import) {
+    if !discovery_params.processed_modules.contains(import)
+      && !discovery_params.queued_modules.contains(import)
+    {
       debug!("Adding '{}' to discovery queue", import);
       discovery_params
         .modules_to_process
         .push((import.to_string(), import_path));
+      discovery_params.queued_modules.insert(import.to_string());
+    } else {
+      debug!("Module '{}' already processed or queued, skipping", import);
     }
   }
 
@@ -340,15 +393,6 @@ impl Bundler {
       }
       ImportType::ThirdParty | ImportType::StandardLibrary => {
         // These will be preserved in the output, not inlined
-      }
-    }
-  }
-
-  /// Extract module name from a line using a regex pattern
-  fn extract_module_from_line(&self, line: &str, regex: &Regex, imports: &mut Vec<String>) {
-    if let Some(caps) = regex.captures(line) {
-      if let Some(module) = caps.get(1) {
-        imports.push(module.as_str().to_string());
       }
     }
   }

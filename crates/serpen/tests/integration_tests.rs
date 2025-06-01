@@ -223,3 +223,48 @@ fn test_dependency_graph() {
 
   println!("Dependency graph test passed!");
 }
+
+#[test]
+fn test_extract_edge_case_imports() {
+  // Initialize logger for debugging
+  let _ = env_logger::try_init();
+
+  let bundler = Bundler::new(Config::default());
+  // Path to edge-case test file in the fixtures directory
+  let file_path = PathBuf::from("tests/fixtures/test_edge_cases.py");
+
+  // Ensure the test file exists
+  assert!(
+    file_path.exists(),
+    "test_edge_cases.py not found at expected location"
+  );
+
+  let imports = bundler
+    .extract_imports(&file_path)
+    .expect("Failed to extract imports");
+  let expected = vec![
+    "os",
+    "sys",
+    "json",
+    "collections",
+    "typing",
+    "numpy",
+    "pandas",
+    "pathlib",
+    ".",
+    "..parent",
+    "...grandparent.deep",
+    ".relative_module",
+    "importlib",
+    "importlib",
+    "concurrent.futures",
+  ]
+  .into_iter()
+  .map(String::from)
+  .collect::<Vec<String>>();
+
+  assert_eq!(
+    imports, expected,
+    "Extracted imports do not match expected edge-case imports"
+  );
+}
