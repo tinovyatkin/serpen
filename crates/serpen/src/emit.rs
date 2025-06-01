@@ -262,9 +262,18 @@ impl CodeEmitter {
     fn collect_first_party_imports_from_source(&self, source: &str) -> Result<HashSet<String>> {
         let mut first_party_imports = HashSet::new();
 
-        if let Ok(Mod::Module(module)) = parse(source, Mode::Module, "module") {
-            for stmt in &module.body {
-                self.collect_first_party_from_statement(stmt, &mut first_party_imports);
+        match parse(source, Mode::Module, "module") {
+            Ok(Mod::Module(module)) => {
+                for stmt in &module.body {
+                    self.collect_first_party_from_statement(stmt, &mut first_party_imports);
+                }
+            }
+            Ok(_) => {
+                log::warn!("Unexpected AST node type when parsing module");
+            }
+            Err(e) => {
+                log::warn!("Failed to parse module for first-party imports: {}", e);
+                // Continue with empty set rather than failing the entire bundling
             }
         }
 
