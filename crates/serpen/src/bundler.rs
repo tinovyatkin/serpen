@@ -280,7 +280,7 @@ impl Bundler {
 
     if let Mod::Module(module) = parsed {
       for stmt in module.body.iter() {
-        self.extract_imports_from_statement(stmt, &mut imports);
+        self.extract_imports_from_statement(stmt, &mut imports, file_path);
       }
     }
 
@@ -288,13 +288,18 @@ impl Bundler {
   }
 
   /// Extract import module names from a single AST statement
-  fn extract_imports_from_statement(&self, stmt: &Stmt, imports: &mut Vec<String>) {
+  fn extract_imports_from_statement(
+    &self,
+    stmt: &Stmt,
+    imports: &mut Vec<String>,
+    file_path: &Path,
+  ) {
     if let Stmt::Import(import_stmt) = stmt {
       for alias in &import_stmt.names {
         imports.push(alias.name.to_string());
       }
     } else if let Stmt::ImportFrom(import_from_stmt) = stmt {
-      self.process_import_from_statement(import_from_stmt, imports);
+      self.process_import_from_statement(import_from_stmt, imports, file_path);
     }
   }
 
@@ -303,34 +308,147 @@ impl Bundler {
     &self,
     import_from_stmt: &StmtImportFrom,
     imports: &mut Vec<String>,
+    file_path: &Path,
   ) {
-    // Named module import
+    let level = import_from_stmt.level.map(|i| i.to_u32()).unwrap_or(0);
+
+    if level == 0 {
+      self.process_absolute_import(import_from_stmt, imports);
+      return;
+    }
+
+    // Handle relative imports
+    if let Some(base_module) = self.resolve_relative_import(file_path, level) {
+      self.process_resolved_relative_import(import_from_stmt, imports, &base_module);
+    } else {
+      self.process_fallback_relative_import(import_from_stmt, imports, level);
+    }
+  }
+
+  /// Process absolute imports (level == 0)
+  fn process_absolute_import(&self, import_from_stmt: &StmtImportFrom, imports: &mut Vec<String>) {
     if let Some(ref module) = import_from_stmt.module {
-      let level = import_from_stmt.level.map(|i| i.to_u32()).unwrap_or(0);
+      imports.push(module.to_string());
+    }
+    // For absolute imports without module names, there's nothing to add
+  }
+
+  /// Process relative imports that were successfully resolved
+  fn process_resolved_relative_import(
+    &self,
+    import_from_stmt: &StmtImportFrom,
+    imports: &mut Vec<String>,
+    base_module: &str,
+  ) {
+    if let Some(ref module) = import_from_stmt.module {
+      // Relative import with explicit module name: from .module import something
+      let full_module = self.build_full_module_name(base_module, module);
+      imports.push(full_module);
+    } else {
+      // Relative import without explicit module: from . import something
+      // Add each imported name as a full module name
+      for alias in &import_from_stmt.names {
+        let full_import = self.build_full_module_name(base_module, &alias.name);
+        imports.push(full_import);
+      }
+    }
+  }
+
+  /// Build a full module name by combining base module and target module
+  fn build_full_module_name(&self, base_module: &str, target_module: &str) -> String {
+    if base_module.is_empty() {
+      target_module.to_string()
+    } else {
+      format!("{}.{}", base_module, target_module)
+    }
+  }
+
+  /// Process relative imports when resolution fails (fallback behavior)
+  fn process_fallback_relative_import(
+    &self,
+    import_from_stmt: &StmtImportFrom,
+    imports: &mut Vec<String>,
+    level: u32,
+  ) {
+    if let Some(ref module) = import_from_stmt.module {
       let module_name = self.format_module_name(module, level);
       imports.push(module_name);
-      return;
+    } else {
+      let dots = ".".repeat(level as usize);
+      imports.push(dots);
     }
-    // Relative imports without explicit module: record only the prefix
-    let level = import_from_stmt.level.map(|i| i.to_u32()).unwrap_or(0);
-    if level == 0 {
-      return;
-    }
-    let prefix = ".".repeat(level as usize);
-    imports.push(prefix);
   }
 
   /// Format module name based on relative import level
+  /// Assumes module is always non-empty when called
   fn format_module_name(&self, module: &str, level: u32) -> String {
     if level > 0 {
-      if module.is_empty() {
-        ".".to_string()
-      } else {
-        let dots = ".".repeat(level as usize);
-        format!("{}{}", dots, module)
-      }
+      let dots = ".".repeat(level as usize);
+      format!("{}{}", dots, module)
     } else {
       module.to_string()
+    }
+  }
+
+  /// Resolve a relative import to its absolute module name
+  /// Returns None if the relative import goes beyond the module hierarchy
+  fn resolve_relative_import(&self, file_path: &Path, level: u32) -> Option<String> {
+    // Get the directory containing the current file
+    let current_dir = file_path.parent()?;
+
+    // Convert current_dir to absolute path if it's relative
+    let absolute_current_dir = if current_dir.is_absolute() {
+      current_dir.to_path_buf()
+    } else {
+      std::env::current_dir().ok()?.join(current_dir)
+    };
+
+    // Find which source directory contains this file
+    let relative_dir = self.config.src.iter().find_map(|src_dir| {
+      // Handle case where paths might be relative vs absolute
+      if src_dir.is_absolute() {
+        absolute_current_dir.strip_prefix(src_dir).ok()
+      } else {
+        // For relative source directories, we need to resolve them relative to the current working directory
+        let current_working_dir = std::env::current_dir().ok()?;
+        let absolute_src_dir = current_working_dir.join(src_dir);
+        absolute_current_dir.strip_prefix(&absolute_src_dir).ok()
+      }
+    })?;
+
+    // Convert directory path to module path components
+    let module_parts: Vec<String> = if relative_dir == Path::new("") {
+      // If relative_dir is empty, we're at the root of the source directory
+      Vec::new()
+    } else {
+      relative_dir
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .collect()
+    };
+
+    // Apply relative import logic
+    let mut current_parts = module_parts;
+
+    // Remove 'level' number of components from the end
+    // For level=1 (.), we stay in current package
+    // For level=2 (..), we go to parent package, etc.
+    if level as usize > current_parts.len() + 1 {
+      // Cannot go beyond the root of the project
+      return None;
+    }
+
+    // Remove (level - 1) components since level=1 means current package
+    for _ in 0..(level.saturating_sub(1)) {
+      current_parts.pop();
+    }
+
+    if current_parts.is_empty() {
+      // If we're at the root after applying relative levels, return empty string
+      // This will be handled by the caller to construct the full import name
+      Some(String::new())
+    } else {
+      Some(current_parts.join("."))
     }
   }
 
