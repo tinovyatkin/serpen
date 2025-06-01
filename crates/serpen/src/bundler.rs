@@ -9,6 +9,7 @@ use crate::config::Config;
 use crate::dependency_graph::{DependencyGraph, ModuleNode};
 use crate::emit::CodeEmitter;
 use crate::resolver::{ImportType, ModuleResolver};
+use crate::util::module_name_from_relative;
 
 /// Type alias for module processing queue
 type ModuleQueue = Vec<(String, PathBuf)>;
@@ -154,33 +155,7 @@ impl Bundler {
 
   /// Convert a relative path to a module name
   fn path_to_module_name(&self, relative_path: &Path) -> Option<String> {
-    let parts: Vec<String> = relative_path
-      .components()
-      .map(|c| c.as_os_str().to_string_lossy().to_string())
-      .collect();
-
-    if parts.is_empty() {
-      return None;
-    }
-
-    let mut module_parts = parts;
-    let last_part = module_parts.last_mut()?;
-
-    // Remove .py extension
-    if last_part.ends_with(".py") {
-      *last_part = last_part[..last_part.len() - 3].to_string();
-    }
-
-    // Handle __init__.py
-    if last_part == "__init__" {
-      module_parts.pop();
-    }
-
-    if module_parts.is_empty() {
-      return None;
-    }
-
-    Some(module_parts.join("."))
+    module_name_from_relative(relative_path)
   }
 
   /// Build the complete dependency graph starting from the entry module
@@ -328,9 +303,12 @@ impl Bundler {
   /// Process absolute imports (level == 0)
   fn process_absolute_import(&self, import_from_stmt: &StmtImportFrom, imports: &mut Vec<String>) {
     if let Some(ref module) = import_from_stmt.module {
-      imports.push(module.to_string());
+      let m = module.to_string();
+      // Avoid duplicate absolute imports (e.g., import importlib + from importlib import)
+      if !imports.contains(&m) {
+        imports.push(m);
+      }
     }
-    // For absolute imports without module names, there's nothing to add
   }
 
   /// Process relative imports that were successfully resolved

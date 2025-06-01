@@ -256,7 +256,6 @@ fn test_extract_edge_case_imports() {
     "grandparent.deep",
     "tests.fixtures.relative_module",
     "importlib",
-    "importlib",
     "concurrent.futures",
   ]
   .into_iter()

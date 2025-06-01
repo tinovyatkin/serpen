@@ -86,43 +86,18 @@ impl ModuleResolver {
 
   /// Convert a file path to a Python module name
   fn path_to_module_name(&self, src_dir: &Path, file_path: &Path) -> Option<String> {
-    let relative_path = file_path.strip_prefix(src_dir).ok()?;
-
-    let module_parts: Vec<String> = relative_path
-      .components()
-      .map(|component| component.as_os_str().to_string_lossy().to_string())
-      .collect();
-
-    if module_parts.is_empty() {
-      return None;
-    }
-
-    let mut parts = module_parts;
-    let last_part = parts.last_mut()?;
-
-    // Remove .py extension
-    if last_part.ends_with(".py") {
-      *last_part = last_part[..last_part.len() - 3].to_string();
-    }
-
-    // Handle __init__.py files
-    if last_part == "__init__" {
-      parts.pop();
-      // Root __init__.py at source directory: use directory name as module name
-      if parts.is_empty() {
+    // Handle root __init__.py specially
+    if let Ok(relative) = file_path.strip_prefix(src_dir) {
+      if relative.components().count() == 1
+        && relative.file_name().and_then(|n| n.to_str()) == Some("__init__.py")
+      {
         return src_dir
           .file_name()
           .and_then(|os| os.to_str())
           .map(|s| s.to_string());
       }
     }
-
-    // Skip files that don't map to a module (e.g., empty parts)
-    if parts.is_empty() {
-      return None;
-    }
-
-    Some(parts.join("."))
+    crate::util::path_to_module_name(src_dir, file_path)
   }
 
   /// Classify an import as first-party, third-party, or standard library
