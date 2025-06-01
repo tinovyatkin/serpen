@@ -12,6 +12,14 @@ use rustpython_parser::{Mode, parse};
 /// Type alias for import sets to reduce complexity
 type ImportSets = (HashSet<String>, HashSet<String>);
 
+/// Context for processing logical statements
+struct LogicalStatementContext<'a> {
+    statement: &'a str,
+    first_party_imports: &'a HashSet<String>,
+    unused_import_names: &'a HashSet<String>,
+    output_lines: &'a mut Vec<String>,
+}
+
 pub struct CodeEmitter {
     resolver: ModuleResolver,
     _preserve_comments: bool,
@@ -213,12 +221,12 @@ impl CodeEmitter {
             }
 
             // Logical statement ready - process it
-            self.process_logical_statement(
-                &joined,
-                &first_party_imports,
-                &unused_import_names,
-                &mut output_lines,
-            );
+            self.process_logical_statement(LogicalStatementContext {
+                statement: &joined,
+                first_party_imports: &first_party_imports,
+                unused_import_names: &unused_import_names,
+                output_lines: &mut output_lines,
+            });
             buf.clear();
         }
 
@@ -333,20 +341,15 @@ impl CodeEmitter {
     }
 
     /// Process a complete logical statement
-    fn process_logical_statement(
-        &self,
-        statement: &str,
-        first_party_imports: &HashSet<String>,
-        unused_import_names: &HashSet<String>,
-        output_lines: &mut Vec<String>,
-    ) {
-        let trimmed = statement.trim();
+    fn process_logical_statement(&self, ctx: LogicalStatementContext) {
+        let trimmed = ctx.statement.trim();
         let is_import = trimmed.starts_with("import ")
             || (trimmed.starts_with("from ") && trimmed.contains(" import "));
 
         if !is_import {
             // Non-import: emit original text
-            output_lines.extend(statement.lines().map(str::to_string));
+            ctx.output_lines
+                .extend(ctx.statement.lines().map(str::to_string));
             return;
         }
 
@@ -360,21 +363,23 @@ impl CodeEmitter {
 
         let all_first_party = modules
             .iter()
-            .all(|module_name| first_party_imports.contains(module_name));
+            .all(|module_name| ctx.first_party_imports.contains(module_name));
 
         // Check if any of the imported names are unused
-        let contains_unused = self.check_if_import_contains_unused(trimmed, unused_import_names);
+        let contains_unused =
+            self.check_if_import_contains_unused(trimmed, ctx.unused_import_names);
 
         log::debug!(
             "All modules first-party: {}, contains unused: {}, first_party_imports: {:?}",
             all_first_party,
             contains_unused,
-            first_party_imports
+            ctx.first_party_imports
         );
 
         if !all_first_party && !contains_unused {
             // Preserve statement if it contains non-first-party imports and no unused imports
-            output_lines.extend(statement.lines().map(str::to_string));
+            ctx.output_lines
+                .extend(ctx.statement.lines().map(str::to_string));
         } else {
             log::debug!(
                 "Skipping import (first-party: {}, unused: {}): {}",
@@ -402,20 +407,35 @@ impl CodeEmitter {
         } else if let Some(imports_part) = statement.strip_prefix("import ") {
             imports_part
                 .split(',')
-                .map(|s| {
-                    // Strip comments and aliases
-                    let clean_name = s.split('#').next().unwrap_or(s).trim();
-                    clean_name
-                        .split(" as ")
-                        .next()
-                        .unwrap_or(clean_name)
-                        .trim()
-                        .to_string()
-                })
+                .map(|import_item| self.extract_import_name(import_item))
                 .collect()
         } else {
             vec![]
         }
+    }
+
+    /// Extract import name from an import item, handling comments and aliases
+    fn extract_import_name(&self, import_item: &str) -> String {
+        // Strip comments first
+        let clean_item = import_item.split('#').next().unwrap_or(import_item);
+        clean_item
+            .split(" as ")
+            .next() // Get the original name (before "as" if present)
+            .unwrap_or(clean_item)
+            .trim()
+            .to_string()
+    }
+
+    /// Check if import parts contain any unused names
+    fn has_unused_import_in_parts(
+        &self,
+        imports_part: &str,
+        unused_import_names: &HashSet<String>,
+    ) -> bool {
+        imports_part.split(',').any(|import_item| {
+            let name = self.extract_import_name(import_item);
+            unused_import_names.contains(&name)
+        })
     }
 
     /// Check if an import statement contains any unused imported names
@@ -427,64 +447,41 @@ impl CodeEmitter {
         if statement.starts_with("from ") && statement.contains(" import ") {
             // Handle "from module import name1, name2" statements
             if let Some(imports_part) = statement.split(" import ").nth(1) {
-                // Parse the imported names (handle aliases and multiple imports)
-                for import_item in imports_part.split(',') {
-                    // Strip comments first
-                    let clean_item = import_item.split('#').next().unwrap_or(import_item);
-                    let name = clean_item
-                        .split(" as ")
-                        .next() // Get the original name (before "as" if present)
-                        .unwrap_or(clean_item)
-                        .trim();
-
-                    if unused_import_names.contains(name) {
-                        return true;
-                    }
-                }
+                return self.has_unused_import_in_parts(imports_part, unused_import_names);
             }
         } else if let Some(imports_part) = statement.strip_prefix("import ") {
             // Handle "import module1, module2" statements
-            for import_item in imports_part.split(',') {
-                // Strip comments first
-                let clean_item = import_item.split('#').next().unwrap_or(import_item);
-                let name = clean_item
-                    .split(" as ")
-                    .next() // Get the original name (before "as" if present)
-                    .unwrap_or(clean_item)
-                    .trim();
-
-                if unused_import_names.contains(name) {
-                    return true;
-                }
-            }
+            return self.has_unused_import_in_parts(imports_part, unused_import_names);
         }
 
         false
     }
 
+    /// Check if a module name is valid (alphanumeric, underscores, dots only)
+    fn is_valid_module_name(&self, module_name: &str) -> bool {
+        !module_name.is_empty()
+            && !module_name.contains(' ')
+            && module_name
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+    }
+
     /// Safely format an import statement, validating the input
     fn format_import_statement(&self, module_name: &str) -> String {
-        // Validate that the import string looks like a simple module name
-        // Module names should contain only alphanumeric characters, underscores, and dots
-        if module_name
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
-            && !module_name.is_empty()
-            && !module_name.contains(' ')
-        {
-            format!("import {}", module_name)
+        if self.is_valid_module_name(module_name) {
+            return format!("import {}", module_name);
+        }
+
+        // If it doesn't look like a simple module name, treat it as a pre-formatted import
+        // This handles cases where the import might already be formatted or contain aliases
+        if module_name.starts_with("import ") || module_name.starts_with("from ") {
+            module_name.to_string()
         } else {
-            // If it doesn't look like a simple module name, treat it as a pre-formatted import
-            // This handles cases where the import might already be formatted or contain aliases
-            if module_name.starts_with("import ") || module_name.starts_with("from ") {
-                module_name.to_string()
-            } else {
-                // Fallback: still format as import but add a comment indicating potential issue
-                format!(
-                    "import {}  # Warning: unusual module name format",
-                    module_name
-                )
-            }
+            // Fallback: still format as import but add a comment indicating potential issue
+            format!(
+                "import {}  # Warning: unusual module name format",
+                module_name
+            )
         }
     }
 
