@@ -545,7 +545,7 @@ impl CodeEmitter {
         } else if let Some(imports_part) = statement.strip_prefix("import ") {
             imports_part
                 .split(',')
-                .map(|import_item| self.extract_import_name(import_item))
+                .map(|import_item| self.extract_original_module_name(import_item))
                 .collect()
         } else {
             vec![]
@@ -563,6 +563,22 @@ impl CodeEmitter {
         // Otherwise return the original name (X)
         if let Some(as_pos) = clean_item.find(" as ") {
             clean_item[as_pos + 4..].trim().to_string()
+        } else {
+            clean_item.trim().to_string()
+        }
+    }
+
+    /// Extract the original module name from an import item, handling comments and aliases
+    /// Returns the original module name (the part before 'as' if present),
+    /// which is needed for first-party detection
+    fn extract_original_module_name(&self, import_item: &str) -> String {
+        // Strip comments first
+        let clean_item = import_item.split('#').next().unwrap_or(import_item);
+
+        // If there's an alias (import X as Y), return the original name (X)
+        // Otherwise return the name as-is (X)
+        if let Some(as_pos) = clean_item.find(" as ") {
+            clean_item[..as_pos].trim().to_string()
         } else {
             clean_item.trim().to_string()
         }
@@ -749,5 +765,79 @@ mod tests {
         let result =
             emitter.rewrite_import_without_unused("import numpy as np, pandas as pd", &unused);
         assert_eq!(result, Some("import numpy as np".to_string()));
+    }
+
+    #[test]
+    fn test_extract_import_modules_with_aliases() {
+        let emitter = create_test_emitter();
+
+        // Test regular imports without aliases
+        let result = emitter.extract_import_modules("import os, sys");
+        assert_eq!(result, vec!["os", "sys"]);
+
+        // Test imports with aliases - should return original module names, not aliases
+        let result = emitter.extract_import_modules("import numpy as np, pandas as pd");
+        assert_eq!(result, vec!["numpy", "pandas"]);
+
+        // Test mixed imports with and without aliases
+        let result = emitter.extract_import_modules("import os, numpy as np, sys");
+        assert_eq!(result, vec!["os", "numpy", "sys"]);
+
+        // Test single import with alias
+        let result = emitter.extract_import_modules("import matplotlib.pyplot as plt");
+        assert_eq!(result, vec!["matplotlib.pyplot"]);
+
+        // Test from imports (should not be affected by the fix)
+        let result = emitter.extract_import_modules("from collections import defaultdict");
+        assert_eq!(result, vec!["collections"]);
+
+        // Test from imports with complex module path
+        let result = emitter.extract_import_modules("from package.submodule import func");
+        assert_eq!(result, vec!["package.submodule"]);
+
+        // Test imports with comments
+        let result = emitter.extract_import_modules("import requests as req  # HTTP library");
+        assert_eq!(result, vec!["requests"]);
+
+        // Test empty import statement
+        let result = emitter.extract_import_modules("");
+        assert_eq!(result, Vec::<String>::new());
+
+        // Test malformed import
+        let result = emitter.extract_import_modules("invalid import statement");
+        assert_eq!(result, Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_extract_original_module_name() {
+        let emitter = create_test_emitter();
+
+        // Test without alias
+        assert_eq!(emitter.extract_original_module_name("numpy"), "numpy");
+
+        // Test with alias
+        assert_eq!(emitter.extract_original_module_name("numpy as np"), "numpy");
+
+        // Test with complex module name and alias
+        assert_eq!(
+            emitter.extract_original_module_name("matplotlib.pyplot as plt"),
+            "matplotlib.pyplot"
+        );
+
+        // Test with comment
+        assert_eq!(
+            emitter.extract_original_module_name("requests as req  # HTTP lib"),
+            "requests"
+        );
+
+        // Test with whitespace
+        assert_eq!(
+            emitter.extract_original_module_name("  pandas   as   pd  "),
+            "pandas"
+        );
+
+        // Test extract_import_name for comparison (should return alias when present)
+        assert_eq!(emitter.extract_import_name("numpy as np"), "np");
+        assert_eq!(emitter.extract_import_name("numpy"), "numpy");
     }
 }
