@@ -117,4 +117,5 @@ if __name__ == "__main__":
 === END BUNDLE CONTENT ===
 
 === REQUIREMENTS.TXT ===
-pydantic=== END REQUIREMENTS.TXT ===
+pydantic
+=== END REQUIREMENTS.TXT ===
