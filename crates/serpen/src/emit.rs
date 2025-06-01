@@ -537,7 +537,10 @@ impl CodeEmitter {
                 .and_then(|s| s.split(" import ").next())
             {
                 // Strip comments from module name
-                let clean_module = module_part.split('#').next().unwrap_or(module_part).trim();
+                let mut clean_module = module_part.split('#').next().unwrap_or(module_part).trim();
+                if clean_module == "." {
+                    clean_module = "";
+                }
                 vec![clean_module.to_string()]
             } else {
                 vec![]
