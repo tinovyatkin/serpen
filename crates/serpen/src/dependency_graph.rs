@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use indexmap::IndexSet;
+use log::debug;
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::HashMap;
@@ -155,7 +156,7 @@ impl DependencyGraph {
       .get(entry_module)
       .ok_or_else(|| anyhow!("Entry module not found: {}", entry_module))?;
 
-    println!("DEBUG: Filtering from entry module: {}", entry_module);
+    debug!("Filtering from entry module: {}", entry_module);
 
     // Use DFS to find all reachable modules
     let mut visited = IndexSet::new();
@@ -164,7 +165,7 @@ impl DependencyGraph {
     while let Some(current_index) = stack.pop() {
       if visited.insert(current_index) {
         let current_module = &self.graph[current_index].name;
-        println!("DEBUG: Visiting module: {}", current_module);
+        debug!("Visiting module: {}", current_module);
 
         // Add all dependencies to the stack
         // Since edges now point FROM dependencies TO dependents,
@@ -187,9 +188,9 @@ impl DependencyGraph {
       }
     }
 
-    println!("DEBUG: Visited {} modules total", visited.len());
+    debug!("Visited {} modules total", visited.len());
     for &index in &visited {
-      println!("DEBUG: Visited module: {}", self.graph[index].name);
+      debug!("Visited module: {}", self.graph[index].name);
     }
 
     // Create new graph with only reachable modules
@@ -234,10 +235,10 @@ impl DependencyGraph {
       neighbor_module, current_module
     );
     if !visited.contains(&neighbor_index) {
-      println!("DEBUG: Adding {} to stack", neighbor_module);
+      debug!("Adding {} to stack", neighbor_module);
       stack.push(neighbor_index);
     } else {
-      println!("DEBUG: {} already visited", neighbor_module);
+      debug!("{} already visited", neighbor_module);
     }
   }
 }
