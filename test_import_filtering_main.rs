@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-"""Simple test for import filtering functionality."""
-
 use serpen::{config::Config, emit::CodeEmitter, resolver::ModuleResolver};
 use std::path::PathBuf;
 
