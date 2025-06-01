@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -82,8 +82,10 @@ impl CodeEmitter {
             "".to_string(),
         ];
 
-        // Collect all unused imports from all modules
+        // Collect all unused imports from all modules (computed once)
         let mut all_unused_imports = HashSet::new();
+        let mut unused_imports_by_module = HashMap::new();
+
         for module in modules {
             let source = fs::read_to_string(&module.path)
                 .with_context(|| format!("Failed to read module file: {:?}", module.path))?;
@@ -98,6 +100,16 @@ impl CodeEmitter {
                 Vec::new()
             });
 
+            // Create a set of unused import names for this module
+            let module_unused_names: HashSet<String> = unused_imports
+                .iter()
+                .map(|import| import.name.clone())
+                .collect();
+
+            // Store for later use in process_module_file
+            unused_imports_by_module.insert(module.path.clone(), module_unused_names.clone());
+
+            // Add to global set for filtering preserved imports
             for import in unused_imports {
                 all_unused_imports.insert(import.name);
             }
@@ -144,7 +156,13 @@ impl CodeEmitter {
 
             output.push(format!("# ─ Module: {} ─", module.name));
 
-            let module_code = self.process_module_file(&module.path, &module.name)?;
+            let unused_imports_for_module = unused_imports_by_module
+                .get(&module.path)
+                .cloned()
+                .unwrap_or_default();
+
+            let module_code =
+                self.process_module_file(&module.path, &module.name, &unused_imports_for_module)?;
             output.push(module_code);
             output.push("".to_string());
         }
@@ -152,8 +170,17 @@ impl CodeEmitter {
         // Add entry module last
         if let Some(entry_module_node) = modules.iter().find(|m| m.name == entry_module) {
             output.push(format!("# ─ Entry Module: {} ─", entry_module));
-            let entry_code =
-                self.process_module_file(&entry_module_node.path, &entry_module_node.name)?;
+
+            let unused_imports_for_entry = unused_imports_by_module
+                .get(&entry_module_node.path)
+                .cloned()
+                .unwrap_or_default();
+
+            let entry_code = self.process_module_file(
+                &entry_module_node.path,
+                &entry_module_node.name,
+                &unused_imports_for_entry,
+            )?;
             output.push(entry_code);
         }
 
@@ -161,32 +188,19 @@ impl CodeEmitter {
     }
 
     /// Process a single module file, removing inlined imports and unused imports
-    fn process_module_file(&mut self, file_path: &Path, _module_name: &str) -> Result<String> {
+    fn process_module_file(
+        &mut self,
+        file_path: &Path,
+        _module_name: &str,
+        unused_import_names: &HashSet<String>,
+    ) -> Result<String> {
         let source = fs::read_to_string(file_path)
             .with_context(|| format!("Failed to read module file: {:?}", file_path))?;
 
-        // Analyze for unused imports
-        log::info!("STARTING UNUSED IMPORT ANALYSIS for {:?}", file_path);
-        let mut unused_analyzer = UnusedImportAnalyzer::new();
-        let unused_imports = unused_analyzer.analyze_file(&source).unwrap_or_else(|err| {
-            log::warn!(
-                "Failed to analyze unused imports in {:?}: {}",
-                file_path,
-                err
-            );
-            Vec::new()
-        });
-
-        // Create a set of unused import names for quick lookup
-        let unused_import_names: HashSet<String> = unused_imports
-            .iter()
-            .map(|import| import.name.clone())
-            .collect();
-
         log::info!(
-            "FOUND {} unused imports in {:?}: {:?}",
-            unused_imports.len(),
+            "Processing module {:?} with {} pre-computed unused imports: {:?}",
             file_path,
+            unused_import_names.len(),
             unused_import_names
         );
 
@@ -224,7 +238,7 @@ impl CodeEmitter {
             self.process_logical_statement(LogicalStatementContext {
                 statement: &joined,
                 first_party_imports: &first_party_imports,
-                unused_import_names: &unused_import_names,
+                unused_import_names,
                 output_lines: &mut output_lines,
             });
             buf.clear();
