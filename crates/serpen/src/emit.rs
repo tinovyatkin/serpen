@@ -413,7 +413,13 @@ impl CodeEmitter {
             if let Some(rewritten) =
                 self.rewrite_import_without_unused(trimmed, ctx.unused_import_names)
             {
-                ctx.output_lines.push(rewritten);
+                // Capture the leading whitespace from the original statement
+                let leading_whitespace = ctx.statement.len() - ctx.statement.trim_start().len();
+                let original_indent = &ctx.statement[..leading_whitespace];
+
+                // Prepend the original indentation to the rewritten statement
+                let indented_rewritten = format!("{}{}", original_indent, rewritten);
+                ctx.output_lines.push(indented_rewritten);
             }
         } else {
             // Preserve statement if it contains non-first-party imports and no unused imports
@@ -853,5 +859,91 @@ mod tests {
         // Test extract_import_name for comparison (should return alias when present)
         assert_eq!(emitter.extract_import_name("numpy as np"), "np");
         assert_eq!(emitter.extract_import_name("numpy"), "numpy");
+    }
+
+    #[test]
+    fn test_process_logical_statement_preserves_indentation() {
+        let emitter = create_test_emitter();
+        let first_party_imports = HashSet::new();
+
+        // Test with 4-space indentation (common in function bodies)
+        {
+            let mut output_lines = Vec::new();
+            let mut unused_imports = HashSet::new();
+            unused_imports.insert("sys".to_string());
+
+            let ctx = LogicalStatementContext {
+                statement: "    import os, sys  # Test comment",
+                first_party_imports: &first_party_imports,
+                unused_import_names: &unused_imports,
+                output_lines: &mut output_lines,
+            };
+
+            emitter.process_logical_statement(ctx);
+
+            // Should preserve the 4-space indentation
+            assert_eq!(output_lines.len(), 1);
+            assert_eq!(output_lines[0], "    import os  # Test comment");
+        }
+
+        // Test with tab indentation
+        {
+            let mut output_lines = Vec::new();
+            let mut unused_imports = HashSet::new();
+            unused_imports.insert("Counter".to_string());
+
+            let ctx = LogicalStatementContext {
+                statement: "\tfrom collections import Counter, defaultdict",
+                first_party_imports: &first_party_imports,
+                unused_import_names: &unused_imports,
+                output_lines: &mut output_lines,
+            };
+
+            emitter.process_logical_statement(ctx);
+
+            // Should preserve the tab indentation
+            assert_eq!(output_lines.len(), 1);
+            assert_eq!(output_lines[0], "\tfrom collections import defaultdict");
+        }
+
+        // Test with no indentation (top-level import)
+        {
+            let mut output_lines = Vec::new();
+            let mut unused_imports = HashSet::new();
+            unused_imports.insert("pathlib".to_string());
+
+            let ctx = LogicalStatementContext {
+                statement: "import json, pathlib",
+                first_party_imports: &first_party_imports,
+                unused_import_names: &unused_imports,
+                output_lines: &mut output_lines,
+            };
+
+            emitter.process_logical_statement(ctx);
+
+            // Should have no leading whitespace
+            assert_eq!(output_lines.len(), 1);
+            assert_eq!(output_lines[0], "import json");
+        }
+
+        // Test with mixed spaces and tabs (8 spaces + 1 tab)
+        {
+            let mut output_lines = Vec::new();
+            let mut unused_imports = HashSet::new();
+            unused_imports.insert("typing".to_string());
+
+            let ctx = LogicalStatementContext {
+                statement: "        \timport typing, collections",
+                first_party_imports: &first_party_imports,
+                unused_import_names: &unused_imports,
+                output_lines: &mut output_lines,
+            };
+
+            emitter.process_logical_statement(ctx);
+
+            // Should preserve the exact whitespace pattern
+            assert_eq!(output_lines.len(), 1);
+            assert_eq!(output_lines[0], "        \timport collections");
+        }
     }
 }
