@@ -15,10 +15,10 @@ pre-commit:
       stage_fixed: true
     lint:
       glob: '**/*.rs'
-      run: cargo clippy --tests --fix --allow-dirty -- -D warnings
+      run: cargo clippy --all-targets --all-features --tests --fix --allow-dirty -- -D warnings
       stage_fixed: true
     update-index:
-      glob: '*.rs'
+      glob: '**/*.rs'
       run: git update-index --again
 
 post-checkout:

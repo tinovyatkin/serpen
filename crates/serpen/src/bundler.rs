@@ -304,16 +304,20 @@ impl Bundler {
     import_from_stmt: &StmtImportFrom,
     imports: &mut Vec<String>,
   ) {
+    // Named module import
     if let Some(ref module) = import_from_stmt.module {
       let level = import_from_stmt.level.map(|i| i.to_u32()).unwrap_or(0);
       let module_name = self.format_module_name(module, level);
       imports.push(module_name);
-    } else if let Some(level_int) = import_from_stmt.level {
-      let level = level_int.to_u32();
-      if level > 0 {
-        imports.push(".".repeat(level as usize));
-      }
+      return;
     }
+    // Relative imports without explicit module: record only the prefix
+    let level = import_from_stmt.level.map(|i| i.to_u32()).unwrap_or(0);
+    if level == 0 {
+      return;
+    }
+    let prefix = ".".repeat(level as usize);
+    imports.push(prefix);
   }
 
   /// Format module name based on relative import level

@@ -35,17 +35,33 @@ impl DependencyGraph {
   /// Add a module to the graph
   pub fn add_module(&mut self, module: ModuleNode) -> NodeIndex {
     let module_name = module.name.clone();
+    let module_path = module.path.clone();
 
+    // 1) If name exists, update payload
     if let Some(&existing_index) = self.node_indices.get(&module_name) {
-      // Update existing node
       self.graph[existing_index] = module;
-      existing_index
-    } else {
-      // Add new node
-      let index = self.graph.add_node(module);
-      self.node_indices.insert(module_name, index);
-      index
+      return existing_index;
     }
+    // 2) Detect rename by matching path
+    if let Some(old_key) = self.node_indices.iter().find_map(|(key, &idx)| {
+      if self.graph[idx].path == module_path {
+        Some(key.clone())
+      } else {
+        None
+      }
+    }) {
+      // Remove old entry and insert new name
+      let existing_index = self.node_indices.remove(&old_key).unwrap();
+      self
+        .node_indices
+        .insert(module_name.clone(), existing_index);
+      self.graph[existing_index] = module;
+      return existing_index;
+    }
+    // 3) New module, add node
+    let index = self.graph.add_node(module);
+    self.node_indices.insert(module_name, index);
+    index
   }
 
   /// Add a dependency edge between two modules

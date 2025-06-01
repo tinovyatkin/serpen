@@ -5,6 +5,8 @@ use std::path::Path;
 
 use crate::dependency_graph::ModuleNode;
 use crate::resolver::{ImportType, ModuleResolver};
+use rustpython_parser::ast::{Mod, Stmt};
+use rustpython_parser::{parse, Mode};
 
 /// Type alias for import sets to reduce complexity
 type ImportSets = (HashSet<String>, HashSet<String>);
@@ -125,86 +127,177 @@ impl CodeEmitter {
     let source = fs::read_to_string(file_path)
       .with_context(|| format!("Failed to read module file: {:?}", file_path))?;
 
-    // Simple approach: process line by line and filter out first-party imports
+    // Collect first-party imports using AST for accuracy
+    let first_party_imports = self.collect_first_party_imports_from_file(&source)?;
+
+    // Enhanced line-based processing with triple-quote and multi-line handling
     let mut output_lines = Vec::new();
+    let mut in_triple = false;
+    let mut buf: Vec<String> = Vec::new();
 
     for line in source.lines() {
-      let trimmed = line.trim();
-
-      if self.should_process_import_line(trimmed, &mut output_lines, line) {
+      // Triple-quoted string handling
+      if in_triple {
+        output_lines.push(line.to_string());
+        in_triple = !(line.contains("'''") || line.contains("\"\"\""));
         continue;
       }
 
-      // Keep all non-import lines
-      output_lines.push(line.to_string());
+      if self.is_triple_quote_start(line) {
+        in_triple = true;
+        output_lines.push(line.to_string());
+        continue;
+      }
+
+      // Accumulate logical lines (handle backslash continuations and unmatched parentheses)
+      buf.push(line.to_string());
+      let joined = buf.join("\n");
+
+      if self.is_statement_continuation(&joined, line) {
+        continue;
+      }
+
+      // Logical statement ready - process it
+      self.process_logical_statement(&joined, &first_party_imports, &mut output_lines);
+      buf.clear();
+    }
+
+    // Flush any remaining buffer
+    for line in buf {
+      output_lines.push(line);
     }
 
     Ok(output_lines.join("\n"))
   }
 
-  /// Process import lines and return true if the line was handled
-  fn should_process_import_line(
-    &mut self,
-    trimmed: &str,
-    output_lines: &mut Vec<String>,
-    line: &str,
-  ) -> bool {
-    if trimmed.starts_with("from ") && trimmed.contains(" import ") {
-      self.process_from_import(trimmed, output_lines, line);
-      true
-    } else if trimmed.starts_with("import ") {
-      self.process_import_statement(trimmed, output_lines, line);
-      true
-    } else {
-      false
-    }
-  }
+  /// Collect first-party imports from a file using AST parsing
+  fn collect_first_party_imports_from_file(&self, source: &str) -> Result<HashSet<String>> {
+    let mut first_party_imports = HashSet::new();
 
-  /// Process "from module import ..." statements
-  fn process_from_import(&mut self, trimmed: &str, output_lines: &mut Vec<String>, line: &str) {
-    if let Some(module_part) = trimmed
-      .strip_prefix("from ")
-      .and_then(|s| s.split(" import ").next())
-    {
-      let module_name = module_part.trim();
-      match self.resolver.classify_import(module_name) {
-        ImportType::FirstParty => {
-          // Skip first-party imports - they'll be inlined
-        }
-        ImportType::ThirdParty | ImportType::StandardLibrary => {
-          // Keep third-party and stdlib imports
-          output_lines.push(line.to_string());
-        }
+    if let Ok(Mod::Module(module)) = parse(source, Mode::Module, "module") {
+      for stmt in &module.body {
+        self.collect_first_party_from_statement(stmt, &mut first_party_imports);
       }
-    } else {
-      // Keep malformed import lines as-is
-      output_lines.push(line.to_string());
+    }
+
+    Ok(first_party_imports)
+  }
+
+  /// Extract first-party imports from an AST statement
+  fn collect_first_party_from_statement(&self, stmt: &Stmt, imports: &mut HashSet<String>) {
+    match stmt {
+      Stmt::Import(import_stmt) => {
+        self.collect_first_party_from_import(import_stmt, imports);
+      }
+      Stmt::ImportFrom(import_from_stmt) => {
+        self.collect_first_party_from_import_from(import_from_stmt, imports);
+      }
+      _ => {}
     }
   }
 
-  /// Process "import module" statements
-  fn process_import_statement(
-    &mut self,
-    trimmed: &str,
-    output_lines: &mut Vec<String>,
-    line: &str,
+  /// Helper to collect first-party imports from "from ... import" statements
+  fn collect_first_party_from_import_from(
+    &self,
+    import_from_stmt: &rustpython_parser::ast::StmtImportFrom,
+    imports: &mut HashSet<String>,
   ) {
-    let imports_part = trimmed.strip_prefix("import ").unwrap();
-    let modules: Vec<&str> = imports_part.split(',').map(|s| s.trim()).collect();
+    let Some(ref module) = import_from_stmt.module else {
+      return;
+    };
 
-    let keep_line = modules.iter().any(|module| {
-      // Handle "import module as alias"
-      let module_name = module.split(" as ").next().unwrap_or(module).trim();
-      matches!(
-        self.resolver.classify_import(module_name),
-        ImportType::ThirdParty | ImportType::StandardLibrary
-      )
-    });
-
-    if keep_line {
-      output_lines.push(line.to_string());
+    let module_name = module.as_str();
+    if matches!(
+      self.resolver.classify_import(module_name),
+      ImportType::FirstParty
+    ) {
+      imports.insert(module_name.to_string());
     }
-    // Skip lines with only first-party imports
+  }
+
+  /// Helper to collect first-party imports from regular import statements
+  fn collect_first_party_from_import(
+    &self,
+    import_stmt: &rustpython_parser::ast::StmtImport,
+    imports: &mut HashSet<String>,
+  ) {
+    for alias in &import_stmt.names {
+      let import_name = alias.name.as_str();
+      if matches!(
+        self.resolver.classify_import(import_name),
+        ImportType::FirstParty
+      ) {
+        imports.insert(import_name.to_string());
+      }
+    }
+  }
+
+  /// Check if a line starts a triple-quoted string
+  fn is_triple_quote_start(&self, line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("'''") || trimmed.starts_with("\"\"\"")
+  }
+
+  /// Check if the current statement should be continued (backslash or unmatched parentheses)
+  fn is_statement_continuation(&self, joined: &str, last_line: &str) -> bool {
+    if last_line.trim_end().ends_with('\\') {
+      return true;
+    }
+
+    let open_paren = joined.matches('(').count();
+    let close_paren = joined.matches(')').count();
+    open_paren > close_paren
+  }
+
+  /// Process a complete logical statement
+  fn process_logical_statement(
+    &self,
+    statement: &str,
+    first_party_imports: &HashSet<String>,
+    output_lines: &mut Vec<String>,
+  ) {
+    let trimmed = statement.trim();
+    let is_import = trimmed.starts_with("import ")
+      || (trimmed.starts_with("from ") && trimmed.contains(" import "));
+
+    if !is_import {
+      // Non-import: emit original text
+      output_lines.extend(statement.lines().map(str::to_string));
+      return;
+    }
+
+    // Check if all modules in this import are first-party; if so, skip
+    let modules = self.extract_import_modules(trimmed);
+    let all_first_party = modules
+      .iter()
+      .all(|module_name| first_party_imports.contains(module_name));
+
+    if !all_first_party {
+      // Preserve statement if it contains non-first-party imports
+      output_lines.extend(statement.lines().map(str::to_string));
+    }
+    // Skip statements with only first-party imports
+  }
+
+  /// Extract module names from an import statement
+  fn extract_import_modules(&self, statement: &str) -> Vec<String> {
+    if statement.starts_with("from ") {
+      if let Some(module_part) = statement
+        .strip_prefix("from ")
+        .and_then(|s| s.split(" import ").next())
+      {
+        vec![module_part.trim().to_string()]
+      } else {
+        vec![]
+      }
+    } else if let Some(imports_part) = statement.strip_prefix("import ") {
+      imports_part
+        .split(',')
+        .map(|s| s.split(" as ").next().unwrap_or(s).trim().to_string())
+        .collect()
+    } else {
+      vec![]
+    }
   }
 
   /// Safely format an import statement, validating the input
