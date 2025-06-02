@@ -1,6 +1,5 @@
 # Serpen: Python Source Bundler
 
-[![Crates.io](https://img.shields.io/crates/v/serpen.svg)](https://crates.io/crates/serpen)
 [![PyPI](https://img.shields.io/pypi/v/serpen.svg)](https://pypi.org/project/serpen/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -23,12 +22,6 @@
 
 ```bash
 pip install serpen
-```
-
-### From Crates.io (Rust Binary)
-
-```bash
-cargo install serpen
 ```
 
 ### From Source
@@ -55,38 +48,6 @@ serpen --entry src/main.py --output bundle.py --verbose
 
 # Custom config file
 serpen --entry src/main.py --output bundle.py --config my-serpen.toml
-```
-
-### Unused Import Trimming
-
-Serpen also provides a standalone unused import trimmer to clean up Python files:
-
-```bash
-# Trim unused imports from a file (shows what would be removed)
-serpen trim my_file.py --dry-run
-
-# Actually remove unused imports
-serpen trim my_file.py
-
-# Preserve specific imports even if unused
-serpen trim my_file.py --preserve-pattern="logging,debug"
-```
-
-The trimmer:
-
-- Analyzes Python files using the same RustPython parser
-- Identifies truly unused imports (both simple and `from` imports)
-- Handles partial trimming of `from` imports (removes only unused items)
-- Preserves imports matching specified patterns
-- Generates clean, properly formatted output
-
-### Python API Usage
-
-```python
-from serpen import Bundler
-
-bundler = Bundler()
-bundler.bundle("src/main.py", "bundle.py", emit_requirements=True)
 ```
 
 ## Configuration

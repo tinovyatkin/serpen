@@ -210,9 +210,9 @@ impl UnusedImportAnalyzer {
     fn extract_full_dotted_name(&self, expr: &ast::Expr) -> Option<String> {
         match expr {
             ast::Expr::Name(name_expr) => Some(name_expr.id.as_str().to_string()),
-            ast::Expr::Attribute(attr_expr) => {
-                self.extract_full_dotted_name(&attr_expr.value).map(|base_name| format!("{}.{}", base_name, attr_expr.attr.as_str()))
-            }
+            ast::Expr::Attribute(attr_expr) => self
+                .extract_full_dotted_name(&attr_expr.value)
+                .map(|base_name| format!("{}.{}", base_name, attr_expr.attr.as_str())),
             _ => None,
         }
     }
