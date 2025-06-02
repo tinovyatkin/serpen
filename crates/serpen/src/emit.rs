@@ -229,7 +229,8 @@ impl CodeEmitter {
         import_strategy: &ImportStrategy,
     ) -> Result<String> {
         log::info!(
-            "Processing module with {} pre-computed unused imports: {:?}",
+            "Processing module '{}' with {} pre-computed unused imports: {:?}",
+            module_name,
             parsed_data.unused_imports.len(),
             parsed_data.unused_imports
         );
@@ -339,8 +340,23 @@ impl CodeEmitter {
         module: &mut ast::ModModule,
         first_party_imports: &HashSet<String>,
     ) -> Result<()> {
+        log::info!("Removing first-party imports: {:?}", first_party_imports);
         module.body = self.filter_import_statements(&module.body, |import_name| {
-            !first_party_imports.contains(import_name)
+            let is_first_party = first_party_imports.contains(import_name);
+            let classification = self.resolver.classify_import(import_name);
+            let keep = !is_first_party
+                || matches!(
+                    classification,
+                    ImportType::StandardLibrary | ImportType::ThirdParty
+                );
+            log::info!(
+                "Import '{}': first_party={}, classification={:?}, keep={}",
+                import_name,
+                is_first_party,
+                classification,
+                keep
+            );
+            keep
         })?;
         Ok(())
     }
