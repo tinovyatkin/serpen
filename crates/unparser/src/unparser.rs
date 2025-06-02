@@ -1609,34 +1609,67 @@ impl Unparser {
         // A docstring is typically a string literal that:
         // 1. Is not a comment (doesn't start with #)
         // 2. Contains meaningful documentation text
-        // 3. Is more than just a simple string
+        // 3. Is not a special module marker or preserved import
         //
-        // For our purposes, we'll treat any string literal in a statement expression
-        // that looks like documentation as a docstring
-        !content.starts_with('#') &&
-        !content.starts_with("#!/") &&
-        !content.is_empty() &&
-        !content.contains("─ Module:") &&
-        !content.contains("─ Entry Module:") &&
-        content != "Preserved imports" &&
-        // Consider it a docstring if it's a reasonable length and contains text
-        content.len() > 5
+        // In Python, docstrings can be very short (even single words like "Constructor.")
+        // so we don't impose arbitrary length restrictions.
+
+        // Exclude obvious non-docstring patterns
+        if content.starts_with('#') || content.starts_with("#!/") || content.is_empty() {
+            return false;
+        }
+
+        // Exclude special serpen module markers
+        if content.contains("─ Module:")
+            || content.contains("─ Entry Module:")
+            || content == "Preserved imports"
+        {
+            return false;
+        }
+
+        // For now, treat any remaining string literal in a statement expression as a potential docstring
+        // TODO: Add positional context awareness to check if this is the first statement in a module/function/class
+        // This would require tracking the parsing context or passing additional information to this method
+        true
     }
 
     /// Write a docstring with proper triple-quote formatting
     fn write_docstring(&mut self, content: &str) {
-        // Check if the content contains newlines - use appropriate triple quotes
+        // Handle edge cases with quotes in the content
+        let contains_triple_single = content.contains("'''");
+        let contains_triple_double = content.contains("\"\"\"");
+
+        // Choose quote style to minimize escaping - prefer double quotes (Python convention)
+        let use_single_quotes = contains_triple_double && !contains_triple_single;
+        let quote_style = if use_single_quotes { "'''" } else { "\"\"\"" };
+
+        // Escape content if it conflicts with chosen quote style
+        let escaped_content = if quote_style == "\"\"\"" && contains_triple_double {
+            content.replace("\"\"\"", "\\\"\\\"\\\"")
+        } else if quote_style == "'''" && contains_triple_single {
+            content.replace("'''", "\\'\\'\\'")
+        } else {
+            content.to_string()
+        };
+
+        // Write the docstring with proper formatting
+        self.write_str(quote_style);
+
         if content.contains('\n') {
-            // Multi-line docstring
-            self.write_str("\"\"\"");
-            self.write_str(content);
-            self.write_str("\"\"\"");
+            // Multi-line docstring - follow PEP 257 format
+            if !content.starts_with('\n') {
+                self.write_str("\n");
+            }
+            self.write_str(&escaped_content);
+            if !content.ends_with('\n') {
+                self.write_str("\n");
+            }
         } else {
             // Single-line docstring
-            self.write_str("\"\"\"");
-            self.write_str(content);
-            self.write_str("\"\"\"");
+            self.write_str(&escaped_content);
         }
+
+        self.write_str(quote_style);
     }
 
     fn unparse_type_param_type_var_tuple(&mut self, node: &TypeParamTypeVarTuple<TextRange>) {
