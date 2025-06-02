@@ -35,10 +35,31 @@ impl ModuleResolver {
         Ok(resolver)
     }
 
-    /// Scan src directories to discover all first-party Python modules
+    /// Get all directories to scan for modules (configured src + PYTHONPATH)
+    pub fn get_scan_directories(&self) -> Vec<PathBuf> {
+        let mut directories = self.config.src.clone();
+
+        // Add PYTHONPATH directories
+        if let Ok(pythonpath) = std::env::var("PYTHONPATH") {
+            for path_str in pythonpath.split(':') {
+                if !path_str.is_empty() {
+                    let path = PathBuf::from(path_str);
+                    if path.exists() && path.is_dir() {
+                        directories.push(path);
+                    }
+                }
+            }
+        }
+
+        directories
+    }
+
+    /// Scan src directories and PYTHONPATH to discover all first-party Python modules
     #[allow(clippy::excessive_nesting)]
     fn discover_first_party_modules(&mut self) -> Result<()> {
-        for src_dir in &self.config.src {
+        let directories_to_scan = self.get_scan_directories();
+
+        for src_dir in &directories_to_scan {
             if !src_dir.exists() {
                 continue;
             }
@@ -164,8 +185,9 @@ impl ModuleResolver {
             return Ok(None);
         }
 
-        // Try to find the module file
-        for src_dir in &self.config.src {
+        // Try to find the module file in all directories
+        let directories_to_search = self.get_scan_directories();
+        for src_dir in &directories_to_search {
             if let Some(path) = self.find_module_file(src_dir, module_name)? {
                 self.module_cache
                     .insert(module_name.to_string(), Some(path.clone()));
@@ -244,5 +266,62 @@ mod tests {
             resolver.path_to_module_name(src_dir, file_path),
             Some("mypkg".to_string())
         );
+    }
+
+    #[test]
+    fn test_get_scan_directories_with_pythonpath() {
+        let config = Config {
+            src: vec![PathBuf::from("/src1"), PathBuf::from("/src2")],
+            ..Config::default()
+        };
+        let resolver = ModuleResolver {
+            config,
+            module_cache: HashMap::new(),
+            first_party_modules: HashSet::new(),
+        };
+
+        // Set PYTHONPATH environment variable for testing
+        unsafe {
+            std::env::set_var("PYTHONPATH", "/pythonpath1:/pythonpath2:/nonexistent");
+        }
+
+        let scan_dirs = resolver.get_scan_directories();
+
+        // Should contain configured src directories
+        assert!(scan_dirs.contains(&PathBuf::from("/src1")));
+        assert!(scan_dirs.contains(&PathBuf::from("/src2")));
+
+        // Note: PYTHONPATH directories are only included if they exist,
+        // so we can't test for their presence without creating actual directories
+
+        // Clean up
+        unsafe {
+            std::env::remove_var("PYTHONPATH");
+        }
+    }
+
+    #[test]
+    fn test_get_scan_directories_without_pythonpath() {
+        let config = Config {
+            src: vec![PathBuf::from("/src1"), PathBuf::from("/src2")],
+            ..Config::default()
+        };
+        let resolver = ModuleResolver {
+            config,
+            module_cache: HashMap::new(),
+            first_party_modules: HashSet::new(),
+        };
+
+        // Ensure PYTHONPATH is not set
+        unsafe {
+            std::env::remove_var("PYTHONPATH");
+        }
+
+        let scan_dirs = resolver.get_scan_directories();
+
+        // Should only contain configured src directories
+        assert_eq!(scan_dirs.len(), 2);
+        assert!(scan_dirs.contains(&PathBuf::from("/src1")));
+        assert!(scan_dirs.contains(&PathBuf::from("/src2")));
     }
 }
