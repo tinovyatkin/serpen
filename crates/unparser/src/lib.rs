@@ -15,6 +15,7 @@ mod tests {
     use rustpython_parser::Parse;
     use rustpython_parser::ast::Suite;
 
+    use rand::Rng;
     use std::fs;
     use std::io;
     use std::path::Path;
@@ -110,7 +111,7 @@ mod tests {
     #[test]
     #[ignore = "Fuzzy tests are unstable and should only be used to explore new test cases"]
     fn test_fuzzy_files() -> io::Result<()> {
-        let seed = rand::random::<usize>();
+        let seed = rand::rng().random::<u64>() as usize;
 
         for i in 0..10 {
             let file_name = format!("./fuzzy_test_files/fuzzy_test{}.py", i);
