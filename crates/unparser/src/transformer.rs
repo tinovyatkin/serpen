@@ -50,90 +50,52 @@ pub trait Transformer {
 
     fn generic_visit_stmt(&mut self, mut stmt: Stmt) -> Option<Stmt> {
         match stmt {
-            Stmt::Delete(del) => self
-                .visit_stmt_delete(del)
-                .map(Stmt::Delete),
-            Stmt::Assert(assert) => self
-                .visit_stmt_assert(assert)
-                .map(Stmt::Assert),
-            Stmt::AnnAssign(ann_assign) => self
-                .visit_stmt_ann_assign(ann_assign)
-                .map(Stmt::AnnAssign),
-            Stmt::For(for_) => self
-                .visit_stmt_for(for_)
-                .map(Stmt::For),
-            Stmt::AsyncFor(async_for) => self
-                .visit_stmt_async_for(async_for)
-                .map(Stmt::AsyncFor),
-            Stmt::FunctionDef(func) => self
-                .visit_stmt_function_def(func)
-                .map(Stmt::FunctionDef),
+            Stmt::Delete(del) => self.visit_stmt_delete(del).map(Stmt::Delete),
+            Stmt::Assert(assert) => self.visit_stmt_assert(assert).map(Stmt::Assert),
+            Stmt::AnnAssign(ann_assign) => {
+                self.visit_stmt_ann_assign(ann_assign).map(Stmt::AnnAssign)
+            }
+            Stmt::For(for_) => self.visit_stmt_for(for_).map(Stmt::For),
+            Stmt::AsyncFor(async_for) => self.visit_stmt_async_for(async_for).map(Stmt::AsyncFor),
+            Stmt::FunctionDef(func) => self.visit_stmt_function_def(func).map(Stmt::FunctionDef),
             Stmt::AsyncFunctionDef(async_func) => self
                 .visit_stmt_async_function_def(async_func)
                 .map(Stmt::AsyncFunctionDef),
-            Stmt::AsyncWith(async_with) => self
-                .visit_stmt_async_with(async_with)
-                .map(Stmt::AsyncWith),
-            Stmt::With(with) => self
-                .visit_stmt_with(with)
-                .map(Stmt::With),
-            Stmt::Break(break_) => self
-                .visit_stmt_break(break_)
-                .map(Stmt::Break),
-            Stmt::Pass(pass) => self
-                .visit_stmt_pass(pass)
-                .map(Stmt::Pass),
-            Stmt::Continue(continue_) => self
-                .visit_stmt_continue(continue_)
-                .map(Stmt::Continue),
-            Stmt::Return(return_) => self
-                .visit_stmt_return(return_)
-                .map(Stmt::Return),
-            Stmt::Raise(raise) => self
-                .visit_stmt_raise(raise)
-                .map(Stmt::Raise),
+            Stmt::AsyncWith(async_with) => {
+                self.visit_stmt_async_with(async_with).map(Stmt::AsyncWith)
+            }
+            Stmt::With(with) => self.visit_stmt_with(with).map(Stmt::With),
+            Stmt::Break(break_) => self.visit_stmt_break(break_).map(Stmt::Break),
+            Stmt::Pass(pass) => self.visit_stmt_pass(pass).map(Stmt::Pass),
+            Stmt::Continue(continue_) => self.visit_stmt_continue(continue_).map(Stmt::Continue),
+            Stmt::Return(return_) => self.visit_stmt_return(return_).map(Stmt::Return),
+            Stmt::Raise(raise) => self.visit_stmt_raise(raise).map(Stmt::Raise),
             Stmt::ClassDef(stmt_class_def) => self
                 .visit_stmt_class_def(stmt_class_def)
                 .map(Stmt::ClassDef),
-            Stmt::Assign(stmt_assign) => self
-                .visit_stmt_assign(stmt_assign)
-                .map(Stmt::Assign),
+            Stmt::Assign(stmt_assign) => self.visit_stmt_assign(stmt_assign).map(Stmt::Assign),
             Stmt::TypeAlias(stmt_type_alias) => self
                 .visit_stmt_type_alias(stmt_type_alias)
                 .map(Stmt::TypeAlias),
             Stmt::AugAssign(stmt_aug_assign) => self
                 .visit_stmt_aug_assign(stmt_aug_assign)
                 .map(Stmt::AugAssign),
-            Stmt::While(stmt_while) => self
-                .visit_stmt_while(stmt_while)
-                .map(Stmt::While),
-            Stmt::If(stmt_if) => self
-                .visit_stmt_if(stmt_if)
-                .map(Stmt::If),
-            Stmt::Match(stmt_match) => self
-                .visit_stmt_match(stmt_match)
-                .map(Stmt::Match),
-            Stmt::Try(stmt_try) => self
-                .visit_stmt_try(stmt_try)
-                .map(Stmt::Try),
-            Stmt::TryStar(stmt_try_star) => self
-                .visit_stmt_try_star(stmt_try_star)
-                .map(Stmt::TryStar),
-            Stmt::Import(stmt_import) => self
-                .visit_stmt_import(stmt_import)
-                .map(Stmt::Import),
+            Stmt::While(stmt_while) => self.visit_stmt_while(stmt_while).map(Stmt::While),
+            Stmt::If(stmt_if) => self.visit_stmt_if(stmt_if).map(Stmt::If),
+            Stmt::Match(stmt_match) => self.visit_stmt_match(stmt_match).map(Stmt::Match),
+            Stmt::Try(stmt_try) => self.visit_stmt_try(stmt_try).map(Stmt::Try),
+            Stmt::TryStar(stmt_try_star) => {
+                self.visit_stmt_try_star(stmt_try_star).map(Stmt::TryStar)
+            }
+            Stmt::Import(stmt_import) => self.visit_stmt_import(stmt_import).map(Stmt::Import),
             Stmt::ImportFrom(stmt_import_from) => self
                 .visit_stmt_import_from(stmt_import_from)
                 .map(Stmt::ImportFrom),
-            Stmt::Global(stmt_global) => self
-                .visit_stmt_global(stmt_global)
-                .map(Stmt::Global),
-            Stmt::Nonlocal(stmt_nonlocal) => self
-                .visit_stmt_nonlocal(stmt_nonlocal)
-                .map(Stmt::Nonlocal),
-            Stmt::Expr(stmt_expr) => self
-                .visit_stmt_expr(stmt_expr)
-                .map(Stmt::Expr),
+            Stmt::Global(stmt_global) => self.visit_stmt_global(stmt_global).map(Stmt::Global),
+            Stmt::Nonlocal(stmt_nonlocal) => {
+                self.visit_stmt_nonlocal(stmt_nonlocal).map(Stmt::Nonlocal)
+            }
+            Stmt::Expr(stmt_expr) => self.visit_stmt_expr(stmt_expr).map(Stmt::Expr),
         }
     }
 
@@ -296,9 +258,7 @@ pub trait Transformer {
         mut pattern: PatternMatchAs,
     ) -> Option<PatternMatchAs> {
         if let Some(inner_pattern) = pattern.pattern {
-            pattern.pattern = self
-                .visit_pattern(*inner_pattern)
-                .map(Box::new);
+            pattern.pattern = self.visit_pattern(*inner_pattern).map(Box::new);
         }
 
         Some(pattern)
@@ -898,87 +858,57 @@ pub trait Transformer {
 
     fn generic_visit_expr(&mut self, expr: Expr) -> Option<Expr> {
         match expr {
-            Expr::BoolOp(expr_bool_op) => self
-                .visit_expr_bool_op(expr_bool_op)
-                .map(Expr::BoolOp),
+            Expr::BoolOp(expr_bool_op) => self.visit_expr_bool_op(expr_bool_op).map(Expr::BoolOp),
             Expr::NamedExpr(expr_named_expr) => self
                 .visit_expr_named_expr(expr_named_expr)
                 .map(Expr::NamedExpr),
-            Expr::BinOp(expr_bin_op) => self
-                .visit_expr_bin_op(expr_bin_op)
-                .map(Expr::BinOp),
-            Expr::UnaryOp(expr_unary_op) => self
-                .visit_expr_unary_op(expr_unary_op)
-                .map(Expr::UnaryOp),
-            Expr::Lambda(expr_lambda) => self
-                .visit_expr_lambda(expr_lambda)
-                .map(Expr::Lambda),
-            Expr::IfExp(expr_if_exp) => self
-                .visit_expr_if_exp(expr_if_exp)
-                .map(Expr::IfExp),
-            Expr::Dict(expr_dict) => self
-                .visit_expr_dict(expr_dict)
-                .map(Expr::Dict),
-            Expr::Set(expr_set) => self
-                .visit_expr_set(expr_set)
-                .map(Expr::Set),
+            Expr::BinOp(expr_bin_op) => self.visit_expr_bin_op(expr_bin_op).map(Expr::BinOp),
+            Expr::UnaryOp(expr_unary_op) => {
+                self.visit_expr_unary_op(expr_unary_op).map(Expr::UnaryOp)
+            }
+            Expr::Lambda(expr_lambda) => self.visit_expr_lambda(expr_lambda).map(Expr::Lambda),
+            Expr::IfExp(expr_if_exp) => self.visit_expr_if_exp(expr_if_exp).map(Expr::IfExp),
+            Expr::Dict(expr_dict) => self.visit_expr_dict(expr_dict).map(Expr::Dict),
+            Expr::Set(expr_set) => self.visit_expr_set(expr_set).map(Expr::Set),
             Expr::ListComp(expr_list_comp) => self
                 .visit_expr_list_comp(expr_list_comp)
                 .map(Expr::ListComp),
-            Expr::SetComp(expr_set_comp) => self
-                .visit_expr_set_comp(expr_set_comp)
-                .map(Expr::SetComp),
+            Expr::SetComp(expr_set_comp) => {
+                self.visit_expr_set_comp(expr_set_comp).map(Expr::SetComp)
+            }
             Expr::DictComp(expr_dict_comp) => self
                 .visit_expr_dict_comp(expr_dict_comp)
                 .map(Expr::DictComp),
             Expr::GeneratorExp(expr_generator_exp) => self
                 .visit_expr_generator_exp(expr_generator_exp)
                 .map(Expr::GeneratorExp),
-            Expr::Await(expr_await) => self
-                .visit_expr_await(expr_await)
-                .map(Expr::Await),
-            Expr::Yield(expr_yield) => self
-                .visit_expr_yield(expr_yield)
-                .map(Expr::Yield),
+            Expr::Await(expr_await) => self.visit_expr_await(expr_await).map(Expr::Await),
+            Expr::Yield(expr_yield) => self.visit_expr_yield(expr_yield).map(Expr::Yield),
             Expr::YieldFrom(expr_yield_from) => self
                 .visit_expr_yield_from(expr_yield_from)
                 .map(Expr::YieldFrom),
-            Expr::Compare(expr_compare) => self
-                .visit_expr_compare(expr_compare)
-                .map(Expr::Compare),
-            Expr::Call(expr_call) => self
-                .visit_expr_call(expr_call)
-                .map(Expr::Call),
+            Expr::Compare(expr_compare) => self.visit_expr_compare(expr_compare).map(Expr::Compare),
+            Expr::Call(expr_call) => self.visit_expr_call(expr_call).map(Expr::Call),
             Expr::FormattedValue(expr_formatted_value) => self
                 .visit_expr_formatted_value(expr_formatted_value)
                 .map(Expr::FormattedValue),
             Expr::JoinedStr(expr_joined_str) => self
                 .visit_expr_joined_str(expr_joined_str)
                 .map(Expr::JoinedStr),
-            Expr::Constant(expr_constant) => self
-                .visit_expr_constant(expr_constant)
-                .map(Expr::Constant),
+            Expr::Constant(expr_constant) => {
+                self.visit_expr_constant(expr_constant).map(Expr::Constant)
+            }
             Expr::Attribute(expr_attribute) => self
                 .visit_expr_attribute(expr_attribute)
                 .map(Expr::Attribute),
             Expr::Subscript(expr_subscript) => self
                 .visit_expr_subscript(expr_subscript)
                 .map(Expr::Subscript),
-            Expr::Starred(expr_starred) => self
-                .visit_expr_starred(expr_starred)
-                .map(Expr::Starred),
-            Expr::Name(expr_name) => self
-                .visit_expr_name(expr_name)
-                .map(Expr::Name),
-            Expr::List(expr_list) => self
-                .visit_expr_list(expr_list)
-                .map(Expr::List),
-            Expr::Tuple(expr_tuple) => self
-                .visit_expr_tuple(expr_tuple)
-                .map(Expr::Tuple),
-            Expr::Slice(expr_slice) => self
-                .visit_expr_slice(expr_slice)
-                .map(Expr::Slice),
+            Expr::Starred(expr_starred) => self.visit_expr_starred(expr_starred).map(Expr::Starred),
+            Expr::Name(expr_name) => self.visit_expr_name(expr_name).map(Expr::Name),
+            Expr::List(expr_list) => self.visit_expr_list(expr_list).map(Expr::List),
+            Expr::Tuple(expr_tuple) => self.visit_expr_tuple(expr_tuple).map(Expr::Tuple),
+            Expr::Slice(expr_slice) => self.visit_expr_slice(expr_slice).map(Expr::Slice),
         }
     }
 
@@ -1454,9 +1384,9 @@ pub trait Transformer {
             TypeParam::ParamSpec(param_spec) => self
                 .visit_type_param_spec(param_spec)
                 .map(TypeParam::ParamSpec),
-            TypeParam::TypeVar(param_var) => self
-                .visit_type_param_var(param_var)
-                .map(TypeParam::TypeVar),
+            TypeParam::TypeVar(param_var) => {
+                self.visit_type_param_var(param_var).map(TypeParam::TypeVar)
+            }
             TypeParam::TypeVarTuple(param_var_tuple) => self
                 .visit_type_param_var_tuple(param_var_tuple)
                 .map(TypeParam::TypeVarTuple),

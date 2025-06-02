@@ -93,12 +93,12 @@ fn assert_script_output(script_name: &str, expected_output: &str) {
                     eprintln!("Script output: '{}'", actual_output);
                     eprintln!("Expected output: '{}'", expected_output);
 
-                    // Normalize both outputs by trimming whitespace
-                    let actual_trimmed = actual_output.trim();
-                    let expected_trimmed = expected_output.trim();
+                    // Normalize both outputs by trimming whitespace and normalizing line endings
+                    let actual_normalized = actual_output.trim().replace("\r\n", "\n");
+                    let expected_normalized = expected_output.trim().replace("\r\n", "\n");
 
                     assert_eq!(
-                        actual_trimmed, expected_trimmed,
+                        actual_normalized, expected_normalized,
                         "Script output mismatch for {}",
                         script_name
                     );
