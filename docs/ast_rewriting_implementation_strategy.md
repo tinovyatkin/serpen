@@ -317,7 +317,7 @@ Use rustpython-unparser for reliable code generation:
 
 ```rust
 pub struct CodeGenerator {
-    unparser: rustpython_unparser::Unparser,
+    unparser: unparser::Unparser,
 }
 
 impl CodeGenerator {

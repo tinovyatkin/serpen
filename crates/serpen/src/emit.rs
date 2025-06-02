@@ -7,7 +7,7 @@ use crate::resolver::{ImportType, ModuleResolver};
 use crate::unused_imports_simple::UnusedImportAnalyzer;
 use rustpython_parser::ast::{self, Mod, Stmt};
 use rustpython_parser::{Mode, parse};
-use rustpython_unparser::Unparser;
+use unparser::Unparser;
 
 /// Type alias for import sets to reduce complexity
 type ImportSets = (HashSet<String>, HashSet<String>);
@@ -248,7 +248,14 @@ impl CodeEmitter {
         match import_strategy {
             ImportStrategy::ModuleImport => {
                 // Create module namespace for `import module` usage
-                self.create_module_namespace(module_name, &module_code)
+                let namespace_stmts = self.create_module_namespace(module_name, &module_code)?;
+
+                // Convert AST nodes to string using unparser
+                let mut namespace_unparser = Unparser::new();
+                for stmt in &namespace_stmts {
+                    namespace_unparser.unparse_stmt(stmt);
+                }
+                Ok(namespace_unparser.source)
             }
             ImportStrategy::FromImport | ImportStrategy::Dependency => {
                 // Direct inlining for `from module import` or dependency modules
@@ -314,24 +321,224 @@ impl CodeEmitter {
     }
 
     /// Create a module namespace for bundled modules to support import statements
-    fn create_module_namespace(&self, module_name: &str, module_code: &str) -> Result<String> {
-        let mut lines = Vec::new();
+    fn create_module_namespace(&self, module_name: &str, module_code: &str) -> Result<Vec<Stmt>> {
+        let mut statements = Vec::new();
 
-        // Create a module object using types.ModuleType
-        lines.push("import types".to_string());
-        lines.push(format!(
-            "{} = types.ModuleType('{}')",
-            module_name, module_name
-        ));
+        // 1. import types
+        let import_types = ast::StmtImport {
+            names: vec![ast::Alias {
+                name: "types".into(),
+                asname: None,
+                range: Default::default(),
+            }],
+            range: Default::default(),
+        };
+        statements.push(Stmt::Import(import_types));
 
-        // Execute the module code in the module's namespace
-        lines.push("exec(\"\"\"".to_string());
-        for line in module_code.lines() {
-            lines.push(line.to_string());
+        // 2. Create parent namespaces first for nested modules (e.g., greetings.greeting)
+        if module_name.contains('.') {
+            let parts: Vec<&str> = module_name.split('.').collect();
+
+            // Create each parent namespace level
+            for i in 1..parts.len() {
+                let parent_name = parts[..i].join(".");
+
+                // Create assignment: parent = types.ModuleType('parent')
+                let parent_type_call = ast::ExprCall {
+                    func: Box::new(ast::Expr::Attribute(ast::ExprAttribute {
+                        value: Box::new(ast::Expr::Name(ast::ExprName {
+                            id: "types".into(),
+                            ctx: ast::ExprContext::Load,
+                            range: Default::default(),
+                        })),
+                        attr: "ModuleType".into(),
+                        ctx: ast::ExprContext::Load,
+                        range: Default::default(),
+                    })),
+                    args: vec![ast::Expr::Constant(ast::ExprConstant {
+                        value: ast::Constant::Str(parent_name),
+                        kind: None,
+                        range: Default::default(),
+                    })],
+                    keywords: vec![],
+                    range: Default::default(),
+                };
+
+                // For nested modules, we need to create the proper assignment target
+                // For "greetings", assign to "greetings"
+                // For "greetings.submodule", assign to "greetings.submodule"
+                let assignment_target = if i == 1 {
+                    // Simple case: greetings = types.ModuleType('greetings')
+                    ast::Expr::Name(ast::ExprName {
+                        id: parts[0].into(),
+                        ctx: ast::ExprContext::Store,
+                        range: Default::default(),
+                    })
+                } else {
+                    // Complex case: greetings.submodule = types.ModuleType('greetings.submodule')
+                    // We need to build the attribute chain
+                    let parent_parts: Vec<&str> = parts[..i].to_vec();
+                    let mut attr_expr = ast::Expr::Name(ast::ExprName {
+                        id: parent_parts[0].into(),
+                        ctx: ast::ExprContext::Load,
+                        range: Default::default(),
+                    });
+
+                    for part in &parent_parts[1..parent_parts.len() - 1] {
+                        attr_expr = ast::Expr::Attribute(ast::ExprAttribute {
+                            value: Box::new(attr_expr),
+                            attr: (*part).into(),
+                            ctx: ast::ExprContext::Load,
+                            range: Default::default(),
+                        });
+                    }
+
+                    ast::Expr::Attribute(ast::ExprAttribute {
+                        value: Box::new(attr_expr),
+                        attr: parent_parts[parent_parts.len() - 1].into(),
+                        ctx: ast::ExprContext::Store,
+                        range: Default::default(),
+                    })
+                };
+
+                let parent_assignment = ast::StmtAssign {
+                    targets: vec![assignment_target],
+                    value: Box::new(ast::Expr::Call(parent_type_call)),
+                    type_comment: None,
+                    range: Default::default(),
+                };
+                statements.push(Stmt::Assign(parent_assignment));
+            }
         }
-        lines.push(format!("\"\"\", {}.__dict__)", module_name));
 
-        Ok(lines.join("\n"))
+        // 3. Create the main module: module_name = types.ModuleType('module_name')
+        let module_type_call = ast::ExprCall {
+            func: Box::new(ast::Expr::Attribute(ast::ExprAttribute {
+                value: Box::new(ast::Expr::Name(ast::ExprName {
+                    id: "types".into(),
+                    ctx: ast::ExprContext::Load,
+                    range: Default::default(),
+                })),
+                attr: "ModuleType".into(),
+                ctx: ast::ExprContext::Load,
+                range: Default::default(),
+            })),
+            args: vec![ast::Expr::Constant(ast::ExprConstant {
+                value: ast::Constant::Str(module_name.into()),
+                kind: None,
+                range: Default::default(),
+            })],
+            keywords: vec![],
+            range: Default::default(),
+        };
+
+        // Create the assignment target for the full module name
+        let main_assignment_target = if module_name.contains('.') {
+            // For "greetings.greeting", create "greetings.greeting = ..."
+            let parts: Vec<&str> = module_name.split('.').collect();
+            let mut attr_expr = ast::Expr::Name(ast::ExprName {
+                id: parts[0].into(),
+                ctx: ast::ExprContext::Load,
+                range: Default::default(),
+            });
+
+            for part in &parts[1..parts.len() - 1] {
+                attr_expr = ast::Expr::Attribute(ast::ExprAttribute {
+                    value: Box::new(attr_expr),
+                    attr: (*part).into(),
+                    ctx: ast::ExprContext::Load,
+                    range: Default::default(),
+                });
+            }
+
+            ast::Expr::Attribute(ast::ExprAttribute {
+                value: Box::new(attr_expr),
+                attr: parts[parts.len() - 1].into(),
+                ctx: ast::ExprContext::Store,
+                range: Default::default(),
+            })
+        } else {
+            // Simple module name
+            ast::Expr::Name(ast::ExprName {
+                id: module_name.into(),
+                ctx: ast::ExprContext::Store,
+                range: Default::default(),
+            })
+        };
+
+        let module_assignment = ast::StmtAssign {
+            targets: vec![main_assignment_target],
+            value: Box::new(ast::Expr::Call(module_type_call)),
+            type_comment: None,
+            range: Default::default(),
+        };
+        statements.push(Stmt::Assign(module_assignment));
+
+        // 4. exec("""module_code""", module_name.__dict__)
+        let module_code_str = ast::ExprConstant {
+            value: ast::Constant::Str(module_code.into()),
+            kind: None,
+            range: Default::default(),
+        };
+
+        // Create the __dict__ access for the full module name
+        let module_dict_attr = if module_name.contains('.') {
+            let parts: Vec<&str> = module_name.split('.').collect();
+            let mut attr_expr = ast::Expr::Name(ast::ExprName {
+                id: parts[0].into(),
+                ctx: ast::ExprContext::Load,
+                range: Default::default(),
+            });
+
+            for part in &parts[1..] {
+                attr_expr = ast::Expr::Attribute(ast::ExprAttribute {
+                    value: Box::new(attr_expr),
+                    attr: (*part).into(),
+                    ctx: ast::ExprContext::Load,
+                    range: Default::default(),
+                });
+            }
+
+            ast::ExprAttribute {
+                value: Box::new(attr_expr),
+                attr: "__dict__".into(),
+                ctx: ast::ExprContext::Load,
+                range: Default::default(),
+            }
+        } else {
+            ast::ExprAttribute {
+                value: Box::new(ast::Expr::Name(ast::ExprName {
+                    id: module_name.into(),
+                    ctx: ast::ExprContext::Load,
+                    range: Default::default(),
+                })),
+                attr: "__dict__".into(),
+                ctx: ast::ExprContext::Load,
+                range: Default::default(),
+            }
+        };
+
+        let exec_call = ast::ExprCall {
+            func: Box::new(ast::Expr::Name(ast::ExprName {
+                id: "exec".into(),
+                ctx: ast::ExprContext::Load,
+                range: Default::default(),
+            })),
+            args: vec![
+                ast::Expr::Constant(module_code_str),
+                ast::Expr::Attribute(module_dict_attr),
+            ],
+            keywords: vec![],
+            range: Default::default(),
+        };
+
+        let exec_stmt = ast::StmtExpr {
+            value: Box::new(ast::Expr::Call(exec_call)),
+            range: Default::default(),
+        };
+        statements.push(Stmt::Expr(exec_stmt));
+
+        Ok(statements)
     }
 
     /// Remove first-party imports from AST (they will be inlined)

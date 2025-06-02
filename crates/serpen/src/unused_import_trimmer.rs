@@ -7,8 +7,8 @@
 use anyhow::{Context, Result};
 use rustpython_parser::ast::{self, Mod, Stmt};
 use rustpython_parser::{Mode, parse};
-use rustpython_unparser::Unparser;
 use std::collections::HashSet;
+use unparser::Unparser;
 
 use crate::unused_imports_simple::{UnusedImport, UnusedImportAnalyzer};
 
