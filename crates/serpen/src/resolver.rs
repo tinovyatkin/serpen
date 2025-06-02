@@ -7,6 +7,76 @@ use walkdir::WalkDir;
 use crate::config::Config;
 use crate::python_stdlib::is_stdlib_module;
 
+/// A scoped guard for safely setting and cleaning up the PYTHONPATH environment variable.
+///
+/// This guard ensures that the PYTHONPATH environment variable is properly restored
+/// to its original value when the guard is dropped, even if a panic occurs during testing.
+///
+/// # Example
+///
+/// ```rust
+/// use serpen::resolver::PythonPathGuard;
+/// let _guard = PythonPathGuard::new("/tmp/test");
+/// // PYTHONPATH is now set to "/tmp/test"
+/// // When _guard goes out of scope, PYTHONPATH is restored to its original value
+/// ```
+#[must_use = "PythonPathGuard must be held in scope to ensure cleanup"]
+pub struct PythonPathGuard {
+    /// The original value of PYTHONPATH, if it was set
+    /// None if PYTHONPATH was not set originally
+    original_value: Option<String>,
+}
+
+impl PythonPathGuard {
+    /// Create a new PYTHONPATH guard with the given value.
+    ///
+    /// This will set the PYTHONPATH environment variable to the specified value
+    /// and store the original value for restoration when the guard is dropped.
+    pub fn new(new_value: &str) -> Self {
+        let original_value = std::env::var("PYTHONPATH").ok();
+
+        // SAFETY: This is safe in test contexts where we control the environment
+        // and ensure proper cleanup via the Drop trait.
+        unsafe {
+            std::env::set_var("PYTHONPATH", new_value);
+        }
+
+        Self { original_value }
+    }
+
+    /// Create a new PYTHONPATH guard that ensures PYTHONPATH is unset.
+    ///
+    /// This will remove the PYTHONPATH environment variable and store the
+    /// original value for restoration when the guard is dropped.
+    pub fn unset() -> Self {
+        let original_value = std::env::var("PYTHONPATH").ok();
+
+        // SAFETY: This is safe in test contexts where we control the environment
+        // and ensure proper cleanup via the Drop trait.
+        unsafe {
+            std::env::remove_var("PYTHONPATH");
+        }
+
+        Self { original_value }
+    }
+}
+
+impl Drop for PythonPathGuard {
+    fn drop(&mut self) {
+        // Always attempt cleanup, even during panics - that's the whole point of a scope guard!
+        // We catch and ignore any errors to prevent double panics, but we must try to clean up.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // SAFETY: This is safe as we're restoring the environment to its original state
+            unsafe {
+                match self.original_value.take() {
+                    Some(original) => std::env::set_var("PYTHONPATH", original),
+                    None => std::env::remove_var("PYTHONPATH"),
+                }
+            }
+        }));
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ImportType {
     FirstParty,
@@ -337,15 +407,13 @@ mod tests {
             first_party_modules: HashSet::new(),
         };
 
-        // Set PYTHONPATH environment variable for testing
+        // Use scope guard to safely set PYTHONPATH for testing
         let separator = if cfg!(windows) { ';' } else { ':' };
         let pythonpath_value = format!(
             "/pythonpath1{}/pythonpath2{}/nonexistent",
             separator, separator
         );
-        unsafe {
-            std::env::set_var("PYTHONPATH", &pythonpath_value);
-        }
+        let _guard = PythonPathGuard::new(&pythonpath_value);
 
         let scan_dirs = resolver.get_scan_directories();
 
@@ -356,10 +424,7 @@ mod tests {
         // Note: PYTHONPATH directories are only included if they exist,
         // so we can't test for their presence without creating actual directories
 
-        // Clean up
-        unsafe {
-            std::env::remove_var("PYTHONPATH");
-        }
+        // No manual cleanup needed - guard handles it automatically
     }
 
     #[test]
@@ -374,10 +439,8 @@ mod tests {
             first_party_modules: HashSet::new(),
         };
 
-        // Ensure PYTHONPATH is not set
-        unsafe {
-            std::env::remove_var("PYTHONPATH");
-        }
+        // Use scope guard to ensure PYTHONPATH is not set
+        let _guard = PythonPathGuard::unset();
 
         let scan_dirs = resolver.get_scan_directories();
 
