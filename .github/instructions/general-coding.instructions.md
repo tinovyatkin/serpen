@@ -7,7 +7,25 @@ applyTo: "**"
 - Take the opportunity to refactor the code to improve readability and maintainability.
 - Embrace the idea of "Don't Repeat Yourself" (DRY) and ensure that the code is as clean and efficient as possible.
 - Ensure that functionality is not duplicated across multiple functions
-- Always read the documentation prior to implementing new functionality. Use Context 7 to get documentation about any library necessary to implement the code.
+- Always read the documentation prior to implementing new functionality. Follow the documentation research hierarchy.
+- **Prefer VS Code tools over terminal commands**: When available, use integrated VS Code tools (like `run_tests`, `get_errors`) before falling back to terminal commands.
+
+## Tool Preference Hierarchy
+
+When multiple tools are available for the same task, follow this preference order:
+
+1. **VS Code Integrated Tools** (Highest Priority)
+   - `run_tests` for running tests
+   - `get_errors` for error checking, diagnostics, and linting
+   - Built-in formatting and IntelliSense features
+   - **Benefits**: Better integration, formatted output, precise error locations, real-time feedback
+
+2. **Terminal Commands** (Fallback)
+   - Use when VS Code tools fail or are unavailable
+   - Required for advanced tool options (e.g., `cargo clippy --fix`)
+   - Necessary for CI/CD and automated workflows
+
+**Rationale**: VS Code tools provide better integration with the development environment, more precise error reporting, and enhanced user experience compared to raw terminal output.
 
 ## Guidelines
 
@@ -35,6 +53,7 @@ Use the following guidelines:
 
 5. Testing and Validation
 
+   - **Prefer VS Code tools**: Use `run_tests` tool for running tests when available, fall back to terminal commands only if needed
    - Suggest running unit tests or simulations on the modified segments to confirm that the changes fix the issue without impacting overall functionality.
    - Ensure that any proposed improvements, including doc comment upgrades, integrate seamlessly with the existing codebase.
 
@@ -62,5 +81,6 @@ Use the following guidelines:
 ## How to handle a question
 
 - If you are unsure about how to implement a specific functionality, ask the user for clarification.
-- Determine all relevant functions and libraries that may be necessary to implement the functionality, then read the documentation using Context7.
-- Always start by looking up any documentation that may be relevant to the question using Context7.
+- Follow the **Tool Preference Hierarchy**: Use VS Code tools (`run_tests`, `get_errors`) before terminal commands when both options are available.
+- Follow the **Documentation Research Hierarchy**: start with `cargo doc` generation and file examination, then use Context7 for external libraries, and finally GitHub MCP server tools for implementation patterns.
+- Document which research method provided the key insights for the implementation.
