@@ -685,7 +685,7 @@ impl Unparser {
         }
     }
     fn unparse_stmt_expr(&mut self, node: &StmtExpr<TextRange>) {
-        // Check if this is a comment (string literal on its own line)
+        // Check if this is a comment or docstring (string literal on its own line)
         if let Expr::Constant(ExprConstant {
             value: Constant::Str(content),
             ..
@@ -719,6 +719,13 @@ impl Unparser {
             {
                 self.fill("");
                 self.write_str(&format!("# {}", content));
+                return;
+            }
+            // Handle docstrings - format with triple quotes
+            else if self.is_docstring(content) {
+                self.fill("");
+                self.write_docstring(content);
+                self.fill("");
                 return;
             }
         }
@@ -1595,6 +1602,41 @@ impl Unparser {
     fn unparse_type_param_param_spec(&mut self, node: &TypeParamParamSpec<TextRange>) {
         self.write_str("**");
         self.write_str(&node.name);
+    }
+
+    /// Check if a string literal should be treated as a docstring
+    fn is_docstring(&self, content: &str) -> bool {
+        // A docstring is typically a string literal that:
+        // 1. Is not a comment (doesn't start with #)
+        // 2. Contains meaningful documentation text
+        // 3. Is more than just a simple string
+        //
+        // For our purposes, we'll treat any string literal in a statement expression
+        // that looks like documentation as a docstring
+        !content.starts_with('#') &&
+        !content.starts_with("#!/") &&
+        !content.is_empty() &&
+        !content.contains("─ Module:") &&
+        !content.contains("─ Entry Module:") &&
+        content != "Preserved imports" &&
+        // Consider it a docstring if it's a reasonable length and contains text
+        content.len() > 5
+    }
+
+    /// Write a docstring with proper triple-quote formatting
+    fn write_docstring(&mut self, content: &str) {
+        // Check if the content contains newlines - use appropriate triple quotes
+        if content.contains('\n') {
+            // Multi-line docstring
+            self.write_str("\"\"\"");
+            self.write_str(content);
+            self.write_str("\"\"\"");
+        } else {
+            // Single-line docstring
+            self.write_str("\"\"\"");
+            self.write_str(content);
+            self.write_str("\"\"\"");
+        }
     }
 
     fn unparse_type_param_type_var_tuple(&mut self, node: &TypeParamTypeVarTuple<TextRange>) {
