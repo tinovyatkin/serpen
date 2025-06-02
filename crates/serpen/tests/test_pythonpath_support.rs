@@ -133,10 +133,12 @@ fn test_pythonpath_multiple_directories() {
         ..Default::default()
     };
 
-    // Create resolver with PYTHONPATH override (multiple directories separated by colon)
+    // Create resolver with PYTHONPATH override (multiple directories separated by platform-appropriate separator)
+    let separator = if cfg!(windows) { ';' } else { ':' };
     let pythonpath_str = format!(
-        "{}:{}",
+        "{}{}{}",
         pythonpath_dir1.to_string_lossy(),
+        separator,
         pythonpath_dir2.to_string_lossy()
     );
     let resolver = ModuleResolver::new_with_pythonpath(config, Some(&pythonpath_str)).unwrap();
@@ -190,10 +192,11 @@ fn test_pythonpath_empty_or_nonexistent() {
     );
 
     // Test with nonexistent directories in PYTHONPATH
+    let separator = if cfg!(windows) { ';' } else { ':' };
+    let nonexistent_pythonpath = format!("/nonexistent1{}/nonexistent2", separator);
     let resolver3 =
-        ModuleResolver::new_with_pythonpath(config, Some("/nonexistent1:/nonexistent2")).unwrap();
-    let scan_dirs3 =
-        resolver3.get_scan_directories_with_pythonpath(Some("/nonexistent1:/nonexistent2"));
+        ModuleResolver::new_with_pythonpath(config, Some(&nonexistent_pythonpath)).unwrap();
+    let scan_dirs3 = resolver3.get_scan_directories_with_pythonpath(Some(&nonexistent_pythonpath));
 
     // Should only contain configured src directories (nonexistent dirs filtered out)
     assert_eq!(scan_dirs3.len(), 1);
@@ -229,9 +232,11 @@ fn test_directory_deduplication() {
     };
 
     // Create resolver with PYTHONPATH override that includes the same src directory plus another directory
+    let separator = if cfg!(windows) { ';' } else { ':' };
     let pythonpath_str = format!(
-        "{}:{}",
+        "{}{}{}",
         src_dir.to_string_lossy(),
+        separator,
         other_dir.to_string_lossy()
     );
     let resolver = ModuleResolver::new_with_pythonpath(config, Some(&pythonpath_str)).unwrap();

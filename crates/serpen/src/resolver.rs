@@ -70,7 +70,9 @@ impl ModuleResolver {
             .or_else(|| std::env::var("PYTHONPATH").ok());
 
         if let Some(pythonpath) = pythonpath {
-            for path_str in pythonpath.split(':') {
+            // Use platform-appropriate path separator: ';' on Windows, ':' on Unix
+            let separator = if cfg!(windows) { ';' } else { ':' };
+            for path_str in pythonpath.split(separator) {
                 self.add_pythonpath_directory(&mut unique_dirs, path_str);
             }
         }
@@ -336,8 +338,13 @@ mod tests {
         };
 
         // Set PYTHONPATH environment variable for testing
+        let separator = if cfg!(windows) { ';' } else { ':' };
+        let pythonpath_value = format!(
+            "/pythonpath1{}/pythonpath2{}/nonexistent",
+            separator, separator
+        );
         unsafe {
-            std::env::set_var("PYTHONPATH", "/pythonpath1:/pythonpath2:/nonexistent");
+            std::env::set_var("PYTHONPATH", &pythonpath_value);
         }
 
         let scan_dirs = resolver.get_scan_directories();
