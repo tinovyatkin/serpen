@@ -384,38 +384,7 @@ impl CodeEmitter {
                 };
 
                 // For nested modules, create the proper assignment target
-                let assignment_target = if i == 1 {
-                    // Simple case: greetings = types.ModuleType('greetings')
-                    ast::Expr::Name(ast::ExprName {
-                        id: parts[0].into(),
-                        ctx: ast::ExprContext::Store,
-                        range: Default::default(),
-                    })
-                } else {
-                    // Complex case: greetings.submodule = types.ModuleType('greetings.submodule')
-                    let parent_parts: Vec<&str> = parts[..i].to_vec();
-                    let mut attr_expr = ast::Expr::Name(ast::ExprName {
-                        id: parent_parts[0].into(),
-                        ctx: ast::ExprContext::Load,
-                        range: Default::default(),
-                    });
-
-                    for part in &parent_parts[1..parent_parts.len() - 1] {
-                        attr_expr = ast::Expr::Attribute(ast::ExprAttribute {
-                            value: Box::new(attr_expr),
-                            attr: (*part).into(),
-                            ctx: ast::ExprContext::Load,
-                            range: Default::default(),
-                        });
-                    }
-
-                    ast::Expr::Attribute(ast::ExprAttribute {
-                        value: Box::new(attr_expr),
-                        attr: parent_parts[parent_parts.len() - 1].into(),
-                        ctx: ast::ExprContext::Store,
-                        range: Default::default(),
-                    })
-                };
+                let assignment_target = self.create_assignment_target(&parts, i)?;
 
                 let parent_assignment = ast::StmtAssign {
                     targets: vec![assignment_target],
@@ -491,6 +460,42 @@ impl CodeEmitter {
         statements.push(Stmt::Assign(module_assignment));
 
         Ok(statements)
+    }
+
+    /// Create assignment target for module namespace creation
+    fn create_assignment_target(&self, parts: &[&str], i: usize) -> Result<ast::Expr> {
+        if i == 1 {
+            // Simple case: greetings = types.ModuleType('greetings')
+            Ok(ast::Expr::Name(ast::ExprName {
+                id: parts[0].into(),
+                ctx: ast::ExprContext::Store,
+                range: Default::default(),
+            }))
+        } else {
+            // Complex case: greetings.submodule = types.ModuleType('greetings.submodule')
+            let parent_parts: Vec<&str> = parts[..i].to_vec();
+            let mut attr_expr = ast::Expr::Name(ast::ExprName {
+                id: parent_parts[0].into(),
+                ctx: ast::ExprContext::Load,
+                range: Default::default(),
+            });
+
+            for part in &parent_parts[1..parent_parts.len() - 1] {
+                attr_expr = ast::Expr::Attribute(ast::ExprAttribute {
+                    value: Box::new(attr_expr),
+                    attr: (*part).into(),
+                    ctx: ast::ExprContext::Load,
+                    range: Default::default(),
+                });
+            }
+
+            Ok(ast::Expr::Attribute(ast::ExprAttribute {
+                value: Box::new(attr_expr),
+                attr: parent_parts[parent_parts.len() - 1].into(),
+                ctx: ast::ExprContext::Store,
+                range: Default::default(),
+            }))
+        }
     }
 
     /// Create an AST for the exec statement that executes module code in its namespace
@@ -586,29 +591,46 @@ impl CodeEmitter {
         for stmt in &entry_parsed_data.ast.body {
             match stmt {
                 Stmt::Import(import_stmt) => {
-                    // `import module` - needs namespace
-                    for alias in &import_stmt.names {
-                        let module_name = alias.name.as_str();
-                        if self.is_first_party_module(module_name) {
-                            strategies
-                                .insert(module_name.to_string(), ImportStrategy::ModuleImport);
-                        }
-                    }
+                    self.process_import_strategies(import_stmt, &mut strategies);
                 }
                 Stmt::ImportFrom(import_from_stmt) => {
-                    // `from module import ...` - needs direct inlining
-                    if let Some(module) = &import_from_stmt.module {
-                        let module_name = module.as_str();
-                        if self.is_first_party_module(module_name) {
-                            strategies.insert(module_name.to_string(), ImportStrategy::FromImport);
-                        }
-                    }
+                    self.process_import_from_strategies(import_from_stmt, &mut strategies);
                 }
                 _ => {}
             }
         }
 
         Ok(strategies)
+    }
+
+    /// Process import statements for strategy analysis
+    fn process_import_strategies(
+        &self,
+        import_stmt: &ast::StmtImport,
+        strategies: &mut HashMap<String, ImportStrategy>,
+    ) {
+        // `import module` - needs namespace
+        for alias in &import_stmt.names {
+            let module_name = alias.name.as_str();
+            if self.is_first_party_module(module_name) {
+                strategies.insert(module_name.to_string(), ImportStrategy::ModuleImport);
+            }
+        }
+    }
+
+    /// Process import-from statements for strategy analysis
+    fn process_import_from_strategies(
+        &self,
+        import_from_stmt: &ast::StmtImportFrom,
+        strategies: &mut HashMap<String, ImportStrategy>,
+    ) {
+        // `from module import ...` - needs direct inlining
+        if let Some(module) = &import_from_stmt.module {
+            let module_name = module.as_str();
+            if self.is_first_party_module(module_name) {
+                strategies.insert(module_name.to_string(), ImportStrategy::FromImport);
+            }
+        }
     }
 
     /// Check if a module is a first-party module
