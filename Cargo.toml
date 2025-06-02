@@ -19,6 +19,7 @@ clap = { version = "4.0", features = ["derive"] }
 
 # Python parsing
 rustpython-parser = "0.4"
+rustpython-unparser = { version = "0.2", features = ["transformer"] }
 
 # Serialization and configuration
 serde = { version = "1.0", features = ["derive"] }

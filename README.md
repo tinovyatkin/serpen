@@ -11,6 +11,7 @@
 - 🦀 **Rust-based CLI** using the RustPython parser (same as Ruff and Pyrefly)
 - 🐍 **Python 3.10+** support
 - 🌲 **Tree-shaking logic** to inline only the modules that are actually used
+- 🧹 **Unused import trimming** to clean up Python files standalone
 - 📦 **Requirements generation** with optional `requirements.txt` output
 - 🔧 **Configurable** import classification and source directories
 - 🚀 **Fast** and memory-efficient
@@ -55,6 +56,29 @@ serpen --entry src/main.py --output bundle.py --verbose
 # Custom config file
 serpen --entry src/main.py --output bundle.py --config my-serpen.toml
 ```
+
+### Unused Import Trimming
+
+Serpen also provides a standalone unused import trimmer to clean up Python files:
+
+```bash
+# Trim unused imports from a file (shows what would be removed)
+serpen trim my_file.py --dry-run
+
+# Actually remove unused imports
+serpen trim my_file.py
+
+# Preserve specific imports even if unused
+serpen trim my_file.py --preserve-pattern="logging,debug"
+```
+
+The trimmer:
+
+- Analyzes Python files using the same RustPython parser
+- Identifies truly unused imports (both simple and `from` imports)
+- Handles partial trimming of `from` imports (removes only unused items)
+- Preserves imports matching specified patterns
+- Generates clean, properly formatted output
 
 ### Python API Usage
 
@@ -166,6 +190,18 @@ bundler = Bundler()
 bundler.bundle("my_analysis.py", "notebook_bundle.py")
 ```
 
+### Code Cleanup
+
+Clean up unused imports in development:
+
+```bash
+# Review what imports would be removed
+serpen trim src/**/*.py --dry-run
+
+# Clean up entire codebase
+find src -name "*.py" -exec serpen trim {} \;
+```
+
 ## Special Considerations
 
 ### Pydantic Compatibility
@@ -203,12 +239,12 @@ Error: Circular dependency detected involving module: utils.helpers
 
 ## Comparison with Other Tools
 
-| Tool        | Language | Tree Shaking | PySpark Ready | Type Hints |
-| ----------- | -------- | ------------ | ------------- | ---------- |
-| Serpen      | Rust     | ✅           | ✅            | ✅         |
-| PyInstaller | Python   | ❌           | ❌            | ✅         |
-| Nuitka      | Python   | ❌           | ❌            | ✅         |
-| Pex         | Python   | ❌           | ❌            | ✅         |
+| Tool        | Language | Tree Shaking | Import Cleanup | PySpark Ready | Type Hints |
+| ----------- | -------- | ------------ | -------------- | ------------- | ---------- |
+| Serpen      | Rust     | ✅           | ✅             | ✅            | ✅         |
+| PyInstaller | Python   | ❌           | ❌             | ❌            | ✅         |
+| Nuitka      | Python   | ❌           | ❌             | ❌            | ✅         |
+| Pex         | Python   | ❌           | ❌             | ❌            | ✅         |
 
 ## Development
 
@@ -328,3 +364,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 For more examples and detailed documentation, visit our [documentation site](https://github.com/tinovyatkin/serpen#readme).
+
+For detailed documentation on the unused import trimmer, see [`docs/unused_import_trimmer.md`](docs/unused_import_trimmer.md).

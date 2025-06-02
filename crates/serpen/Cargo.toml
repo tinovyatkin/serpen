@@ -17,6 +17,7 @@ once_cell = { workspace = true }
 petgraph = { workspace = true }
 regex = { workspace = true }
 rustpython-parser = { workspace = true }
+rustpython-unparser = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 walkdir = { workspace = true }
