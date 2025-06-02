@@ -93,38 +93,43 @@ Apply the [general coding guidelines](./general-coding.instructions.md) to all c
 
 ## Documentation Research Hierarchy
 
-When implementing functionality or researching libraries and dependencies, follow this prioritized approach:
+**MANDATORY**: When implementing ANY functionality or researching libraries and dependencies, you MUST follow this prioritized approach in order. Do NOT skip steps unless explicitly documented why a step cannot be completed.
 
-### 1. Local Documentation First (`cargo doc`)
+### 1. Local Documentation First (`cargo doc`) - REQUIRED FIRST STEP
 
-- **Always start with**: Generate and examine locally available documentation
+- **MANDATORY**: Always start with generating and examining locally available documentation
+- **FAILURE TO COMPLY**: If you proceed without checking local docs first, this violates project standards
 - **Benefits**: Most accurate for your exact dependency versions, includes private items, works offline
 - **Use for**: All Rust crates in your dependency tree, local modules and functions
-- **AI Agent Process**:
+- **AI Agent Process** - MUST execute these commands:
   ```bash
   cargo doc --document-private-items  # Generate comprehensive documentation
   # Then examine generated files in target/doc/
   ```
-- **Alternative commands**:
+- **Alternative commands** when needed:
   ```bash
   cargo doc --package <crate-name>    # Generate docs for specific crate
   cargo doc --no-deps                 # Generate docs only for workspace crates
   ```
 - **Documentation Location**: Generated docs are in `target/doc/` directory as HTML files
-- **Access Method**: Use file reading tools to examine the generated HTML documentation files
+- **Access Method**: Use `read_file` tool to examine the generated HTML documentation files
+- **REQUIREMENT**: You MUST explicitly state what you found (or didn't find) in local docs before proceeding
 
-### 2. Context7 for External Libraries
+### 2. Context7 for External Libraries - SECOND STEP ONLY
 
-- **Use when**: Local documentation is insufficient or dependency is not locally available
+- **When permitted**: ONLY after local documentation proves insufficient or dependency is not locally available
+- **MUST DOCUMENT**: Why local docs were insufficient before using Context7
 - **Benefits**: Comprehensive documentation from official sources, handles multiple languages
-- **Process**: Resolve library ID first, then get focused documentation
+- **Process**: Resolve library ID first with `f1e_resolve-library-id`, then get focused documentation with `f1e_get-library-docs`
 - **Best for**: External APIs, libraries not in your dependency graph, cross-language references
+- **REQUIREMENT**: You MUST document what specific gaps Context7 filled that local docs couldn't
 
-### 3. GitHub MCP Server Tools (Last Resort)
+### 3. GitHub MCP Server Tools - FINAL STEP ONLY
 
-- **Use when**: Documentation is unclear, need implementation examples, or troubleshooting edge cases
+- **When permitted**: ONLY when documentation is unclear, need implementation examples, or troubleshooting edge cases AFTER exhausting steps 1 and 2
+- **MUST DOCUMENT**: Why both local docs AND Context7 were insufficient before using GitHub search
 - **Benefits**: Real-world usage patterns, issue resolution examples, source code understanding
-- **Focus on**: High-quality repositories, official examples, recent implementations
+- **Focus on**: High-quality repositories (especially astral-sh/ruff, astral-sh/uv for Python/Rust patterns), official examples, recent implementations
 - **Available GitHub MCP Tools**:
   - `github_repo` - Search specific repositories for code snippets
   - `f1e_search_code` - Search code across GitHub repositories
@@ -132,13 +137,34 @@ When implementing functionality or researching libraries and dependencies, follo
   - `f1e_search_repositories` - Find relevant repositories
   - `f1e_search_issues` - Search issues for problem-solving patterns
 - **Search strategy**: Look for actual usage patterns rather than just reading source code
+- **REQUIREMENT**: You MUST document which specific implementation patterns you discovered
 
-### Research Process
+### MANDATORY Research Process - FOLLOW IN ORDER
 
-1. **Start Local**: `cargo doc --document-private-items` → examine generated files in `target/doc/`
-2. **Supplement with Context7**: For gaps in understanding or external dependencies
-3. **Verify with GitHub MCP**: Use GitHub repository search tools for implementation patterns and edge cases
-4. **Document Sources**: Always note which approach provided the key insights
+1. **STEP 1 - Local Documentation (REQUIRED)**:
+   - Execute: `cargo doc --document-private-items`
+   - Examine: Generated files in `target/doc/` using `read_file`
+   - Document: What you found or why it's insufficient
+   - **DO NOT PROCEED** until this step is completed and documented
+
+2. **STEP 2 - Context7 (If Step 1 Insufficient)**:
+   - Document: Why local docs didn't provide what you need
+   - Execute: `f1e_resolve-library-id` then `f1e_get-library-docs`
+   - Document: What specific gaps Context7 filled
+
+3. **STEP 3 - GitHub MCP (If Steps 1&2 Insufficient)**:
+   - Document: Why both local docs and Context7 were insufficient
+   - Use: GitHub repository search tools for implementation patterns and edge cases
+   - Document: Which specific patterns or solutions you discovered
+
+4. **MANDATORY Documentation**:
+   - **ALWAYS** note which approach provided the key insights
+   - **ALWAYS** document why you proceeded to each step
+   - **VIOLATION**: Proceeding to later steps without documenting previous steps is non-compliant
+
+### ENFORCEMENT
+
+**For AI Agents**: You MUST explicitly follow this hierarchy and document each step. Failure to do so violates project coding standards and will require rework.
 
 ## Snapshot Testing with Insta
 

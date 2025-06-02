@@ -82,5 +82,11 @@ Use the following guidelines:
 
 - If you are unsure about how to implement a specific functionality, ask the user for clarification.
 - Follow the **Tool Preference Hierarchy**: Use VS Code tools (`run_tests`, `get_errors`) before terminal commands when both options are available.
-- Follow the **Documentation Research Hierarchy**: start with `cargo doc` generation and file examination, then use Context7 for external libraries, and finally GitHub MCP server tools for implementation patterns.
-- Document which research method provided the key insights for the implementation.
+- **MANDATORY**: Follow the **Documentation Research Hierarchy** in order - you MUST NOT skip steps without documenting why:
+  1. **FIRST**: Local documentation generation and examination (`cargo doc` for Rust projects)
+  2. **SECOND**: Context7 for external libraries (only if local docs insufficient)
+  3. **FINAL**: GitHub MCP server tools for implementation patterns (only if steps 1&2 insufficient)
+- **ENFORCEMENT**: You MUST explicitly document what you found (or didn't find) at each step before proceeding to the next
+- **VIOLATION**: Jumping to GitHub MCP search without first checking local docs and Context7 violates project standards
+- **Use GitHub MCP code search** ONLY as a last resort when you need implementation patterns after exhausting documentation sources. Use `f1e_search_code` to find real-world usage examples across GitHub repositories, which can provide insights into common patterns, best practices, and edge cases.
+- **MANDATORY**: Document which research method provided the key insights for the implementation and why previous methods were insufficient.
