@@ -151,6 +151,31 @@ The `ModuleResolver` class was enhanced with:
 - Non-existent directories are filtered out
 - Only directories (not files) are included
 
+### Directory Deduplication
+
+Serpen automatically deduplicates directories when the same path appears in both configured `src` directories and PYTHONPATH. This prevents scanning the same directory twice and improves performance.
+
+**Features:**
+
+- **Path canonicalization**: All paths are resolved to their canonical (absolute) form for accurate comparison
+- **Automatic deduplication**: Duplicate directories are removed using HashSet-based deduplication
+- **Graceful fallback**: If canonicalization fails but the path exists, the original path is used
+
+**Example scenario:**
+
+```bash
+# Directory structure
+project/
+├── src/           # Configured in serpen.toml
+└── external/      # Additional modules
+
+# If both are specified:
+# - serpen.toml: src = ["src"]  
+# - PYTHONPATH="./src:./external"
+
+# Result: Only scans each directory once, even though "src" appears in both
+```
+
 ### Module Classification
 
 Modules found in PYTHONPATH directories are treated identically to modules in configured source directories:

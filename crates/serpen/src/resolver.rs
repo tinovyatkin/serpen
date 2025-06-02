@@ -25,67 +25,88 @@ pub struct ModuleResolver {
 
 impl ModuleResolver {
     pub fn new(config: Config) -> Result<Self> {
+        Self::new_with_pythonpath(config, None)
+    }
+
+    /// Create a new ModuleResolver with optional PYTHONPATH override for testing
+    pub fn new_with_pythonpath(config: Config, pythonpath_override: Option<&str>) -> Result<Self> {
         let mut resolver = Self {
             config,
             module_cache: HashMap::new(),
             first_party_modules: HashSet::new(),
         };
 
-        resolver.discover_first_party_modules()?;
+        resolver.discover_first_party_modules_with_pythonpath(pythonpath_override)?;
         Ok(resolver)
     }
 
     /// Get all directories to scan for modules (configured src + PYTHONPATH)
+    /// Returns deduplicated, canonicalized paths
     pub fn get_scan_directories(&self) -> Vec<PathBuf> {
-        let mut directories = self.config.src.clone();
+        self.get_scan_directories_with_pythonpath(None)
+    }
 
-        // Add PYTHONPATH directories
-        if let Ok(pythonpath) = std::env::var("PYTHONPATH") {
-            for path_str in pythonpath.split(':') {
-                if !path_str.is_empty() {
-                    let path = PathBuf::from(path_str);
-                    if path.exists() && path.is_dir() {
-                        directories.push(path);
-                    }
-                }
+    /// Get all directories to scan for modules with optional PYTHONPATH override
+    /// Returns deduplicated, canonicalized paths
+    pub fn get_scan_directories_with_pythonpath(
+        &self,
+        pythonpath_override: Option<&str>,
+    ) -> Vec<PathBuf> {
+        let mut unique_dirs = HashSet::new();
+
+        // Add configured src directories
+        for dir in &self.config.src {
+            if let Ok(canonical) = dir.canonicalize() {
+                unique_dirs.insert(canonical);
+            } else {
+                // If canonicalize fails (e.g., path doesn't exist), use the original path
+                unique_dirs.insert(dir.clone());
             }
         }
 
-        directories
+        // Add PYTHONPATH directories
+        let pythonpath = pythonpath_override
+            .map(|p| p.to_string())
+            .or_else(|| std::env::var("PYTHONPATH").ok());
+
+        if let Some(pythonpath) = pythonpath {
+            for path_str in pythonpath.split(':') {
+                self.add_pythonpath_directory(&mut unique_dirs, path_str);
+            }
+        }
+
+        unique_dirs.into_iter().collect()
     }
 
-    /// Scan src directories and PYTHONPATH to discover all first-party Python modules
-    #[allow(clippy::excessive_nesting)]
-    fn discover_first_party_modules(&mut self) -> Result<()> {
-        let directories_to_scan = self.get_scan_directories();
+    /// Helper method to add a PYTHONPATH directory to the unique set
+    fn add_pythonpath_directory(&self, unique_dirs: &mut HashSet<PathBuf>, path_str: &str) {
+        if path_str.is_empty() {
+            return;
+        }
+
+        let path = PathBuf::from(path_str);
+        if !path.exists() || !path.is_dir() {
+            return;
+        }
+
+        if let Ok(canonical) = path.canonicalize() {
+            unique_dirs.insert(canonical);
+        } else {
+            // If canonicalize fails but path exists, use the original path
+            unique_dirs.insert(path);
+        }
+    }
+
+    /// Discover first-party modules with optional PYTHONPATH override
+    /// This method is useful for testing to avoid environment variable pollution
+    fn discover_first_party_modules_with_pythonpath(
+        &mut self,
+        pythonpath_override: Option<&str>,
+    ) -> Result<()> {
+        let directories_to_scan = self.get_scan_directories_with_pythonpath(pythonpath_override);
 
         for src_dir in &directories_to_scan {
-            if !src_dir.exists() {
-                continue;
-            }
-
-            debug!("Scanning source directory: {:?}", src_dir);
-
-            for entry in WalkDir::new(src_dir)
-                .follow_links(false)
-                .into_iter()
-                .filter_map(|e| e.ok())
-            {
-                let path = entry.path();
-
-                // Skip non-Python files
-                if !self.is_python_file(path) {
-                    continue;
-                }
-
-                // Convert file path to module name
-                if let Some(module_name) = self.path_to_module_name(src_dir, path) {
-                    debug!("Found first-party module: {}", module_name);
-                    self.first_party_modules.insert(module_name.clone());
-                    self.module_cache
-                        .insert(module_name, Some(path.to_path_buf()));
-                }
-            }
+            self.scan_directory_for_modules(src_dir)?;
         }
 
         // Add configured known first-party modules
@@ -94,6 +115,40 @@ impl ModuleResolver {
         }
 
         Ok(())
+    }
+
+    /// Scan a single directory for Python modules
+    fn scan_directory_for_modules(&mut self, src_dir: &Path) -> Result<()> {
+        if !src_dir.exists() {
+            return Ok(());
+        }
+
+        debug!("Scanning source directory: {:?}", src_dir);
+
+        let entries = WalkDir::new(src_dir)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok());
+
+        for entry in entries {
+            self.process_directory_entry(src_dir, entry.path());
+        }
+
+        Ok(())
+    }
+
+    /// Process a single directory entry and add it as a module if it's a Python file
+    fn process_directory_entry(&mut self, src_dir: &Path, path: &Path) {
+        if !self.is_python_file(path) {
+            return;
+        }
+
+        if let Some(module_name) = self.path_to_module_name(src_dir, path) {
+            debug!("Found first-party module: {}", module_name);
+            self.first_party_modules.insert(module_name.clone());
+            self.module_cache
+                .insert(module_name, Some(path.to_path_buf()));
+        }
     }
 
     /// Check if a path is a Python file

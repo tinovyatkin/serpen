@@ -42,14 +42,9 @@ fn test_pythonpath_module_discovery() {
         ..Default::default()
     };
 
-    // Set PYTHONPATH environment variable
+    // Create resolver with PYTHONPATH override
     let pythonpath_str = pythonpath_dir.to_string_lossy();
-    unsafe {
-        std::env::set_var("PYTHONPATH", pythonpath_str.as_ref());
-    }
-
-    // Create resolver and test module discovery
-    let resolver = ModuleResolver::new(config).unwrap();
+    let resolver = ModuleResolver::new_with_pythonpath(config, Some(&pythonpath_str)).unwrap();
     let first_party_modules = resolver.get_first_party_modules();
 
     // Verify that modules from both src and PYTHONPATH are discovered
@@ -69,11 +64,6 @@ fn test_pythonpath_module_discovery() {
         first_party_modules.contains("pythonpath_pkg.submodule"),
         "Should discover submodules from PYTHONPATH packages"
     );
-
-    // Clean up environment
-    unsafe {
-        std::env::remove_var("PYTHONPATH");
-    }
 }
 
 #[test]
@@ -97,14 +87,9 @@ fn test_pythonpath_module_classification() {
         ..Default::default()
     };
 
-    // Set PYTHONPATH environment variable
+    // Create resolver with PYTHONPATH override
     let pythonpath_str = pythonpath_dir.to_string_lossy();
-    unsafe {
-        std::env::set_var("PYTHONPATH", pythonpath_str.as_ref());
-    }
-
-    // Create resolver and test module classification
-    let resolver = ModuleResolver::new(config).unwrap();
+    let resolver = ModuleResolver::new_with_pythonpath(config, Some(&pythonpath_str)).unwrap();
 
     // Test that PYTHONPATH modules are classified as first-party
     use serpen::resolver::ImportType;
@@ -120,11 +105,6 @@ fn test_pythonpath_module_classification() {
         ImportType::ThirdParty,
         "Unknown modules should still be classified as third-party"
     );
-
-    // Clean up environment
-    unsafe {
-        std::env::remove_var("PYTHONPATH");
-    }
 }
 
 #[test]
@@ -153,18 +133,13 @@ fn test_pythonpath_multiple_directories() {
         ..Default::default()
     };
 
-    // Set PYTHONPATH with multiple directories (colon-separated)
+    // Create resolver with PYTHONPATH override (multiple directories separated by colon)
     let pythonpath_str = format!(
         "{}:{}",
         pythonpath_dir1.to_string_lossy(),
         pythonpath_dir2.to_string_lossy()
     );
-    unsafe {
-        std::env::set_var("PYTHONPATH", &pythonpath_str);
-    }
-
-    // Create resolver and test module discovery
-    let resolver = ModuleResolver::new(config).unwrap();
+    let resolver = ModuleResolver::new_with_pythonpath(config, Some(&pythonpath_str)).unwrap();
     let first_party_modules = resolver.get_first_party_modules();
 
     // Verify that modules from both PYTHONPATH directories are discovered
@@ -176,59 +151,164 @@ fn test_pythonpath_multiple_directories() {
         first_party_modules.contains("module2"),
         "Should discover modules from second PYTHONPATH directory"
     );
-
-    // Clean up environment
-    unsafe {
-        std::env::remove_var("PYTHONPATH");
-    }
 }
 
 #[test]
 fn test_pythonpath_empty_or_nonexistent() {
     // Set up config
+    let src_path = PathBuf::from("tests/fixtures/simple_project");
     let config = Config {
-        src: vec![PathBuf::from("tests/fixtures/simple_project")],
+        src: vec![src_path.clone()],
         ..Default::default()
     };
 
     // Test with empty PYTHONPATH
-    unsafe {
-        std::env::set_var("PYTHONPATH", "");
-    }
-
-    let resolver1 = ModuleResolver::new(config.clone()).unwrap();
-    let scan_dirs1 = resolver1.get_scan_directories();
+    let resolver1 = ModuleResolver::new_with_pythonpath(config.clone(), Some("")).unwrap();
+    let scan_dirs1 = resolver1.get_scan_directories_with_pythonpath(Some(""));
 
     // Should only contain configured src directories
     assert_eq!(scan_dirs1.len(), 1);
-    assert!(scan_dirs1.contains(&PathBuf::from("tests/fixtures/simple_project")));
+    let expected_path = src_path.canonicalize().unwrap_or(src_path.clone());
+    assert!(
+        scan_dirs1.contains(&expected_path),
+        "Expected {:?} in {:?}",
+        expected_path,
+        scan_dirs1
+    );
 
     // Test with no PYTHONPATH
-    unsafe {
-        std::env::remove_var("PYTHONPATH");
-    }
-
-    let resolver2 = ModuleResolver::new(config.clone()).unwrap();
-    let scan_dirs2 = resolver2.get_scan_directories();
+    let resolver2 = ModuleResolver::new_with_pythonpath(config.clone(), None).unwrap();
+    let scan_dirs2 = resolver2.get_scan_directories_with_pythonpath(None);
 
     // Should only contain configured src directories
     assert_eq!(scan_dirs2.len(), 1);
-    assert!(scan_dirs2.contains(&PathBuf::from("tests/fixtures/simple_project")));
+    assert!(
+        scan_dirs2.contains(&expected_path),
+        "Expected {:?} in {:?}",
+        expected_path,
+        scan_dirs2
+    );
 
     // Test with nonexistent directories in PYTHONPATH
-    unsafe {
-        std::env::set_var("PYTHONPATH", "/nonexistent1:/nonexistent2");
-    }
-
-    let resolver3 = ModuleResolver::new(config).unwrap();
-    let scan_dirs3 = resolver3.get_scan_directories();
+    let resolver3 =
+        ModuleResolver::new_with_pythonpath(config, Some("/nonexistent1:/nonexistent2")).unwrap();
+    let scan_dirs3 =
+        resolver3.get_scan_directories_with_pythonpath(Some("/nonexistent1:/nonexistent2"));
 
     // Should only contain configured src directories (nonexistent dirs filtered out)
     assert_eq!(scan_dirs3.len(), 1);
-    assert!(scan_dirs3.contains(&PathBuf::from("tests/fixtures/simple_project")));
+    assert!(
+        scan_dirs3.contains(&expected_path),
+        "Expected {:?} in {:?}",
+        expected_path,
+        scan_dirs3
+    );
+}
 
-    // Clean up environment
-    unsafe {
-        std::env::remove_var("PYTHONPATH");
-    }
+#[test]
+fn test_directory_deduplication() {
+    // Create temporary directories for testing
+    let temp_dir = TempDir::new().unwrap();
+    let src_dir = temp_dir.path().join("src");
+    let other_dir = temp_dir.path().join("other");
+
+    // Create directory structures
+    fs::create_dir_all(&src_dir).unwrap();
+    fs::create_dir_all(&other_dir).unwrap();
+
+    // Create modules
+    let src_module = src_dir.join("src_module.py");
+    fs::write(&src_module, "# Source module").unwrap();
+    let other_module = other_dir.join("other_module.py");
+    fs::write(&other_module, "# Other module").unwrap();
+
+    // Set up config with src directory
+    let config = Config {
+        src: vec![src_dir.clone()],
+        ..Default::default()
+    };
+
+    // Create resolver with PYTHONPATH override that includes the same src directory plus another directory
+    let pythonpath_str = format!(
+        "{}:{}",
+        src_dir.to_string_lossy(),
+        other_dir.to_string_lossy()
+    );
+    let resolver = ModuleResolver::new_with_pythonpath(config, Some(&pythonpath_str)).unwrap();
+    let scan_dirs = resolver.get_scan_directories_with_pythonpath(Some(&pythonpath_str));
+
+    // Should only have 2 unique directories, even though src_dir appears in both config.src and PYTHONPATH
+    assert_eq!(
+        scan_dirs.len(),
+        2,
+        "Should deduplicate directories: got {:?}",
+        scan_dirs
+    );
+
+    // Convert to canonical paths for comparison
+    let expected_src = src_dir.canonicalize().unwrap_or(src_dir);
+    let expected_other = other_dir.canonicalize().unwrap_or(other_dir);
+
+    assert!(
+        scan_dirs.contains(&expected_src),
+        "Should contain src directory"
+    );
+    assert!(
+        scan_dirs.contains(&expected_other),
+        "Should contain other directory"
+    );
+
+    // Verify modules are discovered correctly
+    let first_party_modules = resolver.get_first_party_modules();
+    assert!(
+        first_party_modules.contains("src_module"),
+        "Should discover src_module"
+    );
+    assert!(
+        first_party_modules.contains("other_module"),
+        "Should discover other_module"
+    );
+}
+
+#[test]
+fn test_path_canonicalization() {
+    // Create temporary directories for testing
+    let temp_dir = TempDir::new().unwrap();
+    let src_dir = temp_dir.path().join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+
+    // Create a module
+    let module_file = src_dir.join("test_module.py");
+    fs::write(&module_file, "# Test module").unwrap();
+
+    // Set up config with the src directory
+    let config = Config {
+        src: vec![src_dir.clone()],
+        ..Default::default()
+    };
+
+    // Create resolver with PYTHONPATH override using a relative path with .. components
+    // This creates a different string representation of the same directory
+    let parent_dir = src_dir.parent().unwrap();
+    let relative_path = parent_dir.join("src/../src"); // This resolves to the same directory
+    let pythonpath_str = relative_path.to_string_lossy();
+    let resolver = ModuleResolver::new_with_pythonpath(config, Some(&pythonpath_str)).unwrap();
+    let scan_dirs = resolver.get_scan_directories_with_pythonpath(Some(&pythonpath_str));
+
+    // Should deduplicate even with different path representations
+    assert_eq!(
+        scan_dirs.len(),
+        1,
+        "Should deduplicate paths even with different representations: got {:?}",
+        scan_dirs
+    );
+
+    // The path should be canonicalized
+    let canonical_src = src_dir.canonicalize().unwrap_or(src_dir);
+    assert!(
+        scan_dirs.contains(&canonical_src),
+        "Should contain canonicalized src directory: expected {:?} in {:?}",
+        canonical_src,
+        scan_dirs
+    );
 }
