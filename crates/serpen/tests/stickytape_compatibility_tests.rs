@@ -298,7 +298,7 @@ fn test_special_shebang_handling() {
 }
 
 /// Integration test to verify our bundler handles all major scenarios
-// #[test]
+#[test]
 fn test_comprehensive_bundling_scenarios() {
     let _ = env_logger::try_init();
 
