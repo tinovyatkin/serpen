@@ -46,3 +46,5 @@ baseline_coverage.txt
 *.snap.new
 
 npm-dist-test/
+docs/environment_variables.md
+.DS_Store
