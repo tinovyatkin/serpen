@@ -237,7 +237,7 @@ fn test_module_import_is_detected_when_import_is_renamed() {
     assert_script_output("import_from_as_module", "Hello");
 }
 
-// #[test]
+#[test]
 fn test_modules_with_triple_quotes_can_be_bundled() {
     assert_script_output("module_with_triple_quotes", "Hello\n'''\n\"\"\"");
 }
