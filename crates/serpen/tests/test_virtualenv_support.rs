@@ -1,3 +1,4 @@
+use serial_test::serial;
 use std::fs;
 use tempfile::TempDir;
 
@@ -180,6 +181,7 @@ fn test_virtualenv_scan_directories_exclusion() {
 }
 
 #[test]
+#[serial]
 fn test_virtualenv_guard() {
     // Test the VirtualEnvGuard functionality
     let original_env = std::env::var("VIRTUAL_ENV").ok();
