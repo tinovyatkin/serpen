@@ -1,5 +1,6 @@
 use anyhow::Result;
 use log::debug;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -161,6 +162,8 @@ pub struct ModuleResolver {
     module_cache: HashMap<String, Option<PathBuf>>,
     /// Set of all first-party modules discovered in src directories
     first_party_modules: HashSet<String>,
+    /// Cache of virtual environment packages to avoid repeated filesystem scans
+    virtualenv_packages_cache: RefCell<Option<HashSet<String>>>,
 }
 
 impl ModuleResolver {
@@ -188,6 +191,7 @@ impl ModuleResolver {
             config,
             module_cache: HashMap::new(),
             first_party_modules: HashSet::new(),
+            virtualenv_packages_cache: RefCell::new(None),
         };
 
         resolver.discover_first_party_modules_with_overrides(
@@ -351,6 +355,25 @@ impl ModuleResolver {
     /// Get the set of third-party packages installed in the virtual environment
     /// Used for improving import classification accuracy
     fn get_virtualenv_packages(&self, virtualenv_override: Option<&str>) -> HashSet<String> {
+        // If we have a cached result and no override is specified, return it
+        if virtualenv_override.is_none() {
+            if let Some(cached_packages) = self.get_cached_virtualenv_packages() {
+                return cached_packages;
+            }
+        }
+
+        // Compute the packages
+        self.compute_virtualenv_packages(virtualenv_override)
+    }
+
+    /// Get cached virtualenv packages if available
+    fn get_cached_virtualenv_packages(&self) -> Option<HashSet<String>> {
+        let cache_ref = self.virtualenv_packages_cache.try_borrow().ok()?;
+        cache_ref.as_ref().cloned()
+    }
+
+    /// Compute virtualenv packages by scanning the filesystem
+    fn compute_virtualenv_packages(&self, virtualenv_override: Option<&str>) -> HashSet<String> {
         let mut packages = HashSet::new();
 
         // First, try to get explicit VIRTUAL_ENV (either override or environment variable)
@@ -372,35 +395,50 @@ impl ModuleResolver {
             for site_packages_dir in
                 self.get_virtualenv_site_packages_directories(&virtualenv_path_str)
             {
-                if let Ok(entries) = std::fs::read_dir(&site_packages_dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                            // Skip common non-package entries
-                            if name.starts_with('_')
-                                || name.contains("-info")
-                                || name.contains(".dist-info")
-                            {
-                                continue;
-                            }
+                self.scan_site_packages_directory(&site_packages_dir, &mut packages);
+            }
+        }
 
-                            // For directories, use the directory name as package name
-                            if path.is_dir() {
-                                packages.insert(name.to_string());
-                            }
-                            // For .py files, use the filename without extension
-                            else if name.ends_with(".py") {
-                                if let Some(package_name) = name.strip_suffix(".py") {
-                                    packages.insert(package_name.to_string());
-                                }
-                            }
-                        }
-                    }
-                }
+        // Cache the result if no override was specified (for subsequent calls)
+        if virtualenv_override.is_none() {
+            if let Ok(mut cache_ref) = self.virtualenv_packages_cache.try_borrow_mut() {
+                *cache_ref = Some(packages.clone());
             }
         }
 
         packages
+    }
+
+    /// Scan a site-packages directory and add found packages to the set
+    fn scan_site_packages_directory(
+        &self,
+        site_packages_dir: &PathBuf,
+        packages: &mut HashSet<String>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(site_packages_dir) else {
+            return;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+
+            // Skip common non-package entries
+            if name.starts_with('_') || name.contains("-info") || name.contains(".dist-info") {
+                continue;
+            }
+
+            // For directories, use the directory name as package name
+            if path.is_dir() {
+                packages.insert(name.to_string());
+            }
+            // For .py files, use the filename without extension
+            else if let Some(package_name) = name.strip_suffix(".py") {
+                packages.insert(package_name.to_string());
+            }
+        }
     }
 
     /// Check if a module name exists in the virtual environment packages
@@ -661,6 +699,7 @@ mod tests {
             config: Config::default(),
             module_cache: HashMap::new(),
             first_party_modules: HashSet::new(),
+            virtualenv_packages_cache: RefCell::new(None),
         };
         assert_eq!(
             resolver.path_to_module_name(src_dir, file_path),
@@ -678,6 +717,7 @@ mod tests {
             config,
             module_cache: HashMap::new(),
             first_party_modules: HashSet::new(),
+            virtualenv_packages_cache: RefCell::new(None),
         };
 
         // Use scope guard to safely set PYTHONPATH for testing
@@ -710,6 +750,7 @@ mod tests {
             config,
             module_cache: HashMap::new(),
             first_party_modules: HashSet::new(),
+            virtualenv_packages_cache: RefCell::new(None),
         };
 
         // Use scope guard to ensure PYTHONPATH is not set

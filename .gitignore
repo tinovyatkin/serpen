@@ -48,3 +48,5 @@ baseline_coverage.txt
 npm-dist-test/
 docs/environment_variables.md
 .DS_Store
+
+**/.claude/settings.local.json
