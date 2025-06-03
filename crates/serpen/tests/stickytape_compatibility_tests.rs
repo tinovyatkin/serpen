@@ -187,7 +187,7 @@ fn test_can_import_multiple_modules_from_module_using_from_import_syntax() {
     assert_script_output("script_using_from_to_import_multiple_modules", "Hello");
 }
 
-// #[test]
+#[test]
 fn test_imported_modules_are_transformed() {
     assert_script_output("imports_in_imported_modules", "Hello");
 }
