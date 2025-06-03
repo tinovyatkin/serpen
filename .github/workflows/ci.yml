@@ -52,5 +52,5 @@ jobs:
           OUTPUT_FILE: bundle-test/out.py
         run: |
           mkdir bundle-test
-          uv run python -m serpen --entry $ENTRY_FILE --output $OUTPUT_FILE
-          uv run python bundle-test/out.py
+          uv run python -m serpen --entry "${{ env.ENTRY_FILE }}" --output "${{ env.OUTPUT_FILE }}"
+          uv run python "${{ env.OUTPUT_FILE }}"
