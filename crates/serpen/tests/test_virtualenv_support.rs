@@ -171,11 +171,8 @@ fn test_virtualenv_scan_directories_exclusion() {
     );
 
     // Verify VIRTUAL_ENV site-packages is NOT in scan directories
-    let canonical_site_packages = site_packages_dir
-        .canonicalize()
-        .unwrap_or(site_packages_dir);
     assert!(
-        !scan_dirs.contains(&canonical_site_packages),
+        !scan_dirs.iter().any(|p| p == &site_packages_dir),
         "VIRTUAL_ENV site-packages should NOT be in scan directories"
     );
 }
