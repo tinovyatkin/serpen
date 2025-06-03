@@ -610,7 +610,16 @@ fn test_venv_fallback_detection() {
     );
 
     // Restore original directory (do this before temp_dir is dropped)
-    std::env::set_current_dir(&original_dir).unwrap();
+    if original_dir.exists() {
+        std::env::set_current_dir(&original_dir).unwrap();
+    } else {
+        // If original directory no longer exists, try to go to a safe directory
+        if let Ok(home) = std::env::var("HOME") {
+            let _ = std::env::set_current_dir(home);
+        } else {
+            let _ = std::env::set_current_dir("/");
+        }
+    }
 }
 
 #[test]
@@ -618,6 +627,13 @@ fn test_venv_fallback_priority_order() {
     // Test that .venv is preferred over venv when both exist
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
+
+    // Ensure original directory exists and is accessible
+    assert!(
+        original_dir.exists(),
+        "Original directory should exist: {:?}",
+        original_dir
+    );
 
     // Change to temporary directory
     std::env::set_current_dir(temp_dir.path()).unwrap();
@@ -680,8 +696,17 @@ fn test_venv_fallback_priority_order() {
         "venv_package should be detected from venv"
     );
 
-    // Restore original directory
-    std::env::set_current_dir(&original_dir).unwrap();
+    // Restore original directory - handle case where it might not exist
+    if original_dir.exists() {
+        std::env::set_current_dir(&original_dir).unwrap();
+    } else {
+        // If original directory no longer exists, try to go to a safe directory
+        if let Ok(home) = std::env::var("HOME") {
+            let _ = std::env::set_current_dir(home);
+        } else {
+            let _ = std::env::set_current_dir("/");
+        }
+    }
 }
 
 #[test]
@@ -748,7 +773,16 @@ fn test_explicit_virtualenv_overrides_fallback() {
     );
 
     // Restore original directory
-    std::env::set_current_dir(original_dir).unwrap();
+    if original_dir.exists() {
+        std::env::set_current_dir(original_dir).unwrap();
+    } else {
+        // If original directory no longer exists, try to go to a safe directory
+        if let Ok(home) = std::env::var("HOME") {
+            let _ = std::env::set_current_dir(home);
+        } else {
+            let _ = std::env::set_current_dir("/");
+        }
+    }
 }
 
 #[test]
@@ -797,7 +831,16 @@ fn test_no_virtualenv_fallback_when_none_exist() {
     );
 
     // Restore original directory
-    std::env::set_current_dir(original_dir).unwrap();
+    if original_dir.exists() {
+        std::env::set_current_dir(original_dir).unwrap();
+    } else {
+        // If original directory no longer exists, try to go to a safe directory
+        if let Ok(home) = std::env::var("HOME") {
+            let _ = std::env::set_current_dir(home);
+        } else {
+            let _ = std::env::set_current_dir("/");
+        }
+    }
 }
 
 #[test]
@@ -858,5 +901,14 @@ fn test_invalid_venv_directories_ignored() {
     );
 
     // Restore original directory
-    std::env::set_current_dir(original_dir).unwrap();
+    if original_dir.exists() {
+        std::env::set_current_dir(original_dir).unwrap();
+    } else {
+        // If original directory no longer exists, try to go to a safe directory
+        if let Ok(home) = std::env::var("HOME") {
+            let _ = std::env::set_current_dir(home);
+        } else {
+            let _ = std::env::set_current_dir("/");
+        }
+    }
 }
