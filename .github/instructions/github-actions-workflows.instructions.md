@@ -506,6 +506,78 @@ When using VS Code, yamllint errors are automatically highlighted. The custom co
        wheel-path: ${{ env.WHEEL_FILE }}
    ```
 
+#### Cross-Platform Command Compatibility
+
+**⚠️ Critical Issue: Line Continuation Syntax**
+
+Different shells use different line continuation syntax, which can cause workflow failures when targeting multiple platforms:
+
+- **Unix/Linux/macOS (bash/zsh)**: Uses backslash (`\`) for line continuation
+- **Windows PowerShell**: Uses backtick (`` ` ``) for line continuation
+- **Problem**: YAML workflows with shell-specific syntax fail on other platforms
+
+**❌ Problematic Pattern:**
+
+```yaml
+# This breaks on Windows PowerShell
+- name: Long command with backslash continuation
+  run: |
+    uv run python -m tool \
+      --entry very/long/path/to/file.py \
+      --output another/long/path/output.py
+```
+
+**Error on Windows:**
+
+```
+ParserError: Missing expression after unary operator '--'.
+```
+
+**✅ Recommended Solutions:**
+
+1. **Use environment variables (preferred for long paths):**
+   ```yaml
+   - name: Cross-platform command with env vars
+     env:
+       ENTRY_FILE: very/long/path/to/file.py
+       OUTPUT_FILE: another/long/path/output.py
+     run: |
+       uv run python -m tool --entry $ENTRY_FILE --output $OUTPUT_FILE
+   ```
+
+2. **Keep commands on single line (if under 120 chars):**
+   ```yaml
+   - name: Short command on single line
+     run: uv run python -m tool --entry file.py --output out.py
+   ```
+
+3. **Use platform-specific steps when necessary:**
+   ```yaml
+   - name: Complex command (Unix)
+     if: runner.os != 'Windows'
+     run: |
+       very-long-command \
+         --with-many-flags \
+         --and-parameters
+
+   - name: Complex command (Windows)
+     if: runner.os == 'Windows'
+     run: |
+       very-long-command `
+         --with-many-flags `
+         --and-parameters
+   ```
+
+**Benefits of environment variables approach:**
+
+- ✅ Works on all platforms (Linux, macOS, Windows)
+- ✅ Maintains yamllint compliance (shorter lines)
+- ✅ Improves readability and maintainability
+- ✅ No shell-specific syntax required
+- ✅ GitHub Actions handles variable expansion automatically
+
+**Key takeaway**: Always test workflows on all target platforms, and prefer environment variables for complex commands to ensure cross-platform compatibility.
+
 #### Shell Script Best Practices
 
 **Keep inline shell scripts simple and focused:**
