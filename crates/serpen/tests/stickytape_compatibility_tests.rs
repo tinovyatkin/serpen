@@ -272,7 +272,7 @@ fn test_additional_python_modules_can_be_explicitly_included() {
 }
 
 /// Test that our bundler can handle special shebang preservation
-// #[test]
+#[test]
 fn test_special_shebang_handling() {
     let script_name = "script_with_special_shebang";
     let result = bundle_test_script(script_name);
