@@ -227,7 +227,7 @@ fn test_package_init_can_be_used_even_if_not_imported_explicitly() {
     assert_script_output("implicit_init_import", "Hello");
 }
 
-// #[test]
+#[test]
 fn test_value_import_is_detected_when_import_is_renamed() {
     assert_script_output("import_from_as_value", "Hello");
 }
