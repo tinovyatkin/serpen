@@ -48,6 +48,11 @@ disallowed-names = ["foo", "bar", "baz", "tmp", "qux"]
 allow-dbg-in-tests = true
 allow-unwrap-in-tests = true
 
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "Non-deterministic iter - use indexmap::IndexMap instead" },
+    { path = "std::collections::HashSet", reason = "Non-deterministic iter - use indexmap::IndexSet instead" },
+]
+
 disallowed-methods = [
     { path = "str::to_ascii_lowercase", reason = "To avoid memory allocation, use `cow_utils::CowUtils::cow_to_ascii_lowercase` instead." },
     { path = "str::to_ascii_uppercase", reason = "To avoid memory allocation, use `cow_utils::CowUtils::cow_to_ascii_uppercase` instead." },
@@ -59,4 +64,16 @@ disallowed-methods = [
     { path = "futures::executor::block_on", reason = "block_on can cause deadlock easily" },
     { path = "async_std::task::block_on", reason = "block_on can cause deadlock easily" },
     { path = "pollster::block_on", reason = "block_on can cause deadlock easily" },
+    { path = "std::time::Instant::now", reason = "Do not use current date/time in code that must be deterministic" },
+    { path = "chrono::DateTime::now", reason = "Do not use current date/time in code that must be deterministic" },
+    { path = "chrono::Utc::now", reason = "Do not use current date/time in code that must be deterministic" },
+    { path = "namada_core::time::DateTimeUtc::now", reason = "Do not use current date/time in code that must be deterministic" },
+    { path = "wasmtimer::std::Instant", reason = "Do not use current date/time in code that must be deterministic" },
+]
+
+ignore-interior-mutability = [
+    # Interned is read-only. The wrapped `Rc` never gets updated.
+    "ruff_formatter::format_element::Interned",
+    # The expression is read-only.
+    "ruff_python_ast::hashable::HashableExpr",
 ]

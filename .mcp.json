@@ -6,6 +6,37 @@
                 "-y",
                 "@upstash/context7-mcp"
             ]
+        },
+        "rust-lsp": {
+            "command": "mcp-language-server",
+            "args": [
+                "--workspace",
+                ".",
+                "--lsp",
+                "rust-analyzer"
+            ]
+        },
+        "python-lsp": {
+            "command": "mcp-language-server",
+            "args": [
+                "--workspace",
+                ".",
+                "--lsp",
+                "uvx",
+                "pyrefly",
+                "lsp"
+            ]
+        },
+        "toml-lsp": {
+            "command": "mcp-language-server",
+            "args": [
+                "--workspace",
+                ".",
+                "--lsp",
+                "taplo",
+                "lsp",
+                "stdio"
+            ]
         }
     }
 }

@@ -4,11 +4,11 @@ The Serpen bundler now includes a powerful unused import trimmer that can analyz
 
 ## Features
 
-- **AST-based analysis**: Uses rustpython-parser for accurate Python syntax analysis
+- **AST-based analysis**: Uses Ruff's Python AST parser for accurate Python syntax analysis
 - **Smart import detection**: Distinguishes between used and unused imports
 - **Partial import trimming**: Removes only unused items from `from` imports
 - **Configurable preservation**: Keep specific imports even if unused
-- **Code generation**: Uses rustpython-unparser for clean, formatted output
+- **Code generation**: Uses Ruff's Python code generator for clean, formatted output
 - **Dry-run mode**: Preview changes without modifying files
 
 ## Usage
@@ -138,9 +138,9 @@ This will preserve any imports containing "django" or "pytest" in their qualifie
 
 This unused import trimmer serves as Step 1 of our comprehensive AST rewriting implementation strategy for the Serpen bundler. It demonstrates:
 
-1. **AST parsing** using rustpython-parser
+1. **AST parsing** using Ruff's Python AST parser
 2. **Code analysis** and transformation
-3. **AST unparsing** using rustpython-unparser
+3. **AST unparsing** using Ruff's Python code generator
 4. **Configuration-driven behavior**
 
 Future steps will expand this foundation to implement:
@@ -152,10 +152,10 @@ Future steps will expand this foundation to implement:
 
 ## Technical Details
 
-- **Parser**: Uses `rustpython-parser` for Python AST parsing
+- **Parser**: Uses `ruff_python_parser` for Python AST parsing
 - **Analyzer**: Reuses existing `UnusedImportAnalyzer` for import detection
 - **Transformer**: Custom AST transformation logic for import removal
-- **Unparser**: Uses `rustpython-unparser` for code generation
+- **Unparser**: Uses `ruff_python_codegen` for code generation
 - **Testing**: Comprehensive test suite with snapshot testing
 
 ## Performance

@@ -99,7 +99,7 @@ The project is organized as a Rust workspace with the main crate in `crates/serp
    - Uses topological sorting to determine bundling order
 
 3. **AST Parsing & Rewriting** (various files)
-   - Uses `rustpython-parser` for AST parsing
+   - Uses Ruff's Python AST parser (`ruff_python_parser`) for AST parsing
    - Implements AST rewriting to handle import statements
 
 4. **Unused Import Detection** (`unused_import_trimmer.rs`)
@@ -196,3 +196,9 @@ DO NOT use `cargo insta review` as that requires interactive input.
 
 - Always run tests and clippy after implementing a feature to make sure everything is working as expected
 - **ALWAYS fix all clippy errors in the code you editing after finishing implementing a feature**
+
+## Memories
+
+- Don't add timing complexity estimation to any documents - you don't know the team velocity
+- When running on MacOs you should try `gsed` instead of `sed` - this is Homebrew installed formula gnu-sed which aligns with sed latest features
+- MANDATORY when asked to fix a clippy issue never threat `#[allow]` annotation as a fix - do actual refactoring to fix the problem

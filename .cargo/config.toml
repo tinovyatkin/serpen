@@ -1,6 +1,13 @@
 [build]
 rustflags = ["-Ctarget-cpu=native"]
 
+# statically link the C runtime so the executable does not depend on
+# that shared/dynamic library.
+#
+# See: https://github.com/astral-sh/ruff/issues/11503
+[target.'cfg(all(target_env="msvc", target_os = "windows"))']
+rustflags = ["-C", "target-feature=+crt-static"]
+
 [alias]
 # Coverage commands using cargo-llvm-cov
 coverage = "llvm-cov --html --open"
