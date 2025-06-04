@@ -40,8 +40,8 @@ Explore following directories which contains implementation of tools based on `r
 
 ## Document
 
-Output comprehensive document at `docs/type-stripping-system-design.md` where outline requirements, challenges and glimpes in exiting implementation that you notices.
-Write argumentation and your decision where type stripping logic should be implemented in our codebase - at AST rewriter, emitter, unparser or somewhere else.
-Write down any specificity you learned about handling type hints with `rustpython-parser`.
-Write a list of testing edge cases that we need to have.
-Write detailed TODO list how you will approach the feature implementation.
+Output a comprehensive document at `docs/type-stripping-system-design.md` outlining requirements, challenges, and insights from the existing implementation that you have noticed.
+Describe your rationale and decision on where to implement the type-stripping logic in our codebase (AST rewriter, emitter, unparser, or another component).
+Document any specific considerations you learned about handling type hints with `rustpython-parser`.
+Provide a list of edge-case tests required.
+Write a detailed to-do list outlining how you will approach the feature implementation.
