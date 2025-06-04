@@ -16,7 +16,7 @@ Use documents linked at https://peps.python.org/topic/typing/ when you need to d
 
 ### Previous work
 
-Explore codebase of Python-powered type stripping utilities source code. You main target in this exploration is to understand complexity and collect testing examples, edge cases and non-trivial handling logic. Check source code at following directories:
+Explore the codebase of Python-powered type stripping utilities source code. Your main target in this exploration is to understand complexity and collect testing examples, edge cases and non-trivial handling logic. Check the source code at following directories:
 
 - references/type-strip/strip-hints
 - references/type-strip/python-minifier
