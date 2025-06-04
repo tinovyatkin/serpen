@@ -1,7 +1,7 @@
 use anyhow::Result;
 use cow_utils::CowUtils;
 use ruff_python_ast::{self as ast, Alias, Expr, ExprContext, Identifier, Stmt};
-use ruff_python_stdlib::builtins;
+use ruff_python_stdlib::{builtins, keyword};
 use ruff_text_size::TextRange;
 use std::collections::{HashMap, HashSet};
 
@@ -81,17 +81,8 @@ impl AstRewriter {
             reserved_names.insert(builtin.to_string());
         }
 
-        // Add all Python keywords
-        reserved_names.extend(
-            [
-                "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class",
-                "continue", "def", "del", "elif", "else", "except", "finally", "for", "from",
-                "global", "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass",
-                "raise", "return", "try", "while", "with", "yield",
-            ]
-            .iter()
-            .map(|&s| s.to_string()),
-        );
+        // Note: Python keywords are checked dynamically using ruff_python_stdlib::keyword::is_keyword
+        // rather than pre-populating the set, for better maintainability
 
         Self {
             import_aliases: HashMap::new(),
@@ -389,9 +380,7 @@ impl AstRewriter {
             };
 
             // Check if the name is available
-            if !self.reserved_names.contains(&candidate)
-                && !self.is_name_used_in_any_module(&candidate)
-            {
+            if !self.is_reserved_name(&candidate) && !self.is_name_used_in_any_module(&candidate) {
                 // Reserve the name
                 self.reserved_names.insert(candidate.clone());
                 return candidate;
@@ -399,6 +388,17 @@ impl AstRewriter {
 
             counter += 1;
         }
+    }
+
+    /// Check if a name is reserved (builtin, keyword, or manually reserved)
+    fn is_reserved_name(&self, name: &str) -> bool {
+        // Check if it's a Python keyword using ruff_python_stdlib
+        if keyword::is_keyword(name) {
+            return true;
+        }
+
+        // Check if it's in our manually maintained reserved names (builtins + user-reserved)
+        self.reserved_names.contains(name)
     }
 
     /// Check if a name is used in any module
@@ -1071,5 +1071,71 @@ impl AstRewriter {
 impl Default for AstRewriter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_keyword_detection_with_ruff() {
+        // Test that ruff_python_stdlib::keyword::is_keyword works as expected
+        let known_keywords = [
+            "def", "class", "if", "else", "for", "while", "import", "from", "False", "None",
+            "True", "and", "as", "assert", "async", "await",
+        ];
+        for &keyword_str in &known_keywords {
+            assert!(
+                keyword::is_keyword(keyword_str),
+                "Known keyword '{}' is not recognized by ruff_python_stdlib::keyword::is_keyword",
+                keyword_str
+            );
+        }
+
+        // Test a few known non-keywords to ensure the function works correctly
+        let non_keywords = ["hello", "world", "foo", "bar", "variable"];
+        for &non_keyword in &non_keywords {
+            assert!(
+                !keyword::is_keyword(non_keyword),
+                "Non-keyword '{}' was incorrectly identified as a keyword by ruff_python_stdlib::keyword::is_keyword",
+                non_keyword
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_reserved_name_functionality() {
+        let ast_rewriter = AstRewriter::new();
+
+        // Test that keywords are detected as reserved
+        let keywords = ["def", "class", "if", "for", "import"];
+        for &keyword_str in &keywords {
+            assert!(
+                ast_rewriter.is_reserved_name(keyword_str),
+                "Keyword '{}' should be detected as reserved",
+                keyword_str
+            );
+        }
+
+        // Test that builtins are detected as reserved
+        let builtins_sample = ["len", "str", "int", "list"];
+        for &builtin in &builtins_sample {
+            assert!(
+                ast_rewriter.is_reserved_name(builtin),
+                "Builtin '{}' should be detected as reserved",
+                builtin
+            );
+        }
+
+        // Test that regular names are not reserved
+        let regular_names = ["my_variable", "foo", "bar"];
+        for &name in &regular_names {
+            assert!(
+                !ast_rewriter.is_reserved_name(name),
+                "Regular name '{}' should not be detected as reserved",
+                name
+            );
+        }
     }
 }
