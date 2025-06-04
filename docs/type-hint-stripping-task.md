@@ -7,7 +7,7 @@ Minimal requirements:
 - Remove `from __future__ import annotations` statements.
 - Rewrite `typing.cast(T, value)` calls to `value`.
 
-To approach this task we will start with research and creating and implementation strategy document / todo list.
+To approach this task, we will start with research and creating an implementation strategy document / to-do list.
 
 ### Basics / Specifications
 
