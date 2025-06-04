@@ -1,113 +1,13 @@
 use anyhow::Result;
 use cow_utils::CowUtils;
 use ruff_python_ast::{self as ast, Expr, ExprContext, Identifier, Stmt};
+use ruff_python_stdlib::builtins;
 use ruff_text_size::TextRange;
 use std::collections::{HashMap, HashSet};
-// TODO: Replace with ruff visitor pattern for AST transformation
-// The Transformer trait will be replaced with ruff's visitor system
 
-/// Python built-in names that should not be renamed
-static PYTHON_BUILTINS: &[&str] = &[
-    "abs",
-    "aiter",
-    "all",
-    "any",
-    "anext",
-    "ascii",
-    "bin",
-    "bool",
-    "breakpoint",
-    "bytearray",
-    "bytes",
-    "callable",
-    "chr",
-    "classmethod",
-    "compile",
-    "complex",
-    "delattr",
-    "dict",
-    "dir",
-    "divmod",
-    "enumerate",
-    "eval",
-    "exec",
-    "filter",
-    "float",
-    "format",
-    "frozenset",
-    "getattr",
-    "globals",
-    "hasattr",
-    "hash",
-    "help",
-    "hex",
-    "id",
-    "input",
-    "int",
-    "isinstance",
-    "issubclass",
-    "iter",
-    "len",
-    "list",
-    "locals",
-    "map",
-    "max",
-    "memoryview",
-    "min",
-    "next",
-    "object",
-    "oct",
-    "open",
-    "ord",
-    "pow",
-    "print",
-    "property",
-    "range",
-    "repr",
-    "reversed",
-    "round",
-    "set",
-    "setattr",
-    "slice",
-    "sorted",
-    "staticmethod",
-    "str",
-    "sum",
-    "super",
-    "tuple",
-    "type",
-    "vars",
-    "zip",
-    "__import__",
-    "__name__",
-    "__doc__",
-    "__package__",
-    "__loader__",
-    "__spec__",
-    "__file__",
-    "__cached__",
-    "__builtins__",
-    "True",
-    "False",
-    "None",
-    "NotImplemented",
-    "Ellipsis",
-    "__debug__",
-    "copyright",
-    "credits",
-    "license",
-    "quit",
-    "exit",
-    "__all__",
-];
-
-/// Python keywords that should not be used as identifiers
-static PYTHON_KEYWORDS: &[&str] = &[
-    "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue",
-    "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import",
-    "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while",
-    "with", "yield",
-];
+/// Default Python version for builtin and keyword checks
+/// Using Python 3.10 as it's widely supported and includes modern features
+const DEFAULT_PYTHON_VERSION: u8 = 10;
 
 /// Scope type for tracking different kinds of scopes in Python
 #[derive(Debug, Clone, PartialEq)]
@@ -173,10 +73,25 @@ pub struct AstRewriter {
 
 impl AstRewriter {
     pub fn new() -> Self {
-        // Initialize reserved names with Python builtins and keywords
+        // Initialize reserved names with Python builtins and keywords using ruff_python_stdlib
         let mut reserved_names = HashSet::new();
-        reserved_names.extend(PYTHON_BUILTINS.iter().map(|&s| s.to_string()));
-        reserved_names.extend(PYTHON_KEYWORDS.iter().map(|&s| s.to_string()));
+
+        // Add all Python built-ins for the default version
+        for builtin in builtins::python_builtins(DEFAULT_PYTHON_VERSION, false) {
+            reserved_names.insert(builtin.to_string());
+        }
+
+        // Add all Python keywords
+        reserved_names.extend(
+            [
+                "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class",
+                "continue", "def", "del", "elif", "else", "except", "finally", "for", "from",
+                "global", "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass",
+                "raise", "return", "try", "while", "with", "yield",
+            ]
+            .iter()
+            .map(|&s| s.to_string()),
+        );
 
         Self {
             import_aliases: HashMap::new(),
@@ -343,8 +258,8 @@ impl AstRewriter {
     ) {
         match expr {
             Expr::Name(name) => {
-                // Skip built-ins
-                if PYTHON_BUILTINS.contains(&name.id.as_str()) {
+                // Skip built-ins using ruff_python_stdlib
+                if builtins::is_python_builtin(&name.id, DEFAULT_PYTHON_VERSION, false) {
                     return;
                 }
 

@@ -21,6 +21,7 @@ clap = { version = "4.5.39", features = ["derive"] }
 ruff_python_ast = { git = "https://github.com/astral-sh/ruff/", branch = "main" }
 ruff_python_codegen = { git = "https://github.com/astral-sh/ruff/", branch = "main" }
 ruff_python_parser = { git = "https://github.com/astral-sh/ruff/", branch = "main" }
+ruff_python_stdlib = { git = "https://github.com/astral-sh/ruff/", branch = "main" }
 ruff_python_trivia = { git = "https://github.com/astral-sh/ruff/", branch = "main" }
 ruff_text_size = { git = "https://github.com/astral-sh/ruff/", branch = "main" }
 # unparser crate removed - replaced with ruff_python_codegen

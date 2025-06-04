@@ -6,7 +6,26 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 use crate::config::Config;
-use crate::python_stdlib::is_stdlib_module;
+use ruff_python_stdlib::sys;
+
+/// Default Python version for standard library checks
+/// Using Python 3.10 as it's widely supported and includes modern features
+const DEFAULT_PYTHON_VERSION: u8 = 10;
+
+/// Check if a module is part of the Python standard library using ruff_python_stdlib
+fn is_stdlib_module(module_name: &str) -> bool {
+    // Check direct match using ruff_python_stdlib
+    if sys::is_known_standard_library(DEFAULT_PYTHON_VERSION, module_name) {
+        return true;
+    }
+
+    // Check if it's a submodule of a stdlib module
+    if let Some(top_level) = module_name.split('.').next() {
+        sys::is_known_standard_library(DEFAULT_PYTHON_VERSION, top_level)
+    } else {
+        false
+    }
+}
 
 /// A scoped guard for safely setting and cleaning up the PYTHONPATH environment variable.
 ///
