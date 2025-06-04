@@ -7,6 +7,21 @@
                 "@upstash/context7-mcp"
             ]
         },
+        "git": {
+            "command": "uvx",
+            "args": [
+                "mcp-server-git",
+                "--repository",
+                "."
+            ]
+        },
+        "docs-manager": {
+            "command": "bunx",
+            "args": [
+                "mcp-docs-service",
+                "."
+            ]
+        },
         "lsp-rust": {
             "command": "mcp-language-server",
             "args": [
