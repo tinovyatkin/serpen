@@ -10,16 +10,28 @@ reviews:
   auto_review:
     enabled: true
     drafts: false
-chat:
-  auto_reply: true
-knowledge_base:
-  learnings:
-    scope: local
-  web_search:
-    enabled: true
-path_filters:
-  - '!**/tests/fixtures/**'
-review:
+  tools:
+    shellcheck:
+      enabled: true
+    ruff:
+      enabled: false
+    markdownlint:
+      enabled: true
+    github-checks:
+      enabled: true
+      timeout_ms: 90000
+    languagetool:
+      enabled: true
+    biome:
+      enabled: false
+    yamllint:
+      enabled: true
+    gitleaks:
+      enabled: true
+    eslint:
+      enabled: false
+    actionlint:
+      enabled: true
   instructions:
     - path: '**/tests/fixtures/**'
       instruction: |
@@ -27,3 +39,12 @@ review:
         Do not provide any review comments, suggestions, or analysis.
         Do not flag any issues or violations.
         Simply acknowledge these are test fixtures and skip detailed review.
+  path_filters:
+    - '!**/tests/fixtures/**'
+chat:
+  auto_reply: true
+knowledge_base:
+  learnings:
+    scope: local
+  web_search:
+    enabled: true

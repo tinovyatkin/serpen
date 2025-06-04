@@ -243,6 +243,6 @@ If tests fail or clippy reports issues, the implementation is NOT complete until
 ## Memories
 
 - Don't add timing complexity estimation to any documents - you don't know the team velocity
-- When running on MacOs you should try `gsed` instead of `sed` - this is Homebrew installed formula gnu-sed which aligns with sed latest features
-- MANDATORY when asked to fix a clippy issue never treat `#[allow]` annotation as a fix - do actual refactoring to fix the problem
-- **Dead code removal**: Remove unused code immediately rather than using `#[allow(dead_code)]` or `#[deprecated]` annotations - this project only exposes a CLI interface and doesn't need API compatibility
+- When running on macOS, you should try `gsed` instead of `sed` for GNU sed compatibility on macOS
+- MANDATORY: When addressing a clippy issue, never treat `#[allow]` annotations as a solution—perform actual refactoring to resolve the issue
+- Remember you have full ruff repository cloned locally at references/type-strip/ruff so you may search in files easier
