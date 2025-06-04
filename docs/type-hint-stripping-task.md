@@ -34,7 +34,7 @@ Explore following directories which contains implementation of tools based on `r
 
 ### Understanding runtime behavior
 
-## Explore source code of RustPython to get even more insights of how dead branches (type hinting only logic) are identified at runtime, to efficiently handle `if TYPE_CHECKING` branches rewrite. Check source code at:
+## Explore the RustPython source code to gain further insight into how dead branches (type-hinting logic) are identified at runtime and to efficiently handle rewriting `if TYPE_CHECKING` branches. Check source code at:
 
 - references/type-strip/RustPython
 
