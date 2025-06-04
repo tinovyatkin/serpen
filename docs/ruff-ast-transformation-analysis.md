@@ -1,4 +1,4 @@
-# Ruff AST Transformation Patterns - Analysis for Serpen
+# Ruff AST Transformation Patterns: Analysis for Serpen
 
 ## Executive Summary
 
