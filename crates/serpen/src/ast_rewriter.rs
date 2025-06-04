@@ -824,7 +824,9 @@ impl AstRewriter {
     /// Transform module AST using the Transformer trait to apply import alias transformations
     pub fn transform_module_ast(&mut self, module_ast: &mut ast::ModModule) -> Result<()> {
         // Transform the module's body statements using the Transformer trait
-        module_ast.body = self.visit_stmt_vec(module_ast.body.clone());
+        // Use std::mem::take to move the vector without cloning, avoiding unnecessary memory overhead
+        let body = std::mem::take(&mut module_ast.body);
+        module_ast.body = self.visit_stmt_vec(body);
         Ok(())
     }
 
