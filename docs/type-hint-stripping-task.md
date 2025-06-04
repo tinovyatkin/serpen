@@ -12,7 +12,7 @@ To approach this task we will start with research and creating and implementatio
 
 ### Basics / Specifications
 
-Read carefully https://peps.python.org/pep-0484/ to have a deep and complete understand of Python static type hints
+Read https://peps.python.org/pep-0484/ carefully to gain a deep and complete understanding of Python static type hints.
 Use documents linked at https://peps.python.org/topic/typing/ when you need to dive deep on some particular topic.
 
 ### Previous work
