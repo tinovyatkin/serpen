@@ -32,9 +32,9 @@ reviews:
       enabled: false
     actionlint:
       enabled: true
-  instructions:
+  path_instructions:
     - path: '**/tests/fixtures/**'
-      instruction: |
+      instructions: |
         These are test fixture files that contain intentional code patterns for testing purposes.
         Do not provide any review comments, suggestions, or analysis.
         Do not flag any issues or violations.
