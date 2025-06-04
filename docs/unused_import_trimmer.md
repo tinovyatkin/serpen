@@ -1,6 +1,8 @@
-# Unused Import Trimmer
+# Unused Import Trimmer (Internal Module)
 
-The Serpen bundler now includes a powerful unused import trimmer that can analyze Python files and remove unused imports using AST rewriting techniques. This is the first step in our comprehensive AST rewriting implementation strategy.
+**Note: This document describes internal functionality that is not currently exposed via the CLI. The `trim` subcommand mentioned in this document does not exist in the current version of Serpen.**
+
+The Serpen bundler includes an internal unused import trimmer module that can analyze Python files and remove unused imports using AST rewriting techniques. This is part of the comprehensive AST rewriting implementation strategy.
 
 ## Features
 
@@ -12,6 +14,8 @@ The Serpen bundler now includes a powerful unused import trimmer that can analyz
 - **Dry-run mode**: Preview changes without modifying files
 
 ## Usage
+
+**⚠️ Important: The commands shown below are hypothetical and not currently implemented. This section describes how the functionality would work if exposed as a CLI command.**
 
 ### Basic Usage
 

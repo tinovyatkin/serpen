@@ -66,7 +66,7 @@ PYTHONPATH="C:\path\to\dir1;C:\path\to\dir2"
 
 # Usage
 export PYTHONPATH="/external/modules"
-serpen bundle main.py
+serpen --entry main.py --output bundle.py
 ```
 
 ### `VIRTUAL_ENV`
@@ -84,32 +84,32 @@ in the current working directory.
 ```bash
 # Automatic when venv is activated
 source venv/bin/activate
-serpen bundle main.py
+serpen --entry main.py --output bundle.py
 
 # Manual override
-VIRTUAL_ENV=/path/to/venv serpen bundle main.py
+VIRTUAL_ENV=/path/to/venv serpen --entry main.py --output bundle.py
 
 # Automatic fallback detection (no VIRTUAL_ENV needed)
 # Serpen automatically detects .venv, venv, env, etc.
-serpen bundle main.py
+serpen --entry main.py --output bundle.py
 ```
 
 ```bash
 # Automatic when venv is activated
 source venv/bin/activate
-serpen bundle main.py
+serpen --entry main.py --output bundle.py
 
 # Manual override
-VIRTUAL_ENV=/path/to/venv serpen bundle main.py
+VIRTUAL_ENV=/path/to/venv serpen --entry main.py --output bundle.py
 ```
 
 ```bash
 # Automatic when venv is activated
 source venv/bin/activate
-serpen bundle main.py
+serpen --entry main.py --output bundle.py
 
 # Manual override
-VIRTUAL_ENV=/path/to/venv serpen bundle main.py
+VIRTUAL_ENV=/path/to/venv serpen --entry main.py --output bundle.py
 ```
 
 ## Module Resolution Priority
@@ -145,7 +145,7 @@ When both `PYTHONPATH` and `VIRTUAL_ENV` are set:
 ```bash
 export PYTHONPATH="/external/modules"
 export VIRTUAL_ENV="/path/to/venv"
-serpen bundle main.py
+serpen --entry main.py --output bundle.py
 ```
 
 **Result**:
@@ -203,7 +203,7 @@ serpen bundle main.py
 Enable verbose logging to see environment variable processing:
 
 ```bash
-serpen --verbose bundle main.py
+serpen --verbose --entry main.py --output bundle.py
 ```
 
 ## Related Documentation
