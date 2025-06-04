@@ -1,6 +1,5 @@
 ## Type Hint Stripping Task
-We need to strip static type hints as they don't have any sense in the bundled source code.
-
+We need to strip static type hints, as they are not meaningful in the bundled source code.
 Minimal requirements:
 - Strip all type hint metadata, including string literal annotations.
 - Remove imports of `typing` and related modules.
