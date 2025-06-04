@@ -1,5 +1,4 @@
-## type hint stripping task
-
+## Type Hint Stripping Task
 We need to strip static type hints as they don't have any sense in the bundled source code.
 
 Minimal requirements:
