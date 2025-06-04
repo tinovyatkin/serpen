@@ -159,6 +159,15 @@ Under no circumstances should you justify a design or implementation by citing "
 - Ensure all functions are properly documented with Rust doc comments
 - Take the opportunity to refactor code to improve readability and maintainability
 
+### Immediate Code Removal Over Deprecation
+
+**MANDATORY**: Since Serpen only exposes a binary CLI interface (not a library API), unused methods and functions MUST be removed immediately rather than annotated with deprecation markers.
+
+- **No deprecation annotations**: Do not use `#[deprecated]`, `#[allow(dead_code)]`, or similar annotations to preserve unused code
+- **Binary-only interface**: This project does not maintain API compatibility for external consumers - all code must serve the current CLI functionality
+- **Dead code elimination**: Aggressively remove any unused functions, methods, structs, or modules during refactoring
+- **Immediate cleanup**: When refactoring or implementing features, remove unused code paths immediately rather than marking them for future removal
+
 ### Documentation Research Hierarchy
 
 When implementing or researching functionality, follow this order:
@@ -211,4 +220,5 @@ DO NOT use `cargo insta review` as that requires interactive input.
 
 - Don't add timing complexity estimation to any documents - you don't know the team velocity
 - When running on MacOs you should try `gsed` instead of `sed` - this is Homebrew installed formula gnu-sed which aligns with sed latest features
-- MANDATORY when asked to fix a clippy issue never threat `#[allow]` annotation as a fix - do actual refactoring to fix the problem
+- MANDATORY when asked to fix a clippy issue never treat `#[allow]` annotation as a fix - do actual refactoring to fix the problem
+- **Dead code removal**: Remove unused code immediately rather than using `#[allow(dead_code)]` or `#[deprecated]` annotations - this project only exposes a CLI interface and doesn't need API compatibility
