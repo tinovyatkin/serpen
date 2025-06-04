@@ -216,6 +216,30 @@ DO NOT use `cargo insta review` as that requires interactive input.
 - Always run tests and clippy after implementing a feature to make sure everything is working as expected
 - **ALWAYS fix all clippy errors in the code you editing after finishing implementing a feature**
 
+### MANDATORY: Final Validation Before Claiming Success
+
+**🚨 CRITICAL REQUIREMENT 🚨**: Before claiming that any implementation is complete or successful, you MUST run the complete validation suite:
+
+```bash
+# 1. Run all tests in the workspace
+cargo test --workspace
+
+# 2. Run clippy on all targets
+cargo clippy --workspace --all-targets
+
+# 3. Fix any clippy errors or warnings
+# NEVER use #[allow] annotations as a "fix" - do actual refactoring
+```
+
+**NO EXCEPTIONS**: Do not declare success, claim completion, or say "implementation is working" without running both commands above and ensuring they pass without errors. This applies to:
+
+- Feature implementations
+- Bug fixes
+- Refactoring
+- Any code changes
+
+If tests fail or clippy reports issues, the implementation is NOT complete until these are resolved.
+
 ## Memories
 
 - Don't add timing complexity estimation to any documents - you don't know the team velocity
