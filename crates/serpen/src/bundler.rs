@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use log::{debug, info, warn};
-use rustpython_parser::ast::{Mod, Stmt, StmtImportFrom};
+use ruff_python_ast::{Stmt, StmtImportFrom};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -245,19 +245,13 @@ impl Bundler {
         let source = fs::read_to_string(file_path)
             .with_context(|| format!("Failed to read file: {:?}", file_path))?;
 
-        let parsed = rustpython_parser::parse(
-            &source,
-            rustpython_parser::Mode::Module,
-            file_path.to_string_lossy().as_ref(),
-        )
-        .with_context(|| format!("Failed to parse Python file: {:?}", file_path))?;
+        let parsed = ruff_python_parser::parse_module(&source)
+            .with_context(|| format!("Failed to parse Python file: {:?}", file_path))?;
 
         let mut imports = Vec::new();
 
-        if let Mod::Module(module) = parsed {
-            for stmt in module.body.iter() {
-                self.extract_imports_from_statement(stmt, &mut imports, file_path);
-            }
+        for stmt in parsed.syntax().body.iter() {
+            self.extract_imports_from_statement(stmt, &mut imports, file_path);
         }
 
         Ok(imports)
@@ -275,7 +269,7 @@ impl Bundler {
                 // For dotted imports like "xml.etree.ElementTree", we need to extract
                 // the root module name "xml" for classification purposes, but we should
                 // preserve the full import path for the output
-                let module_name = alias.name.to_string();
+                let module_name = alias.name.id.to_string();
                 imports.push(module_name);
             }
         } else if let Stmt::ImportFrom(import_from_stmt) = stmt {
@@ -290,7 +284,7 @@ impl Bundler {
         imports: &mut Vec<String>,
         file_path: &Path,
     ) {
-        let level = import_from_stmt.level.map(|i| i.to_u32()).unwrap_or(0);
+        let level = import_from_stmt.level;
 
         if level == 0 {
             self.process_absolute_import(import_from_stmt, imports);
@@ -312,7 +306,7 @@ impl Bundler {
         imports: &mut Vec<String>,
     ) {
         if let Some(ref module) = import_from_stmt.module {
-            let m = module.to_string();
+            let m = module.id.to_string();
             // Avoid duplicate absolute imports (e.g., import importlib + from importlib import)
             if !imports.contains(&m) {
                 imports.push(m);
@@ -329,13 +323,13 @@ impl Bundler {
     ) {
         if let Some(ref module) = import_from_stmt.module {
             // Relative import with explicit module name: from .module import something
-            let full_module = self.build_full_module_name(base_module, module);
+            let full_module = self.build_full_module_name(base_module, &module.id);
             imports.push(full_module);
         } else {
             // Relative import without explicit module: from . import something
             // Add each imported name as a full module name
             for alias in &import_from_stmt.names {
-                let full_import = self.build_full_module_name(base_module, &alias.name);
+                let full_import = self.build_full_module_name(base_module, &alias.name.id);
                 imports.push(full_import);
             }
         }
@@ -358,7 +352,7 @@ impl Bundler {
         level: u32,
     ) {
         if let Some(ref module) = import_from_stmt.module {
-            let module_name = self.format_module_name(module, level);
+            let module_name = self.format_module_name(&module.id, level);
             imports.push(module_name);
         } else {
             let dots = ".".repeat(level as usize);

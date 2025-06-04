@@ -6,16 +6,17 @@ use crate::ast_rewriter::AstRewriter;
 use crate::dependency_graph::ModuleNode;
 use crate::resolver::{ImportType, ModuleResolver};
 use crate::unused_imports_simple::UnusedImportAnalyzer;
-use rustpython_parser::ast::{self, Mod, Stmt};
-use rustpython_parser::{Mode, parse};
-use unparser::Unparser;
+use ruff_python_ast::{Alias, Identifier, ModModule, Stmt, StmtAssign, StmtImport, StmtImportFrom};
+use ruff_python_codegen::{Generator, Stylist};
+use ruff_python_parser;
+use ruff_text_size::TextRange;
 
 /// Type alias for import sets to reduce complexity
 type ImportSets = (HashSet<String>, HashSet<String>);
 
 /// Pre-parsed module data with AST for efficient processing
 struct ParsedModuleData {
-    ast: ast::ModModule,
+    ast: ModModule,
     unused_imports: HashSet<String>,
     first_party_imports: HashSet<String>,
 }
@@ -87,21 +88,17 @@ impl CodeEmitter {
         (third_party_imports, stdlib_imports)
     }
 
-    /// Create an import statement AST node from a module name
+    /// Create an import statement using codegen approach
     fn create_import_statement(&self, module_name: &str) -> Stmt {
         // Check if the module name is already a formatted import statement
         if module_name.starts_with("import ") || module_name.starts_with("from ") {
             // For pre-formatted imports, create a comment with the statement
             self.create_comment_stmt(&format!("# {}", module_name))
         } else if self.is_valid_module_name(module_name) {
-            // Create a proper import statement AST node
-            Stmt::Import(ast::StmtImport {
-                names: vec![ast::Alias {
-                    name: module_name.into(),
-                    asname: None,
-                    range: Default::default(),
-                }],
-                range: Default::default(),
+            // Generate import statement as string and parse it
+            let import_code = format!("import {}", module_name);
+            self.parse_statement(&import_code).unwrap_or_else(|_| {
+                self.create_comment_stmt(&format!("# Error importing: {}", module_name))
             })
         } else {
             // For unusual module names, add a warning comment
@@ -112,10 +109,24 @@ impl CodeEmitter {
         }
     }
 
+    /// Parse a Python statement from string - codegen helper
+    fn parse_statement(&self, code: &str) -> anyhow::Result<Stmt> {
+        let module = ruff_python_parser::parse_module(code)
+            .with_context(|| format!("Failed to parse statement: {}", code))?;
+
+        module
+            .syntax()
+            .body
+            .clone()
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("No statement found in parsed code"))
+    }
+
     /// Generate bundled Python code from sorted modules using AST-based approach
     pub fn emit_bundle(&mut self, modules: &[&ModuleNode], entry_module: &str) -> Result<String> {
         // Create a main bundle AST that will contain everything
-        let mut bundle_ast = ast::ModModule {
+        let mut bundle_ast = ModModule {
             body: vec![
                 // Add shebang and header comments
                 self.create_comment_stmt("#!/usr/bin/env python3"),
@@ -123,7 +134,6 @@ impl CodeEmitter {
                 self.create_comment_stmt("# https://github.com/tinovyatkin/serpen"),
                 self.create_comment_stmt(""),
             ],
-            type_ignores: Vec::new(),
             range: Default::default(),
         };
 
@@ -136,11 +146,8 @@ impl CodeEmitter {
                 .with_context(|| format!("Failed to read module file: {:?}", module.path))?;
 
             // Parse into AST
-            let parsed = parse(&source, Mode::Module, "module")
+            let ast = ruff_python_parser::parse_module(&source)
                 .with_context(|| format!("Failed to parse module: {:?}", module.path))?;
-            let Mod::Module(ast) = parsed else {
-                return Err(anyhow::anyhow!("Expected module, got other AST node type"));
-            };
 
             // Analyze unused imports
             let mut unused_analyzer = UnusedImportAnalyzer::new();
@@ -159,13 +166,13 @@ impl CodeEmitter {
                 .collect();
 
             // Collect first-party imports from AST
-            let first_party_imports = self.collect_first_party_imports_from_ast(&ast)?;
+            let first_party_imports = self.collect_first_party_imports_from_ast(ast.syntax())?;
 
             // Store parsed data
             parsed_modules_data.insert(
                 module.path.clone(),
                 ParsedModuleData {
-                    ast,
+                    ast: ast.syntax().clone(),
                     unused_imports: module_unused_names.clone(),
                     first_party_imports,
                 },
@@ -190,7 +197,7 @@ impl CodeEmitter {
         }
 
         // Analyze name conflicts across all modules
-        let module_asts: Vec<(String, &ast::ModModule)> = modules
+        let module_asts: Vec<(String, &ModModule)> = modules
             .iter()
             .filter_map(|m| {
                 parsed_modules_data
@@ -311,13 +318,28 @@ impl CodeEmitter {
             bundle_ast.body.extend(entry_ast.body);
         }
 
-        // Generate the final Python code using the unparser
-        let mut unparser = Unparser::new();
+        // Generate the final Python code using ruff codegen with comment detection
+        let empty_parsed = ruff_python_parser::parse_module("")?;
+        let stylist = Stylist::from_tokens(empty_parsed.tokens(), "");
+
+        let mut code_parts = Vec::new();
+
         for stmt in &bundle_ast.body {
-            unparser.unparse_stmt(stmt);
+            let generator = Generator::from(&stylist);
+            let stmt_code = generator.stmt(stmt);
+
+            // Detect and convert string literal expressions that represent comments
+            let converted_code = self.convert_comment_strings(stmt_code);
+
+            // Skip pass statements that were placeholders
+            if converted_code.trim() == "pass" {
+                continue;
+            }
+
+            code_parts.push(converted_code);
         }
 
-        Ok(unparser.source)
+        Ok(code_parts.join("\n"))
     }
 
     /// Process a single module's AST to produce a transformed AST for bundling
@@ -328,29 +350,29 @@ impl CodeEmitter {
         parsed_data: &ParsedModuleData,
         import_strategy: &ImportStrategy,
         ast_rewriter: &mut AstRewriter,
-    ) -> Result<ast::ModModule> {
+    ) -> Result<ModModule> {
         log::info!("Processing module AST '{}'", module_name);
 
         // Create a transformed AST by cloning the original
         let mut transformed_ast = parsed_data.ast.clone();
 
-        // Remove first-party imports and unused imports using existing methods
-        self.remove_first_party_imports(&mut transformed_ast, &parsed_data.first_party_imports)?;
-        self.remove_unused_imports(&mut transformed_ast, &parsed_data.unused_imports)?;
-
-        // Apply AST rewriting for name conflict resolution
+        // Apply AST rewriting for name conflict resolution FIRST
         ast_rewriter.rewrite_module_ast(module_name, &mut transformed_ast)?;
 
-        // Apply import alias transformations using the Transformer trait
+        // Apply import alias transformations BEFORE removing imports
+        // This ensures that alias information is available when transforming expressions
         ast_rewriter.transform_module_ast(&mut transformed_ast)?;
+
+        // Remove first-party imports and unused imports AFTER transformations
+        self.remove_first_party_imports(&mut transformed_ast, &parsed_data.first_party_imports)?;
+        self.remove_unused_imports(&mut transformed_ast, &parsed_data.unused_imports)?;
 
         // Apply bundling strategy based on how this module is imported
         match import_strategy {
             ImportStrategy::ModuleImport => {
                 // For modules imported as "import module", create a module namespace using AST nodes
-                let module_ast = ast::ModModule {
+                let module_ast = ModModule {
                     body: self.create_module_namespace_ast(module_name, &transformed_ast)?,
-                    type_ignores: Vec::new(),
                     range: Default::default(),
                 };
                 Ok(module_ast)
@@ -367,18 +389,27 @@ impl CodeEmitter {
     fn create_module_namespace_ast(
         &mut self,
         module_name: &str,
-        module_ast: &ast::ModModule,
+        module_ast: &ModModule,
     ) -> Result<Vec<Stmt>> {
         // Start with the types import and namespace creation
         let mut namespace_stmts = self.create_module_namespace_structure(module_name)?;
 
-        // Convert the module code to a string for the exec call
+        // Convert the module AST to a string for the exec call
         // This is necessary because Python AST doesn't allow directly representing a module as an expression
-        let mut unparser = Unparser::new();
-        for stmt in &module_ast.body {
-            unparser.unparse_stmt(stmt);
-        }
-        let module_code = unparser.source;
+        let module_code = {
+            let empty_parsed = ruff_python_parser::parse_module("")?;
+            let stylist = Stylist::from_tokens(empty_parsed.tokens(), "");
+
+            // Generate code for each statement and combine them
+            let mut code_parts = Vec::new();
+            for stmt in &module_ast.body {
+                let generator = Generator::from(&stylist);
+                let stmt_code = generator.stmt(stmt);
+                code_parts.push(stmt_code);
+            }
+
+            code_parts.join("\n")
+        };
 
         // Add the exec call that will execute the module code in its namespace
         let exec_stmt = self.create_module_exec_statement(module_name, &module_code)?;
@@ -410,9 +441,9 @@ impl CodeEmitter {
 
         // 1. Add import types only if we created any namespaces
         if needs_import_types {
-            let import_types = ast::StmtImport {
-                names: vec![ast::Alias {
-                    name: "types".into(),
+            let import_types = StmtImport {
+                names: vec![Alias {
+                    name: Identifier::new("types", TextRange::default()),
                     asname: None,
                     range: Default::default(),
                 }],
@@ -454,214 +485,69 @@ impl CodeEmitter {
         Ok(statements)
     }
 
-    /// Create assignment statement for parent namespace
+    /// Create assignment statement for parent namespace using codegen approach
     fn create_parent_namespace_assignment(
         &self,
         parts: &[&str],
         i: usize,
         parent_name: &str,
-    ) -> Result<ast::StmtAssign> {
-        // Create assignment: parent = types.ModuleType('parent')
-        let parent_type_call = ast::ExprCall {
-            func: Box::new(ast::Expr::Attribute(ast::ExprAttribute {
-                value: Box::new(ast::Expr::Name(ast::ExprName {
-                    id: "types".into(),
-                    ctx: ast::ExprContext::Load,
-                    range: Default::default(),
-                })),
-                attr: "ModuleType".into(),
-                ctx: ast::ExprContext::Load,
-                range: Default::default(),
-            })),
-            args: vec![ast::Expr::Constant(ast::ExprConstant {
-                value: ast::Constant::Str(parent_name.into()),
-                kind: None,
-                range: Default::default(),
-            })],
-            keywords: vec![],
-            range: Default::default(),
-        };
-
-        // For nested modules, create the proper assignment target
-        let assignment_target = self.create_assignment_target(parts, i)?;
-
-        Ok(ast::StmtAssign {
-            targets: vec![assignment_target],
-            value: Box::new(ast::Expr::Call(parent_type_call)),
-            type_comment: None,
-            range: Default::default(),
-        })
-    }
-
-    /// Create assignment statement for main module namespace
-    fn create_main_module_assignment(&self, module_name: &str) -> Result<ast::StmtAssign> {
-        // 3. Create the main module: module_name = types.ModuleType('module_name')
-        let module_type_call = ast::ExprCall {
-            func: Box::new(ast::Expr::Attribute(ast::ExprAttribute {
-                value: Box::new(ast::Expr::Name(ast::ExprName {
-                    id: "types".into(),
-                    ctx: ast::ExprContext::Load,
-                    range: Default::default(),
-                })),
-                attr: "ModuleType".into(),
-                ctx: ast::ExprContext::Load,
-                range: Default::default(),
-            })),
-            args: vec![ast::Expr::Constant(ast::ExprConstant {
-                value: ast::Constant::Str(module_name.into()),
-                kind: None,
-                range: Default::default(),
-            })],
-            keywords: vec![],
-            range: Default::default(),
-        };
-
-        // Create the assignment target for the full module name
-        let main_assignment_target = if module_name.contains('.') {
-            // For "greetings.greeting", create "greetings.greeting = ..."
-            let parts: Vec<&str> = module_name.split('.').collect();
-            let mut attr_expr = ast::Expr::Name(ast::ExprName {
-                id: parts[0].into(),
-                ctx: ast::ExprContext::Load,
-                range: Default::default(),
-            });
-
-            for part in &parts[1..parts.len() - 1] {
-                attr_expr = ast::Expr::Attribute(ast::ExprAttribute {
-                    value: Box::new(attr_expr),
-                    attr: (*part).into(),
-                    ctx: ast::ExprContext::Load,
-                    range: Default::default(),
-                });
-            }
-
-            ast::Expr::Attribute(ast::ExprAttribute {
-                value: Box::new(attr_expr),
-                attr: parts[parts.len() - 1].into(),
-                ctx: ast::ExprContext::Store,
-                range: Default::default(),
-            })
-        } else {
-            // Simple module name
-            ast::Expr::Name(ast::ExprName {
-                id: module_name.into(),
-                ctx: ast::ExprContext::Store,
-                range: Default::default(),
-            })
-        };
-
-        Ok(ast::StmtAssign {
-            targets: vec![main_assignment_target],
-            value: Box::new(ast::Expr::Call(module_type_call)),
-            type_comment: None,
-            range: Default::default(),
-        })
-    }
-
-    /// Create assignment target for module namespace creation
-    fn create_assignment_target(&self, parts: &[&str], i: usize) -> Result<ast::Expr> {
-        if i == 1 {
+    ) -> Result<StmtAssign> {
+        // Generate the assignment statement as Python code
+        let assignment_target = if i == 1 {
             // Simple case: greetings = types.ModuleType('greetings')
-            Ok(ast::Expr::Name(ast::ExprName {
-                id: parts[0].into(),
-                ctx: ast::ExprContext::Store,
-                range: Default::default(),
-            }))
+            parts[0].to_string()
         } else {
             // Complex case: greetings.submodule = types.ModuleType('greetings.submodule')
-            let parent_parts: Vec<&str> = parts[..i].to_vec();
-            let mut attr_expr = ast::Expr::Name(ast::ExprName {
-                id: parent_parts[0].into(),
-                ctx: ast::ExprContext::Load,
-                range: Default::default(),
-            });
+            parts[..i].join(".")
+        };
 
-            for part in &parent_parts[1..parent_parts.len() - 1] {
-                attr_expr = ast::Expr::Attribute(ast::ExprAttribute {
-                    value: Box::new(attr_expr),
-                    attr: (*part).into(),
-                    ctx: ast::ExprContext::Load,
-                    range: Default::default(),
-                });
-            }
+        let assignment_code = format!(
+            "{} = types.ModuleType('{}')",
+            assignment_target, parent_name
+        );
 
-            Ok(ast::Expr::Attribute(ast::ExprAttribute {
-                value: Box::new(attr_expr),
-                attr: parent_parts[parent_parts.len() - 1].into(),
-                ctx: ast::ExprContext::Store,
-                range: Default::default(),
-            }))
+        // Parse the assignment statement
+        let stmt = self.parse_statement(&assignment_code)?;
+
+        // Extract the assignment from the parsed statement
+        match stmt {
+            Stmt::Assign(assign) => Ok(assign),
+            _ => Err(anyhow::anyhow!(
+                "Expected assignment statement, got: {:?}",
+                stmt
+            )),
+        }
+    }
+
+    /// Create assignment statement for main module namespace using codegen approach
+    fn create_main_module_assignment(&self, module_name: &str) -> Result<StmtAssign> {
+        // Generate the assignment statement as Python code
+        let assignment_code = format!("{} = types.ModuleType('{}')", module_name, module_name);
+
+        // Parse the assignment statement
+        let stmt = self.parse_statement(&assignment_code)?;
+
+        // Extract the assignment from the parsed statement
+        match stmt {
+            Stmt::Assign(assign) => Ok(assign),
+            _ => Err(anyhow::anyhow!(
+                "Expected assignment statement, got: {:?}",
+                stmt
+            )),
         }
     }
 
     /// Create an AST for the exec statement that executes module code in its namespace
     fn create_module_exec_statement(&self, module_name: &str, module_code: &str) -> Result<Stmt> {
-        // Create the module code string constant for the exec call
-        let module_code_constant = ast::ExprConstant {
-            value: ast::Constant::Str(module_code.to_string()),
-            kind: None,
-            range: Default::default(),
-        };
+        // Use Rust's Debug formatting to properly escape the string for Python
+        // This handles all the complex escaping cases including triple quotes, newlines, etc.
+        let escaped_code = format!("{:?}", module_code);
 
-        // Create the __dict__ access for the full module name
-        let module_dict_attr = if module_name.contains('.') {
-            // For nested modules like "greetings.greeting", build the attribute chain
-            let parts: Vec<&str> = module_name.split('.').collect();
-            let mut attr_expr = ast::Expr::Name(ast::ExprName {
-                id: parts[0].into(),
-                ctx: ast::ExprContext::Load,
-                range: Default::default(),
-            });
+        // Generate the exec statement - the escaped_code already has quotes
+        let exec_code = format!("exec({}, {}.__dict__)", escaped_code, module_name);
 
-            for part in &parts[1..] {
-                attr_expr = ast::Expr::Attribute(ast::ExprAttribute {
-                    value: Box::new(attr_expr),
-                    attr: (*part).into(),
-                    ctx: ast::ExprContext::Load,
-                    range: Default::default(),
-                });
-            }
-
-            ast::ExprAttribute {
-                value: Box::new(attr_expr),
-                attr: "__dict__".into(),
-                ctx: ast::ExprContext::Load,
-                range: Default::default(),
-            }
-        } else {
-            // Simple case for non-nested modules
-            ast::ExprAttribute {
-                value: Box::new(ast::Expr::Name(ast::ExprName {
-                    id: module_name.into(),
-                    ctx: ast::ExprContext::Load,
-                    range: Default::default(),
-                })),
-                attr: "__dict__".into(),
-                ctx: ast::ExprContext::Load,
-                range: Default::default(),
-            }
-        };
-
-        // Create the exec call with the module code string and the module's __dict__
-        let exec_call = ast::ExprCall {
-            func: Box::new(ast::Expr::Name(ast::ExprName {
-                id: "exec".into(),
-                ctx: ast::ExprContext::Load,
-                range: Default::default(),
-            })),
-            args: vec![
-                ast::Expr::Constant(module_code_constant),
-                ast::Expr::Attribute(module_dict_attr),
-            ],
-            keywords: vec![],
-            range: Default::default(),
-        };
-
-        // Create the exec statement
-        Ok(Stmt::Expr(ast::StmtExpr {
-            value: Box::new(ast::Expr::Call(exec_call)),
-            range: Default::default(),
-        }))
+        // Parse the exec statement
+        self.parse_statement(&exec_code)
     }
 
     /// Analyze how each module is imported by the entry module to determine bundling strategy
@@ -702,7 +588,7 @@ impl CodeEmitter {
     /// Process import statements for strategy analysis
     fn process_import_strategies(
         &self,
-        import_stmt: &ast::StmtImport,
+        import_stmt: &StmtImport,
         strategies: &mut HashMap<String, ImportStrategy>,
     ) {
         // `import module` - needs namespace
@@ -717,7 +603,7 @@ impl CodeEmitter {
     /// Process import-from statements for strategy analysis
     fn process_import_from_strategies(
         &self,
-        import_from_stmt: &ast::StmtImportFrom,
+        import_from_stmt: &StmtImportFrom,
         strategies: &mut HashMap<String, ImportStrategy>,
     ) {
         // `from module import ...` - needs direct inlining
@@ -740,7 +626,7 @@ impl CodeEmitter {
     /// Remove first-party imports from AST (they will be inlined)
     fn remove_first_party_imports(
         &self,
-        module: &mut ast::ModModule,
+        module: &mut ModModule,
         first_party_imports: &HashSet<String>,
     ) -> Result<()> {
         log::info!("Removing first-party imports: {:?}", first_party_imports);
@@ -767,7 +653,7 @@ impl CodeEmitter {
     /// Remove unused imports from AST
     fn remove_unused_imports(
         &self,
-        module: &mut ast::ModModule,
+        module: &mut ModModule,
         unused_imports: &HashSet<String>,
     ) -> Result<()> {
         module.body = self.filter_import_statements(&module.body, |import_name| {
@@ -816,7 +702,7 @@ impl CodeEmitter {
     /// Process a single import statement
     fn process_import_statement<F>(
         &self,
-        import_stmt: &ast::StmtImport,
+        import_stmt: &StmtImport,
         keep_predicate: &F,
         filtered_statements: &mut Vec<Stmt>,
     ) where
@@ -834,7 +720,7 @@ impl CodeEmitter {
     /// Process a single import-from statement
     fn process_import_from_statement<F>(
         &self,
-        import_from_stmt: &ast::StmtImportFrom,
+        import_from_stmt: &StmtImportFrom,
         keep_predicate: &F,
         filtered_statements: &mut Vec<Stmt>,
     ) where
@@ -855,11 +741,7 @@ impl CodeEmitter {
     }
 
     /// Filter aliases for regular import statements
-    fn filter_import_aliases<F>(
-        &self,
-        aliases: &[ast::Alias],
-        keep_predicate: &F,
-    ) -> Vec<ast::Alias>
+    fn filter_import_aliases<F>(&self, aliases: &[Alias], keep_predicate: &F) -> Vec<Alias>
     where
         F: Fn(&str) -> bool,
     {
@@ -874,11 +756,7 @@ impl CodeEmitter {
     }
 
     /// Filter aliases for import-from statements
-    fn filter_import_from_aliases<F>(
-        &self,
-        aliases: &[ast::Alias],
-        keep_predicate: &F,
-    ) -> Vec<ast::Alias>
+    fn filter_import_from_aliases<F>(&self, aliases: &[Alias], keep_predicate: &F) -> Vec<Alias>
     where
         F: Fn(&str) -> bool,
     {
@@ -899,7 +777,7 @@ impl CodeEmitter {
     /// Determine if an import-from statement's module should be kept
     fn should_keep_import_from_module<F>(
         &self,
-        import_from_stmt: &ast::StmtImportFrom,
+        import_from_stmt: &StmtImportFrom,
         keep_predicate: &F,
     ) -> bool
     where
@@ -914,10 +792,7 @@ impl CodeEmitter {
     }
 
     /// Collect first-party imports from AST instead of re-parsing source
-    fn collect_first_party_imports_from_ast(
-        &self,
-        module: &ast::ModModule,
-    ) -> Result<HashSet<String>> {
+    fn collect_first_party_imports_from_ast(&self, module: &ModModule) -> Result<HashSet<String>> {
         let mut first_party_imports = HashSet::new();
 
         for stmt in &module.body {
@@ -944,12 +819,12 @@ impl CodeEmitter {
     /// Helper to collect first-party imports from "from ... import" statements
     fn collect_first_party_from_import_from(
         &self,
-        import_from_stmt: &rustpython_parser::ast::StmtImportFrom,
+        import_from_stmt: &StmtImportFrom,
         imports: &mut HashSet<String>,
     ) {
         // Handle relative imports (e.g., `from . import x`) as first-party
         if import_from_stmt.module.is_none() {
-            if import_from_stmt.level.is_some() {
+            if import_from_stmt.level > 0 {
                 // Insert empty string marker for relative import
                 imports.insert(String::new());
             }
@@ -969,7 +844,7 @@ impl CodeEmitter {
     /// Helper to collect first-party imports from regular import statements
     fn collect_first_party_from_import(
         &self,
-        import_stmt: &rustpython_parser::ast::StmtImport,
+        import_stmt: &StmtImport,
         imports: &mut HashSet<String>,
     ) {
         for alias in &import_stmt.names {
@@ -1021,18 +896,48 @@ impl CodeEmitter {
         }
     }
 
-    /// Create a comment as a StmtExpr with string constant
+    /// Create a comment as a string literal expression - will be converted to proper comment later
     fn create_comment_stmt(&self, comment: &str) -> Stmt {
-        let comment_expr = ast::ExprConstant {
-            value: ast::Constant::Str(comment.to_string()),
-            kind: None,
-            range: Default::default(),
+        // Create string literal expressions that will be converted to comments during final output
+        let stmt_code = if comment.starts_with("#!/") || comment.starts_with('#') {
+            format!("\"{}\"", comment)
+        } else if comment.is_empty() {
+            "\"\"".to_string()
+        } else {
+            format!("\"# {}\"", comment)
         };
 
-        Stmt::Expr(ast::StmtExpr {
-            value: Box::new(ast::Expr::Constant(comment_expr)),
-            range: Default::default(),
+        self.parse_statement(&stmt_code).unwrap_or_else(|_| {
+            self.parse_statement("pass")
+                .unwrap_or_else(|_| panic!("Failed to create fallback statement"))
         })
+    }
+
+    /// Convert string literal expressions back to proper comments
+    fn convert_comment_strings(&self, code: String) -> String {
+        let trimmed = code.trim();
+
+        // Detect string literals that represent comments
+        if trimmed.starts_with('"') && trimmed.ends_with('"') {
+            let content = &trimmed[1..trimmed.len() - 1]; // Remove quotes
+
+            if content.starts_with("#!/") {
+                // Shebang
+                content.to_string()
+            } else if content.starts_with('#') {
+                // Comment
+                content.to_string()
+            } else if content.is_empty() {
+                // Empty line
+                "".to_string()
+            } else {
+                // Regular string literal, don't convert
+                code
+            }
+        } else {
+            // Not a string literal, return as-is
+            code
+        }
     }
 
     /// Create a module header comment
@@ -1067,12 +972,10 @@ mod tests {
 
         // This is just a simple test to verify the AST-based approach works
         let source = "import os\nimport sys\n";
-        if let Ok(rustpython_parser::ast::Mod::Module(module)) =
-            parse(source, Mode::Module, "<test>")
-        {
+        if let Ok(module) = ruff_python_parser::parse_module(source) {
             let keep_predicate = |_module: &str| true; // Keep all imports for this test
             let filtered = emitter
-                .filter_import_statements(&module.body, keep_predicate)
+                .filter_import_statements(&module.syntax().body, keep_predicate)
                 .unwrap();
 
             // Should keep both import statements
