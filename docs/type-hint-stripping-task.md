@@ -2,13 +2,12 @@
 
 We need to strip static type hints as they don't have any sense in the bundled source code.
 
-Minimal requirements would be:
-
-- stipping all type hints meta, including in string literal forms
-- strip `typing` and similar modules import
-- strip everything at `if typing.TYPE_CHECKING:` code branches
-- remove `from __future__ import annotations`
-- rewrite `typing.cast` function calls to just inner part
+Minimal requirements:
+- Strip all type hint metadata, including string literal annotations.
+- Remove imports of `typing` and related modules.
+- Eliminate code in `if typing.TYPE_CHECKING:` branches.
+- Remove `from __future__ import annotations` statements.
+- Rewrite `typing.cast(T, value)` calls to `value`.
 
 To approach this task we will start with research and creating and implementation strategy document / todo list.
 
