@@ -89,23 +89,18 @@ impl CodeEmitter {
     }
 
     /// Create an import statement using codegen approach
-    fn create_import_statement(&self, module_name: &str) -> Stmt {
+    fn create_import_statement(&self, module_name: &str) -> Option<Stmt> {
         // Check if the module name is already a formatted import statement
         if module_name.starts_with("import ") || module_name.starts_with("from ") {
-            // For pre-formatted imports, create a comment with the statement
-            self.create_comment_stmt(&format!("# {}", module_name))
+            // For pre-formatted imports, skip (these should be handled as comments separately)
+            None
         } else if self.is_valid_module_name(module_name) {
             // Generate import statement as string and parse it
             let import_code = format!("import {}", module_name);
-            self.parse_statement(&import_code).unwrap_or_else(|_| {
-                self.create_comment_stmt(&format!("# Error importing: {}", module_name))
-            })
+            self.parse_statement(&import_code).ok()
         } else {
-            // For unusual module names, add a warning comment
-            self.create_comment_stmt(&format!(
-                "# import {}  # Warning: unusual module name format",
-                module_name
-            ))
+            // For unusual module names, skip
+            None
         }
     }
 
@@ -219,36 +214,7 @@ impl CodeEmitter {
         stdlib_imports.retain(|import| !all_unused_imports.contains(import));
 
         // Add preserved imports at the top
-        if !stdlib_imports.is_empty() || !third_party_imports.is_empty() {
-            // Add preserved imports header comment
-            bundle_ast.body.push(self.create_preserved_imports_header());
-
-            // Standard library imports first
-            let mut sorted_stdlib: Vec<_> = stdlib_imports.into_iter().collect();
-            sorted_stdlib.sort();
-            for import in &sorted_stdlib {
-                // Create an import statement for standard library imports
-                let import_stmt = self.create_import_statement(import);
-                bundle_ast.body.push(import_stmt);
-            }
-
-            // Add an empty line comment between stdlib and third-party imports if both are present
-            if !sorted_stdlib.is_empty() && !third_party_imports.is_empty() {
-                bundle_ast.body.push(self.create_comment_stmt(""));
-            }
-
-            // Third-party imports
-            let mut sorted_third_party: Vec<_> = third_party_imports.into_iter().collect();
-            sorted_third_party.sort();
-            for import in sorted_third_party {
-                // Create an import statement for third-party imports
-                let import_stmt = self.create_import_statement(&import);
-                bundle_ast.body.push(import_stmt);
-            }
-
-            // Add an empty line comment after imports
-            bundle_ast.body.push(self.create_comment_stmt(""));
-        }
+        self.add_preserved_imports_to_bundle(&mut bundle_ast, stdlib_imports, third_party_imports);
 
         // Process each module in dependency order using AST transformations
         for module in modules {
@@ -328,7 +294,7 @@ impl CodeEmitter {
             let generator = Generator::from(&stylist);
             let stmt_code = generator.stmt(stmt);
 
-            // Detect and convert string literal expressions that represent comments
+            // Detect and convert marked string literals to comments
             let converted_code = self.convert_comment_strings(stmt_code);
 
             // Skip pass statements that were placeholders
@@ -896,16 +862,10 @@ impl CodeEmitter {
         }
     }
 
-    /// Create a comment as a string literal expression - will be converted to proper comment later
+    /// Create a comment as a string literal expression with a unique marker
     fn create_comment_stmt(&self, comment: &str) -> Stmt {
-        // Create string literal expressions that will be converted to comments during final output
-        let stmt_code = if comment.starts_with("#!/") || comment.starts_with('#') {
-            format!("\"{}\"", comment)
-        } else if comment.is_empty() {
-            "\"\"".to_string()
-        } else {
-            format!("\"# {}\"", comment)
-        };
+        // Use a unique marker that won't appear in normal Python code
+        let stmt_code = format!(r#""__SERPEN_COMMENT_MARKER__{}""#, comment);
 
         self.parse_statement(&stmt_code).unwrap_or_else(|_| {
             self.parse_statement("pass")
@@ -913,29 +873,18 @@ impl CodeEmitter {
         })
     }
 
-    /// Convert string literal expressions back to proper comments
+    /// Convert marked string literals back to proper comments
     fn convert_comment_strings(&self, code: String) -> String {
         let trimmed = code.trim();
 
-        // Detect string literals that represent comments
-        if trimmed.starts_with('"') && trimmed.ends_with('"') {
-            let content = &trimmed[1..trimmed.len() - 1]; // Remove quotes
-
-            if content.starts_with("#!/") {
-                // Shebang
-                content.to_string()
-            } else if content.starts_with('#') {
-                // Comment
-                content.to_string()
-            } else if content.is_empty() {
-                // Empty line
-                "".to_string()
-            } else {
-                // Regular string literal, don't convert
-                code
-            }
+        // Check for our specific marker
+        if trimmed.starts_with(r#""__SERPEN_COMMENT_MARKER__"#) && trimmed.ends_with('"') {
+            // Extract the comment content
+            let start_idx = r#""__SERPEN_COMMENT_MARKER__"#.len();
+            let content = &trimmed[start_idx..trimmed.len() - 1]; // Skip marker and quotes
+            content.to_string()
         } else {
-            // Not a string literal, return as-is
+            // Not a marked comment, return as-is
             code
         }
     }
@@ -953,6 +902,51 @@ impl CodeEmitter {
     /// Create preserved imports header comment
     fn create_preserved_imports_header(&self) -> Stmt {
         self.create_comment_stmt("# Preserved imports")
+    }
+
+    /// Add preserved imports to the bundle AST
+    fn add_preserved_imports_to_bundle(
+        &self,
+        bundle_ast: &mut ModModule,
+        stdlib_imports: HashSet<String>,
+        third_party_imports: HashSet<String>,
+    ) {
+        if stdlib_imports.is_empty() && third_party_imports.is_empty() {
+            return;
+        }
+
+        // Add preserved imports header comment
+        bundle_ast.body.push(self.create_preserved_imports_header());
+
+        // Standard library imports first
+        let mut sorted_stdlib: Vec<_> = stdlib_imports.into_iter().collect();
+        sorted_stdlib.sort();
+        for import in &sorted_stdlib {
+            // Create an import statement for standard library imports
+            let Some(import_stmt) = self.create_import_statement(import) else {
+                continue;
+            };
+            bundle_ast.body.push(import_stmt);
+        }
+
+        // Add an empty line comment between stdlib and third-party imports if both are present
+        if !sorted_stdlib.is_empty() && !third_party_imports.is_empty() {
+            bundle_ast.body.push(self.create_comment_stmt(""));
+        }
+
+        // Third-party imports
+        let mut sorted_third_party: Vec<_> = third_party_imports.into_iter().collect();
+        sorted_third_party.sort();
+        for import in sorted_third_party {
+            // Create an import statement for third-party imports
+            let Some(import_stmt) = self.create_import_statement(&import) else {
+                continue;
+            };
+            bundle_ast.body.push(import_stmt);
+        }
+
+        // Add an empty line comment after imports
+        bundle_ast.body.push(self.create_comment_stmt(""));
     }
 }
 
