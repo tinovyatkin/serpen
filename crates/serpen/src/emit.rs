@@ -88,6 +88,83 @@ impl CodeEmitter {
         (third_party_imports, stdlib_imports)
     }
 
+    /// Filter out imports that have alias assignments to avoid redundancy
+    /// Returns the aliased imports that need to be added separately
+    fn filter_aliased_imports(
+        &self,
+        third_party_imports: &mut HashSet<String>,
+        stdlib_imports: &mut HashSet<String>,
+        ast_rewriter: &AstRewriter,
+    ) -> ImportSets {
+        let import_aliases = ast_rewriter.import_aliases();
+
+        // Collect aliased modules that need to be imported for alias assignments
+        let mut aliased_third_party = HashSet::new();
+        let mut aliased_stdlib = HashSet::new();
+
+        for import_alias in import_aliases.values() {
+            if import_alias.has_explicit_alias && !import_alias.is_from_import {
+                let module_name = &import_alias.module_name;
+
+                // Check if this module was in third_party or stdlib imports
+                if third_party_imports.contains(module_name) {
+                    aliased_third_party.insert(module_name.clone());
+                    third_party_imports.remove(module_name);
+                } else if stdlib_imports.contains(module_name) {
+                    aliased_stdlib.insert(module_name.clone());
+                    stdlib_imports.remove(module_name);
+                }
+            }
+        }
+
+        let filtered_count = aliased_third_party.len() + aliased_stdlib.len();
+        if filtered_count > 0 {
+            log::debug!(
+                "Filtered {} aliased imports from preserved imports (will add separately)",
+                filtered_count
+            );
+        }
+
+        (aliased_third_party, aliased_stdlib)
+    }
+
+    /// Add aliased imports to the bundle separately (for alias assignments)
+    fn add_aliased_imports_to_bundle(
+        &self,
+        bundle_ast: &mut ModModule,
+        aliased_imports: ImportSets,
+    ) {
+        let (aliased_third_party, aliased_stdlib) = aliased_imports;
+
+        if aliased_third_party.is_empty() && aliased_stdlib.is_empty() {
+            return;
+        }
+
+        // Add comment for aliased imports section
+        bundle_ast.body.push(self.create_comment_stmt(""));
+        bundle_ast
+            .body
+            .push(self.create_comment_stmt("# Imports for alias assignments"));
+
+        // Add stdlib imports first
+        let mut sorted_stdlib: Vec<_> = aliased_stdlib.into_iter().collect();
+        sorted_stdlib.sort();
+        for import in sorted_stdlib {
+            if let Some(stmt) = self.create_import_statement(&import) {
+                bundle_ast.body.push(stmt);
+            }
+        }
+
+        // Add third-party imports
+        let mut sorted_third_party: Vec<_> = aliased_third_party.into_iter().collect();
+        sorted_third_party.sort();
+        for import in sorted_third_party {
+            if let Some(stmt) = self.create_import_statement(&import) {
+                bundle_ast.body.push(stmt);
+            }
+        }
+    }
+
     /// Create an import statement using codegen approach
     fn create_import_statement(&self, module_name: &str) -> Option<Stmt> {
         // Check if the module name is already a formatted import statement
@@ -213,8 +290,18 @@ impl CodeEmitter {
         third_party_imports.retain(|import| !all_unused_imports.contains(import));
         stdlib_imports.retain(|import| !all_unused_imports.contains(import));
 
+        // Filter out imports that have alias assignments to avoid redundancy
+        let aliased_imports = self.filter_aliased_imports(
+            &mut third_party_imports,
+            &mut stdlib_imports,
+            &ast_rewriter,
+        );
+
         // Add preserved imports at the top
         self.add_preserved_imports_to_bundle(&mut bundle_ast, stdlib_imports, third_party_imports);
+
+        // Add aliased imports separately (not in preserved imports section)
+        self.add_aliased_imports_to_bundle(&mut bundle_ast, aliased_imports);
 
         // Process each module in dependency order using AST transformations
         for module in modules {

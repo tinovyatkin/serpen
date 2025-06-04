@@ -1,6 +1,6 @@
 use anyhow::Result;
 use cow_utils::CowUtils;
-use ruff_python_ast::{self as ast, Expr, ExprContext, Identifier, Stmt};
+use ruff_python_ast::{self as ast, Alias, Expr, ExprContext, Identifier, Stmt};
 use ruff_python_stdlib::builtins;
 use ruff_text_size::TextRange;
 use std::collections::{HashMap, HashSet};
@@ -934,16 +934,137 @@ impl AstRewriter {
         info
     }
 
-    /// Transform module AST using the Transformer trait to apply import alias transformations
-    pub fn transform_module_ast(&mut self, _module_ast: &mut ast::ModModule) -> Result<()> {
-        // For bundled modules, we don't need to transform import aliases in the source code
-        // because the alias assignments will handle the mapping from alias names to actual classes
-        // Only apply transformations if there are no alias assignments being generated
+    /// Transform module AST to remove import statements that have alias assignments
+    pub fn transform_module_ast(&mut self, module_ast: &mut ast::ModModule) -> Result<()> {
+        // If we have import aliases, we need to remove the original import statements
+        // that have been replaced by alias assignments
+        if self.import_aliases.is_empty() {
+            log::debug!("No import aliases to transform");
+            return Ok(());
+        }
 
-        log::debug!("Skipping alias transformations - handled by alias assignments");
+        log::debug!(
+            "Transforming {} import statements with alias assignments",
+            self.import_aliases.len()
+        );
 
-        // No transformations needed - alias assignments handle the mapping
+        // Collect the modules and aliases that have alias assignments
+        let mut aliased_imports = HashSet::new();
+        let mut aliased_from_imports = HashMap::new();
+
+        for (alias_name, import_alias) in &self.import_aliases {
+            if import_alias.has_explicit_alias {
+                if import_alias.is_from_import {
+                    // For from imports, track module -> alias mappings
+                    aliased_from_imports
+                        .entry(import_alias.module_name.clone())
+                        .or_insert_with(HashSet::new)
+                        .insert(alias_name.clone());
+                } else {
+                    // For regular imports, track the module being aliased
+                    aliased_imports.insert(import_alias.module_name.clone());
+                }
+            }
+        }
+
+        // Filter out import statements that have alias assignments
+        let original_body = std::mem::take(&mut module_ast.body);
+        module_ast.body = original_body
+            .into_iter()
+            .filter_map(|stmt| {
+                self.filter_import_statement(stmt, &aliased_imports, &aliased_from_imports)
+            })
+            .collect();
+
+        log::debug!("Import transformation complete");
         Ok(())
+    }
+
+    /// Filter individual import statements based on alias assignments
+    fn filter_import_statement(
+        &self,
+        stmt: Stmt,
+        aliased_imports: &HashSet<String>,
+        aliased_from_imports: &HashMap<String, HashSet<String>>,
+    ) -> Option<Stmt> {
+        match &stmt {
+            Stmt::Import(import_stmt) => {
+                // Filter out aliased imports from regular import statements
+                let filtered_names: Vec<Alias> = import_stmt
+                    .names
+                    .iter()
+                    .filter(|alias| {
+                        let module_name = alias.name.as_str();
+                        // Keep the import if it's not aliased OR if it doesn't have an explicit alias
+                        !aliased_imports.contains(module_name) || alias.asname.is_none()
+                    })
+                    .cloned()
+                    .collect();
+
+                if filtered_names.is_empty() {
+                    // Remove the entire import statement if all imports are aliased
+                    None
+                } else if filtered_names.len() < import_stmt.names.len() {
+                    // Create a new import statement with only non-aliased imports
+                    Some(Stmt::Import(ast::StmtImport {
+                        names: filtered_names,
+                        range: import_stmt.range,
+                    }))
+                } else {
+                    // Keep the original statement
+                    Some(stmt)
+                }
+            }
+            Stmt::ImportFrom(import_from_stmt) => {
+                if let Some(module) = &import_from_stmt.module {
+                    let module_name = module.as_str();
+
+                    if let Some(aliased_names) = aliased_from_imports.get(module_name) {
+                        // Filter out aliased names from from import statements
+                        let filtered_names: Vec<Alias> = import_from_stmt
+                            .names
+                            .iter()
+                            .filter(|alias| {
+                                let import_name = if let Some(asname) = &alias.asname {
+                                    asname.as_str()
+                                } else {
+                                    alias.name.as_str()
+                                };
+                                // Keep the import if it's not in our aliased names
+                                !aliased_names.contains(import_name)
+                            })
+                            .cloned()
+                            .collect();
+
+                        if filtered_names.is_empty() {
+                            // Remove the entire from import statement if all imports are aliased
+                            None
+                        } else if filtered_names.len() < import_from_stmt.names.len() {
+                            // Create a new from import statement with only non-aliased imports
+                            Some(Stmt::ImportFrom(ast::StmtImportFrom {
+                                module: import_from_stmt.module.clone(),
+                                names: filtered_names,
+                                level: import_from_stmt.level,
+                                range: import_from_stmt.range,
+                            }))
+                        } else {
+                            // Keep the original statement
+                            Some(stmt)
+                        }
+                    } else {
+                        // Module not in aliased from imports, keep the statement
+                        Some(stmt)
+                    }
+                } else {
+                    // No module specified, keep the statement
+                    Some(stmt)
+                }
+            }
+            _ => {
+                // Not an import statement, keep it
+                Some(stmt)
+            }
+        }
     }
 }
 
@@ -952,34 +1073,3 @@ impl Default for AstRewriter {
         Self::new()
     }
 }
-
-// TODO: Replace Transformer with ruff visitor pattern
-// TODO: Replace Transformer with ruff visitor pattern
-// impl Transformer for AstRewriter {
-//     /// Override visit_expr_name to handle import alias transformations
-//     fn visit_expr_name(
-//         &mut self,
-//         mut expr: ast::ExprName,
-//     ) -> Option<ast::ExprName> {
-//         let name = expr.id.as_str();
-//
-//         // Check if this name will have an alias assignment generated for it
-//         // If so, don't apply renames - let the alias assignment handle it
-//         if self.will_have_alias_assignment(name) {
-//             return Some(expr);
-//         }
-//
-//         // Handle regular import aliases (non-from imports)
-//         if let Some(import_alias) = self.import_aliases.get(name) {
-//             if !import_alias.is_from_import {
-//                 self.transform_regular_import_alias(&mut expr, import_alias);
-//                 return Some(expr);
-//             }
-//         }
-//
-//         // Apply module-specific renames
-//         self.apply_module_renames(&mut expr);
-//
-//         Some(expr)
-//     }
-// } // End of Transformer impl - temporarily commented out
