@@ -30,7 +30,7 @@ def main():
     let module_ast = parsed.syntax();
 
     // Create AST rewriter and collect import aliases
-    let mut rewriter = AstRewriter::new();
+    let mut rewriter = AstRewriter::new(10); // Python 3.10
     rewriter.collect_import_aliases(module_ast, "test_module");
 
     // Verify that regular import aliases were collected correctly
@@ -146,7 +146,7 @@ def main():
     let module_ast = parsed.syntax();
 
     // Create AST rewriter and collect import aliases
-    let mut rewriter = AstRewriter::new();
+    let mut rewriter = AstRewriter::new(10); // Python 3.10
     rewriter.collect_import_aliases(module_ast, "test_module");
 
     let import_aliases = rewriter.import_aliases();
@@ -199,7 +199,7 @@ def main():
     let module_ast = parsed.syntax();
 
     // Create AST rewriter and collect import aliases
-    let mut rewriter = AstRewriter::new();
+    let mut rewriter = AstRewriter::new(10); // Python 3.10
     rewriter.collect_import_aliases(module_ast, "test_module");
 
     let import_aliases = rewriter.import_aliases();
@@ -254,7 +254,7 @@ def main():
     let module_ast = parsed.syntax();
 
     // Create AST rewriter and collect import aliases
-    let mut rewriter = AstRewriter::new();
+    let mut rewriter = AstRewriter::new(10); // Python 3.10
     rewriter.collect_import_aliases(module_ast, "test_module");
 
     let import_aliases = rewriter.import_aliases();

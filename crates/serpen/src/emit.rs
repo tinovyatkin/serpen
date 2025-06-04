@@ -252,7 +252,12 @@ impl CodeEmitter {
         }
 
         // Initialize AST rewriter for handling import aliases and name conflicts
-        let mut ast_rewriter = AstRewriter::new();
+        let python_version = self
+            .resolver
+            .config()
+            .python_version()
+            .context("Failed to parse target Python version")?;
+        let mut ast_rewriter = AstRewriter::new(python_version);
 
         // Collect import aliases from the entry module before they are removed
         if let Some(entry_module_data) = modules

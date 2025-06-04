@@ -7,7 +7,7 @@
                 "@upstash/context7-mcp"
             ]
         },
-        "rust-lsp": {
+        "lsp-rust": {
             "command": "mcp-language-server",
             "args": [
                 "--workspace",
@@ -16,7 +16,7 @@
                 "rust-analyzer"
             ]
         },
-        "python-lsp": {
+        "lsp-python": {
             "command": "mcp-language-server",
             "args": [
                 "--workspace",
@@ -27,7 +27,7 @@
                 "lsp"
             ]
         },
-        "toml-lsp": {
+        "lsp-toml": {
             "command": "mcp-language-server",
             "args": [
                 "--workspace",
@@ -36,6 +36,17 @@
                 "taplo",
                 "lsp",
                 "stdio"
+            ]
+        },
+        "lsp-yaml": {
+            "command": "mcp-language-server",
+            "args": [
+                "--workspace",
+                ".",
+                "--lsp",
+                "bunx",
+                "yaml-language-server",
+                "--stdio"
             ]
         }
     }

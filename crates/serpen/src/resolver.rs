@@ -8,20 +8,16 @@ use walkdir::WalkDir;
 use crate::config::Config;
 use ruff_python_stdlib::sys;
 
-/// Default Python version for standard library checks
-/// Using Python 3.10 as it's widely supported and includes modern features
-const DEFAULT_PYTHON_VERSION: u8 = 10;
-
 /// Check if a module is part of the Python standard library using ruff_python_stdlib
-fn is_stdlib_module(module_name: &str) -> bool {
+fn is_stdlib_module(module_name: &str, python_version: u8) -> bool {
     // Check direct match using ruff_python_stdlib
-    if sys::is_known_standard_library(DEFAULT_PYTHON_VERSION, module_name) {
+    if sys::is_known_standard_library(python_version, module_name) {
         return true;
     }
 
     // Check if it's a submodule of a stdlib module
     if let Some(top_level) = module_name.split('.').next() {
-        sys::is_known_standard_library(DEFAULT_PYTHON_VERSION, top_level)
+        sys::is_known_standard_library(python_version, top_level)
     } else {
         false
     }
@@ -630,8 +626,10 @@ impl ModuleResolver {
         }
 
         // Check if it's a standard library module
-        if is_stdlib_module(module_name) {
-            return ImportType::StandardLibrary;
+        if let Ok(python_version) = self.config.python_version() {
+            if is_stdlib_module(module_name, python_version) {
+                return ImportType::StandardLibrary;
+            }
         }
 
         // Check if it's explicitly configured as third-party
@@ -749,6 +747,11 @@ impl ModuleResolver {
     /// Get all discovered first-party modules
     pub fn get_first_party_modules(&self) -> &HashSet<String> {
         &self.first_party_modules
+    }
+
+    /// Get a reference to the configuration
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 }
 

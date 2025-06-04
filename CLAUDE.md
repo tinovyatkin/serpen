@@ -216,6 +216,12 @@ DO NOT use `cargo insta review` as that requires interactive input.
 - Always run tests and clippy after implementing a feature to make sure everything is working as expected
 - **ALWAYS fix all clippy errors in the code you editing after finishing implementing a feature**
 
+### LSP Tool Usage
+
+- **MANDATORY**: Always use LSP rename_symbol tool when renaming functions, structs, traits, or any other symbols in Rust code
+- This ensures all references across the codebase are updated consistently
+- For simple text edits that don't involve symbol renaming, continue using standard Edit/MultiEdit tools
+
 ### MANDATORY: Final Validation Before Claiming Success
 
 **🚨 CRITICAL REQUIREMENT 🚨**: Before claiming that any implementation is complete or successful, you MUST run the complete validation suite:

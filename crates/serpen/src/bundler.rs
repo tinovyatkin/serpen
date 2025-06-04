@@ -42,6 +42,11 @@ impl Bundler {
     ) -> Result<()> {
         info!("Starting bundle process");
         debug!("Entry: {:?}, Output: {:?}", entry_path, output_path);
+        debug!(
+            "Using target Python version: {} (Python 3.{})",
+            self.config.target_version,
+            self.config.python_version().unwrap_or(10)
+        );
 
         // Auto-detect the entry point's directory as a source directory
         if let Some(entry_dir) = entry_path.parent() {

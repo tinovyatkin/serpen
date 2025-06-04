@@ -5,10 +5,6 @@ use ruff_python_stdlib::{builtins, keyword};
 use ruff_text_size::TextRange;
 use std::collections::{HashMap, HashSet};
 
-/// Default Python version for builtin and keyword checks
-/// Using Python 3.10 as it's widely supported and includes modern features
-const DEFAULT_PYTHON_VERSION: u8 = 10;
-
 /// Scope type for tracking different kinds of scopes in Python
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScopeType {
@@ -69,15 +65,17 @@ pub struct AstRewriter {
     reserved_names: HashSet<String>,
     /// Symbol table for comprehensive scope analysis
     symbols: HashMap<String, Symbol>,
+    /// Python version for builtin checks
+    python_version: u8,
 }
 
 impl AstRewriter {
-    pub fn new() -> Self {
+    pub fn new(python_version: u8) -> Self {
         // Initialize reserved names with Python builtins and keywords using ruff_python_stdlib
         let mut reserved_names = HashSet::new();
 
-        // Add all Python built-ins for the default version
-        for builtin in builtins::python_builtins(DEFAULT_PYTHON_VERSION, false) {
+        // Add all Python built-ins for the specified version
+        for builtin in builtins::python_builtins(python_version, false) {
             reserved_names.insert(builtin.to_string());
         }
 
@@ -90,6 +88,7 @@ impl AstRewriter {
             module_renames: HashMap::new(),
             reserved_names,
             symbols: HashMap::new(),
+            python_version,
         }
     }
 
@@ -250,7 +249,7 @@ impl AstRewriter {
         match expr {
             Expr::Name(name) => {
                 // Skip built-ins using ruff_python_stdlib
-                if builtins::is_python_builtin(&name.id, DEFAULT_PYTHON_VERSION, false) {
+                if builtins::is_python_builtin(&name.id, self.python_version, false) {
                     return;
                 }
 
@@ -1070,7 +1069,7 @@ impl AstRewriter {
 
 impl Default for AstRewriter {
     fn default() -> Self {
-        Self::new()
+        Self::new(10) // Default to Python 3.10
     }
 }
 
@@ -1106,7 +1105,7 @@ mod tests {
 
     #[test]
     fn test_is_reserved_name_functionality() {
-        let ast_rewriter = AstRewriter::new();
+        let ast_rewriter = AstRewriter::new(10); // Python 3.10
 
         // Test that keywords are detected as reserved
         let keywords = ["def", "class", "if", "for", "import"];
