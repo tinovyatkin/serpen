@@ -6,7 +6,10 @@ use crate::ast_rewriter::AstRewriter;
 use crate::dependency_graph::ModuleNode;
 use crate::resolver::{ImportType, ModuleResolver};
 use crate::unused_imports_simple::UnusedImportAnalyzer;
-use ruff_python_ast::{Alias, Identifier, ModModule, Stmt, StmtAssign, StmtImport, StmtImportFrom};
+use ruff_python_ast::{
+    Alias, Arguments, Expr, ExprAttribute, ExprCall, ExprContext, ExprName, Identifier, ModModule,
+    Stmt, StmtAssign, StmtImport, StmtImportFrom,
+};
 use ruff_python_codegen::{Generator, Stylist};
 use ruff_python_parser;
 use ruff_text_size::TextRange;
@@ -165,34 +168,26 @@ impl CodeEmitter {
         }
     }
 
-    /// Create an import statement using codegen approach
+    /// Create an import statement using direct AST construction
     fn create_import_statement(&self, module_name: &str) -> Option<Stmt> {
         // Check if the module name is already a formatted import statement
         if module_name.starts_with("import ") || module_name.starts_with("from ") {
             // For pre-formatted imports, skip (these should be handled as comments separately)
             None
         } else if self.is_valid_module_name(module_name) {
-            // Generate import statement as string and parse it
-            let import_code = format!("import {}", module_name);
-            self.parse_statement(&import_code).ok()
+            // Construct import statement directly using AST nodes
+            Some(Stmt::Import(StmtImport {
+                names: vec![Alias {
+                    name: Identifier::new(module_name, TextRange::default()),
+                    asname: None,
+                    range: TextRange::default(),
+                }],
+                range: TextRange::default(),
+            }))
         } else {
             // For unusual module names, skip
             None
         }
-    }
-
-    /// Parse a Python statement from string - codegen helper
-    fn parse_statement(&self, code: &str) -> anyhow::Result<Stmt> {
-        let module = ruff_python_parser::parse_module(code)
-            .with_context(|| format!("Failed to parse statement: {}", code))?;
-
-        module
-            .syntax()
-            .body
-            .clone()
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("No statement found in parsed code"))
     }
 
     /// Generate bundled Python code from sorted modules using AST-based approach
@@ -538,69 +533,217 @@ impl CodeEmitter {
         Ok(statements)
     }
 
-    /// Create assignment statement for parent namespace using codegen approach
+    /// Create assignment statement for parent namespace using direct AST construction
     fn create_parent_namespace_assignment(
         &self,
         parts: &[&str],
         i: usize,
         parent_name: &str,
     ) -> Result<StmtAssign> {
-        // Generate the assignment statement as Python code
-        let assignment_target = if i == 1 {
-            // Simple case: greetings = types.ModuleType('greetings')
-            parts[0].to_string()
+        // Create the target expression (left side of assignment)
+        let target_expr = if i == 1 {
+            // Simple case: greetings = ...
+            Expr::Name(ExprName {
+                id: Identifier::new(parts[0], TextRange::default()).into(),
+                ctx: ExprContext::Store,
+                range: TextRange::default(),
+            })
         } else {
-            // Complex case: greetings.submodule = types.ModuleType('greetings.submodule')
-            parts[..i].join(".")
+            // Complex case: greetings.submodule = ...
+            let mut current_expr = Expr::Name(ExprName {
+                id: Identifier::new(parts[0], TextRange::default()).into(),
+                ctx: ExprContext::Load,
+                range: TextRange::default(),
+            });
+
+            // Build the attribute chain
+            for &part in &parts[1..i] {
+                current_expr = Expr::Attribute(ExprAttribute {
+                    value: Box::new(current_expr),
+                    attr: Identifier::new(part, TextRange::default()),
+                    ctx: ExprContext::Store,
+                    range: TextRange::default(),
+                });
+            }
+            current_expr
         };
 
-        let assignment_code = format!(
-            "{} = types.ModuleType('{}')",
-            assignment_target, parent_name
-        );
+        // Create the value expression: types.ModuleType('parent_name')
+        let value_expr = Expr::Call(ExprCall {
+            func: Box::new(Expr::Attribute(ExprAttribute {
+                value: Box::new(Expr::Name(ExprName {
+                    id: Identifier::new("types", TextRange::default()).into(),
+                    ctx: ExprContext::Load,
+                    range: TextRange::default(),
+                })),
+                attr: Identifier::new("ModuleType", TextRange::default()),
+                ctx: ExprContext::Load,
+                range: TextRange::default(),
+            })),
+            arguments: Arguments {
+                args: vec![Expr::StringLiteral(ruff_python_ast::ExprStringLiteral {
+                    value: ruff_python_ast::StringLiteralValue::single(
+                        ruff_python_ast::StringLiteral {
+                            range: TextRange::default(),
+                            value: parent_name.to_string().into_boxed_str(),
+                            flags: ruff_python_ast::StringLiteralFlags::empty(),
+                        },
+                    ),
+                    range: TextRange::default(),
+                })]
+                .into(),
+                keywords: vec![].into(),
+                range: TextRange::default(),
+            },
+            range: TextRange::default(),
+        });
 
-        // Parse the assignment statement
-        let stmt = self.parse_statement(&assignment_code)?;
-
-        // Extract the assignment from the parsed statement
-        match stmt {
-            Stmt::Assign(assign) => Ok(assign),
-            _ => Err(anyhow::anyhow!(
-                "Expected assignment statement, got: {:?}",
-                stmt
-            )),
-        }
+        Ok(StmtAssign {
+            targets: vec![target_expr],
+            value: Box::new(value_expr),
+            range: TextRange::default(),
+        })
     }
 
-    /// Create assignment statement for main module namespace using codegen approach
+    /// Create assignment statement for main module namespace using direct AST construction
     fn create_main_module_assignment(&self, module_name: &str) -> Result<StmtAssign> {
-        // Generate the assignment statement as Python code
-        let assignment_code = format!("{} = types.ModuleType('{}')", module_name, module_name);
+        // Create the target expression: module_name = ...
+        let target_expr = if module_name.contains('.') {
+            // Handle dotted module names like "greetings.greeting"
+            let parts: Vec<&str> = module_name.split('.').collect();
+            let mut current_expr = Expr::Name(ExprName {
+                id: Identifier::new(parts[0], TextRange::default()).into(),
+                ctx: ExprContext::Load,
+                range: TextRange::default(),
+            });
 
-        // Parse the assignment statement
-        let stmt = self.parse_statement(&assignment_code)?;
+            // Build the attribute chain, with the last part having Store context
+            for (idx, &part) in parts[1..].iter().enumerate() {
+                let is_last = idx == parts.len() - 2;
+                current_expr = Expr::Attribute(ExprAttribute {
+                    value: Box::new(current_expr),
+                    attr: Identifier::new(part, TextRange::default()),
+                    ctx: if is_last {
+                        ExprContext::Store
+                    } else {
+                        ExprContext::Load
+                    },
+                    range: TextRange::default(),
+                });
+            }
+            current_expr
+        } else {
+            // Simple module name
+            Expr::Name(ExprName {
+                id: Identifier::new(module_name, TextRange::default()).into(),
+                ctx: ExprContext::Store,
+                range: TextRange::default(),
+            })
+        };
 
-        // Extract the assignment from the parsed statement
-        match stmt {
-            Stmt::Assign(assign) => Ok(assign),
-            _ => Err(anyhow::anyhow!(
-                "Expected assignment statement, got: {:?}",
-                stmt
-            )),
-        }
+        // Create the value expression: types.ModuleType('module_name')
+        let value_expr = Expr::Call(ExprCall {
+            func: Box::new(Expr::Attribute(ExprAttribute {
+                value: Box::new(Expr::Name(ExprName {
+                    id: Identifier::new("types", TextRange::default()).into(),
+                    ctx: ExprContext::Load,
+                    range: TextRange::default(),
+                })),
+                attr: Identifier::new("ModuleType", TextRange::default()),
+                ctx: ExprContext::Load,
+                range: TextRange::default(),
+            })),
+            arguments: Arguments {
+                args: vec![Expr::StringLiteral(ruff_python_ast::ExprStringLiteral {
+                    value: ruff_python_ast::StringLiteralValue::single(
+                        ruff_python_ast::StringLiteral {
+                            range: TextRange::default(),
+                            value: module_name.to_string().into_boxed_str(),
+                            flags: ruff_python_ast::StringLiteralFlags::empty(),
+                        },
+                    ),
+                    range: TextRange::default(),
+                })]
+                .into(),
+                keywords: vec![].into(),
+                range: TextRange::default(),
+            },
+            range: TextRange::default(),
+        });
+
+        Ok(StmtAssign {
+            targets: vec![target_expr],
+            value: Box::new(value_expr),
+            range: TextRange::default(),
+        })
     }
 
     /// Create an AST for the exec statement that executes module code in its namespace
     fn create_module_exec_statement(&self, module_name: &str, module_code: &str) -> Result<Stmt> {
-        // Use Rust's Debug formatting to properly escape the string for Python
-        // This handles all the complex escaping cases including triple quotes, newlines, etc.
-        let escaped_code = format!("{:?}", module_code);
+        // Create the exec call: exec(module_code, module_name.__dict__)
+        let exec_call = Expr::Call(ExprCall {
+            func: Box::new(Expr::Name(ExprName {
+                id: Identifier::new("exec", TextRange::default()).into(),
+                ctx: ExprContext::Load,
+                range: TextRange::default(),
+            })),
+            arguments: Arguments {
+                args: vec![
+                    // First argument: the module code as a string literal
+                    Expr::StringLiteral(ruff_python_ast::ExprStringLiteral {
+                        value: ruff_python_ast::StringLiteralValue::single(
+                            ruff_python_ast::StringLiteral {
+                                range: TextRange::default(),
+                                value: module_code.to_string().into_boxed_str(),
+                                flags: ruff_python_ast::StringLiteralFlags::empty(),
+                            },
+                        ),
+                        range: TextRange::default(),
+                    }),
+                    // Second argument: module_name.__dict__
+                    Expr::Attribute(ExprAttribute {
+                        value: Box::new(if module_name.contains('.') {
+                            // Handle dotted module names
+                            let parts: Vec<&str> = module_name.split('.').collect();
+                            let mut current_expr = Expr::Name(ExprName {
+                                id: Identifier::new(parts[0], TextRange::default()).into(),
+                                ctx: ExprContext::Load,
+                                range: TextRange::default(),
+                            });
 
-        // Generate the exec statement - the escaped_code already has quotes
-        let exec_code = format!("exec({}, {}.__dict__)", escaped_code, module_name);
+                            for &part in &parts[1..] {
+                                current_expr = Expr::Attribute(ExprAttribute {
+                                    value: Box::new(current_expr),
+                                    attr: Identifier::new(part, TextRange::default()),
+                                    ctx: ExprContext::Load,
+                                    range: TextRange::default(),
+                                });
+                            }
+                            current_expr
+                        } else {
+                            // Simple module name
+                            Expr::Name(ExprName {
+                                id: Identifier::new(module_name, TextRange::default()).into(),
+                                ctx: ExprContext::Load,
+                                range: TextRange::default(),
+                            })
+                        }),
+                        attr: Identifier::new("__dict__", TextRange::default()),
+                        ctx: ExprContext::Load,
+                        range: TextRange::default(),
+                    }),
+                ]
+                .into(),
+                keywords: vec![].into(),
+                range: TextRange::default(),
+            },
+            range: TextRange::default(),
+        });
 
-        // Parse the exec statement
-        self.parse_statement(&exec_code)
+        Ok(Stmt::Expr(ruff_python_ast::StmtExpr {
+            value: Box::new(exec_call),
+            range: TextRange::default(),
+        }))
     }
 
     /// Analyze how each module is imported by the entry module to determine bundling strategy
@@ -952,11 +1095,21 @@ impl CodeEmitter {
     /// Create a comment as a string literal expression with a unique marker
     fn create_comment_stmt(&self, comment: &str) -> Stmt {
         // Use a unique marker that won't appear in normal Python code
-        let stmt_code = format!(r#""__SERPEN_COMMENT_MARKER__{}""#, comment);
+        let comment_content = format!("__SERPEN_COMMENT_MARKER__{}", comment);
 
-        self.parse_statement(&stmt_code).unwrap_or_else(|_| {
-            self.parse_statement("pass")
-                .unwrap_or_else(|_| panic!("Failed to create fallback statement"))
+        // Create a string literal expression statement
+        Stmt::Expr(ruff_python_ast::StmtExpr {
+            value: Box::new(Expr::StringLiteral(ruff_python_ast::ExprStringLiteral {
+                value: ruff_python_ast::StringLiteralValue::single(
+                    ruff_python_ast::StringLiteral {
+                        range: TextRange::default(),
+                        value: comment_content.into_boxed_str(),
+                        flags: ruff_python_ast::StringLiteralFlags::empty(),
+                    },
+                ),
+                range: TextRange::default(),
+            })),
+            range: TextRange::default(),
         })
     }
 
@@ -964,10 +1117,15 @@ impl CodeEmitter {
     fn convert_comment_strings(&self, code: String) -> String {
         let trimmed = code.trim();
 
-        // Check for our specific marker
-        if trimmed.starts_with(r#""__SERPEN_COMMENT_MARKER__"#) && trimmed.ends_with('"') {
+        // Check for our specific marker pattern - the generated code will be in quotes
+        if trimmed.starts_with("'__SERPEN_COMMENT_MARKER__") && trimmed.ends_with("'") {
             // Extract the comment content
-            let start_idx = r#""__SERPEN_COMMENT_MARKER__"#.len();
+            let start_idx = "'__SERPEN_COMMENT_MARKER__".len();
+            let content = &trimmed[start_idx..trimmed.len() - 1]; // Skip marker and quotes
+            content.to_string()
+        } else if trimmed.starts_with("\"__SERPEN_COMMENT_MARKER__") && trimmed.ends_with("\"") {
+            // Extract the comment content (double quotes)
+            let start_idx = "\"__SERPEN_COMMENT_MARKER__".len();
             let content = &trimmed[start_idx..trimmed.len() - 1]; // Skip marker and quotes
             content.to_string()
         } else {
