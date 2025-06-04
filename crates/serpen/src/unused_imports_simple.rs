@@ -497,20 +497,23 @@ impl UnusedImportAnalyzer {
     /// Track usage in f-string expression
     fn track_fstring_usage(&mut self, f_string: &ast::ExprFString) {
         for element in f_string.value.elements() {
-            let Some(interpolation) = element.as_interpolation() else {
-                continue;
-            };
+            match element {
+                ast::FStringElement::Expression(expr_element) => {
+                    // Track usage in the expression part of interpolated elements
+                    self.track_usage_in_expression(&expr_element.expression);
 
-            // Track usage in the expression part of interpolated elements
-            self.track_usage_in_expression(&interpolation.expression);
-
-            // Track usage in format spec if present
-            if let Some(format_spec) = &interpolation.format_spec {
-                // Inline usage in format-spec elements
-                for format_element in &format_spec.elements {
-                    if let Some(format_interpolation) = format_element.as_interpolation() {
-                        self.track_usage_in_expression(&format_interpolation.expression);
+                    // Track usage in format spec if present
+                    if let Some(format_spec) = &expr_element.format_spec {
+                        // Inline usage in format-spec elements
+                        for format_element in &format_spec.elements {
+                            if let ast::FStringElement::Expression(format_expr) = format_element {
+                                self.track_usage_in_expression(&format_expr.expression);
+                            }
+                        }
                     }
+                }
+                ast::FStringElement::Literal(_) => {
+                    // Literal elements don't contain expressions to track
                 }
             }
         }
