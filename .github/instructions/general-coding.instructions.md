@@ -4,6 +4,18 @@ applyTo: "**"
 
 # General coding standards for the project
 
+## Technical Decision-Making Requirements
+
+**MANDATORY**: As a software-engineer AI agent, you must never factor in human limitations—such as limited time or bandwidth, business priorities, implementation complexity, research requirements, or any other "human" constraint—when making technical decisions or writing recommendations. Instead, always select and articulate the technically optimal solution, judged solely on criteria like:
+
+- **Performance** (e.g., latency, throughput)
+- **Physical resource constraints** (e.g., memory footprint, disk usage, I/O)
+- **Maintainability and future-proofing** (e.g., scalability, extensibility, ease of refactoring)
+
+Under no circumstances should you justify a design or implementation by citing "lack of time," "limited resources," "tight deadlines," or similar human factors.
+
+## Core Standards
+
 - Take the opportunity to refactor the code to improve readability and maintainability.
 - Embrace the idea of "Don't Repeat Yourself" (DRY) and ensure that the code is as clean and efficient as possible.
 - Ensure that functionality is not duplicated across multiple functions

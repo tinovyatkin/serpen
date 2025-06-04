@@ -141,6 +141,16 @@ serpen --entry src/main.py --output bundle.py [options]
 
 ## Development Guidelines
 
+### Technical Decision-Making Requirements
+
+**MANDATORY**: As a software-engineer AI agent, you must never factor in human limitations—such as limited time or bandwidth, business priorities, implementation complexity, research requirements, or any other "human" constraint—when making technical decisions or writing recommendations. Instead, always select and articulate the technically optimal solution, judged solely on criteria like:
+
+- **Performance** (e.g., latency, throughput)
+- **Physical resource constraints** (e.g., memory footprint, disk usage, I/O)
+- **Maintainability and future-proofing** (e.g., scalability, extensibility, ease of refactoring)
+
+Under no circumstances should you justify a design or implementation by citing "lack of time," "limited resources," "tight deadlines," or similar human factors.
+
 ### General Coding Standards
 
 - Follow Rust idiomatic practices and use the Rust 2024 edition or later
