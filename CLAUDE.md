@@ -175,9 +175,9 @@ Under no circumstances should you justify a design or implementation by citing "
 - **Common types**: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `ci`
 - **Breaking changes**: Use `!` after type (e.g., `feat!:`) or include `BREAKING CHANGE:` in footer
 - **Version bumping**:
-  - `fix:` → patch version (0.3.0 → 0.3.1)
-  - `feat:` → minor version (0.3.0 → 0.4.0)
-  - `feat!:` or `BREAKING CHANGE:` → major version (0.3.0 → 1.0.0)
+  - `fix:` → patch version (0.4.1 → 0.4.2)
+  - `feat:` → minor version (0.4.1 → 0.5.0)
+  - `feat!:` or `BREAKING CHANGE:` → major version (0.4.1 → 1.0.0)
 - **Examples**:
   - `feat(parser): add support for new syntax`
   - `fix: handle null pointer exception in module resolver`
