@@ -25,8 +25,6 @@ pub fn user_serpen_config_dir() -> Option<PathBuf> {
 #[cfg(not(windows))]
 fn locate_system_config_xdg(value: Option<&str>) -> Option<PathBuf> {
     // On Linux and macOS, read the `XDG_CONFIG_DIRS` environment variable.
-
-    use std::path::Path;
     let default = "/etc/xdg";
     let config_dirs = value.filter(|s| !s.is_empty()).unwrap_or(default);
 
@@ -61,7 +59,7 @@ pub fn system_config_file() -> Option<PathBuf> {
     {
         env::var("SYSTEMDRIVE")
             .ok()
-            .and_then(|system_drive| locate_system_config_windows(format!("{system_drive}\\")))
+            .and_then(|system_drive| locate_system_config_windows(PathBuf::from(system_drive)))
     }
 
     #[cfg(not(windows))]

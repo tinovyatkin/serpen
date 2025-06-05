@@ -50,7 +50,7 @@ impl Combine for Config {
         Self {
             // For collections, higher precedence (self) completely replaces lower precedence (other)
             // if self has non-default values, otherwise use other
-            src: if self.src != vec![PathBuf::from("src"), PathBuf::from(".")] {
+            src: if self.src != Config::default().src {
                 self.src
             } else {
                 other.src
@@ -91,32 +91,41 @@ impl EnvConfig {
 
         // SERPEN_SRC - comma-separated list of source directories
         if let Ok(src_str) = env::var("SERPEN_SRC") {
-            config.src = Some(
-                src_str
-                    .split(',')
-                    .map(|s| PathBuf::from(s.trim()))
-                    .collect(),
-            );
+            let paths: Vec<PathBuf> = src_str
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from)
+                .collect();
+            if !paths.is_empty() {
+                config.src = Some(paths);
+            }
         }
 
         // SERPEN_KNOWN_FIRST_PARTY - comma-separated list of first-party modules
         if let Ok(first_party_str) = env::var("SERPEN_KNOWN_FIRST_PARTY") {
-            config.known_first_party = Some(
-                first_party_str
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .collect(),
-            );
+            let modules: HashSet<String> = first_party_str
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
+            if !modules.is_empty() {
+                config.known_first_party = Some(modules);
+            }
         }
 
         // SERPEN_KNOWN_THIRD_PARTY - comma-separated list of third-party modules
         if let Ok(third_party_str) = env::var("SERPEN_KNOWN_THIRD_PARTY") {
-            config.known_third_party = Some(
-                third_party_str
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .collect(),
-            );
+            let modules: HashSet<String> = third_party_str
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
+            if !modules.is_empty() {
+                config.known_third_party = Some(modules);
+            }
         }
 
         // SERPEN_PRESERVE_COMMENTS - boolean flag
@@ -359,6 +368,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_env_config_parsing() {
         // Test with environment variables set
         unsafe {
@@ -433,8 +443,15 @@ target-version = "py310"
 "#,
         )?;
 
-        // Change to temp directory
+        // Change to temp directory with guard for restoration
         let original_dir = env::current_dir()?;
+        struct DirGuard(PathBuf);
+        impl Drop for DirGuard {
+            fn drop(&mut self) {
+                let _ = env::set_current_dir(&self.0);
+            }
+        }
+        let _dir_guard = DirGuard(original_dir);
         env::set_current_dir(&temp_dir)?;
 
         // Set environment variable
@@ -450,8 +467,7 @@ target-version = "py310"
         assert_eq!(config.src, vec![PathBuf::from("project_src")]);
         assert!(config.preserve_comments);
 
-        // Clean up
-        env::set_current_dir(original_dir)?;
+        // Clean up environment variable
         unsafe {
             env::remove_var("SERPEN_TARGET_VERSION");
         }

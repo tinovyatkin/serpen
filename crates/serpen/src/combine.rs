@@ -32,8 +32,8 @@ impl_combine_or!(bool);
 impl_combine_or!(PathBuf);
 
 impl<T> Combine for Option<Vec<T>> {
-    /// Combine two vectors by extending the vector in `self` with the vector in `other`, if they're
-    /// both `Some`.
+    /// Combine two vectors by extending the higher precedence vector (`self`) with the lower
+    /// precedence vector (`other`), placing higher precedence items first.
     fn combine(self, other: Option<Vec<T>>) -> Option<Vec<T>> {
         match (self, other) {
             (Some(mut a), Some(b)) => {
