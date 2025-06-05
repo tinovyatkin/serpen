@@ -1,5 +1,3 @@
-#![allow(clippy::disallowed_types)]
-
 use anyhow::Result;
 use indexmap::{IndexMap, IndexSet};
 use ruff_python_ast::{self as ast, Expr, Stmt};
@@ -499,22 +497,31 @@ impl UnusedImportAnalyzer {
         for element in f_string.value.elements() {
             match element {
                 ast::FStringElement::Expression(expr_element) => {
-                    // Track usage in the expression part of interpolated elements
-                    self.track_usage_in_expression(&expr_element.expression);
-
-                    // Track usage in format spec if present
-                    if let Some(format_spec) = &expr_element.format_spec {
-                        // Inline usage in format-spec elements
-                        for format_element in &format_spec.elements {
-                            if let ast::FStringElement::Expression(format_expr) = format_element {
-                                self.track_usage_in_expression(&format_expr.expression);
-                            }
-                        }
-                    }
+                    self.track_fstring_expression_element(expr_element);
                 }
                 ast::FStringElement::Literal(_) => {
                     // Literal elements don't contain expressions to track
                 }
+            }
+        }
+    }
+
+    /// Track usage in a single f-string expression element
+    fn track_fstring_expression_element(&mut self, expr_element: &ast::FStringExpressionElement) {
+        // Track usage in the expression part of interpolated elements
+        self.track_usage_in_expression(&expr_element.expression);
+
+        // Track usage in format spec if present
+        if let Some(format_spec) = &expr_element.format_spec {
+            self.track_fstring_format_spec(format_spec);
+        }
+    }
+
+    /// Track usage in f-string format specification
+    fn track_fstring_format_spec(&mut self, format_spec: &ast::FStringFormatSpec) {
+        for format_element in &format_spec.elements {
+            if let ast::FStringElement::Expression(format_expr) = format_element {
+                self.track_usage_in_expression(&format_expr.expression);
             }
         }
     }
