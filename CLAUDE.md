@@ -183,6 +183,10 @@ Under no circumstances should you justify a design or implementation by citing "
   - `fix: handle null pointer exception in module resolver`
   - `chore: update dependencies`
   - `docs: improve CLI usage examples`
+  - `feat(ai): enhance Claude Code integration`
+  - `docs(ai): update CLAUDE.md configuration`
+
+- **Available scopes**: `parser`, `bundler`, `resolver`, `ast`, `emit`, `deps`, `config`, `cli`, `test`, `ci`, `docs`, `ai`, `build`, `npm`, `pypi`, `release`
 
 **Enforcement**:
 
