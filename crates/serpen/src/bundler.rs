@@ -368,8 +368,8 @@ impl Bundler {
                 continue;
             }
 
-            // Parse the module and extract imports
-            let imports = self.extract_imports(&module_path)?;
+            // Parse the module and extract imports (including module imports)
+            let imports = self.extract_imports_with_resolver(&module_path, resolver)?;
             debug!("Extracted imports from {}: {:?}", module_name, imports);
 
             // Store module data for later processing
@@ -439,6 +439,32 @@ impl Bundler {
         Ok(imports)
     }
 
+    /// Enhanced version of extract_imports that can check for module imports using a resolver
+    fn extract_imports_with_resolver(
+        &self,
+        file_path: &Path,
+        resolver: &mut ModuleResolver,
+    ) -> Result<Vec<String>> {
+        let source = fs::read_to_string(file_path)
+            .with_context(|| format!("Failed to read file: {:?}", file_path))?;
+
+        let parsed = ruff_python_parser::parse_module(&source)
+            .with_context(|| format!("Failed to parse Python file: {:?}", file_path))?;
+
+        let mut imports = Vec::new();
+
+        for stmt in parsed.syntax().body.iter() {
+            self.extract_imports_from_statement_with_resolver(
+                stmt,
+                &mut imports,
+                file_path,
+                resolver,
+            );
+        }
+
+        Ok(imports)
+    }
+
     /// Extract import module names from a single AST statement
     fn extract_imports_from_statement(
         &self,
@@ -456,6 +482,29 @@ impl Bundler {
             }
         } else if let Stmt::ImportFrom(import_from_stmt) = stmt {
             self.process_import_from_statement(import_from_stmt, imports, file_path);
+        }
+    }
+
+    /// Enhanced version that can detect module imports using a resolver
+    fn extract_imports_from_statement_with_resolver(
+        &self,
+        stmt: &Stmt,
+        imports: &mut Vec<String>,
+        file_path: &Path,
+        resolver: &mut ModuleResolver,
+    ) {
+        if let Stmt::Import(import_stmt) = stmt {
+            for alias in &import_stmt.names {
+                let module_name = alias.name.id.to_string();
+                imports.push(module_name);
+            }
+        } else if let Stmt::ImportFrom(import_from_stmt) = stmt {
+            self.process_import_from_statement_with_resolver(
+                import_from_stmt,
+                imports,
+                file_path,
+                resolver,
+            );
         }
     }
 
@@ -481,6 +530,29 @@ impl Bundler {
         }
     }
 
+    /// Enhanced version that can detect module imports using a resolver
+    fn process_import_from_statement_with_resolver(
+        &self,
+        import_from_stmt: &StmtImportFrom,
+        imports: &mut Vec<String>,
+        file_path: &Path,
+        resolver: &mut ModuleResolver,
+    ) {
+        let level = import_from_stmt.level;
+
+        if level == 0 {
+            self.process_absolute_import_with_resolver(import_from_stmt, imports, resolver);
+            return;
+        }
+
+        // Handle relative imports (use existing logic for now)
+        if let Some(base_module) = self.resolve_relative_import(file_path, level) {
+            self.process_resolved_relative_import(import_from_stmt, imports, &base_module);
+        } else {
+            self.process_fallback_relative_import(import_from_stmt, imports, level);
+        }
+    }
+
     /// Process absolute imports (level == 0)
     fn process_absolute_import(
         &self,
@@ -492,6 +564,37 @@ impl Bundler {
             // Avoid duplicate absolute imports (e.g., import importlib + from importlib import)
             if !imports.contains(&m) {
                 imports.push(m);
+            }
+        }
+    }
+
+    /// Enhanced version that can detect module imports using a resolver
+    fn process_absolute_import_with_resolver(
+        &self,
+        import_from_stmt: &StmtImportFrom,
+        imports: &mut Vec<String>,
+        resolver: &mut ModuleResolver,
+    ) {
+        if let Some(ref module) = import_from_stmt.module {
+            let m = module.id.to_string();
+            // Add the package/module being imported from
+            if !imports.contains(&m) {
+                imports.push(m.clone());
+            }
+
+            // Check if any of the imported names are actually modules
+            for alias in &import_from_stmt.names {
+                let imported_name = alias.name.id.to_string();
+                let full_module_name = format!("{}.{}", m, imported_name);
+
+                // Try to resolve the full module name to see if it's a module
+                if let Ok(Some(_)) = resolver.resolve_module_path(&full_module_name) {
+                    // This is a module import (e.g., from greetings import greeting)
+                    if !imports.contains(&full_module_name) {
+                        imports.push(full_module_name);
+                        debug!("Detected module import: {} from {}", imported_name, m);
+                    }
+                }
             }
         }
     }
