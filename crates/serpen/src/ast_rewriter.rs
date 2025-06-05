@@ -67,6 +67,8 @@ pub struct AstRewriter {
     reserved_names: IndexSet<String>,
     /// Symbol table for comprehensive scope analysis
     symbols: IndexMap<String, Symbol>,
+    /// Set of modules that are from __init__.py files
+    init_modules: IndexSet<String>,
     /// Python version for builtin checks
     python_version: u8,
 }
@@ -90,6 +92,7 @@ impl AstRewriter {
             module_renames: IndexMap::new(),
             reserved_names,
             symbols: IndexMap::new(),
+            init_modules: IndexSet::new(),
             python_version,
         }
     }
@@ -102,6 +105,11 @@ impl AstRewriter {
     /// Get module renames for a specific module
     pub fn get_module_renames(&self, module_name: &str) -> Option<&IndexMap<String, String>> {
         self.module_renames.get(module_name)
+    }
+
+    /// Set the modules that are from __init__.py files
+    pub fn set_init_modules(&mut self, init_modules: &IndexSet<String>) {
+        self.init_modules = init_modules.clone();
     }
 
     /// Collect import aliases from the entry module before they are removed
@@ -386,7 +394,8 @@ impl AstRewriter {
     /// Find if one of the modules is a package interface (__init__.py) for the others
     fn find_package_interface_module(&self, modules: &[String]) -> Option<String> {
         for module in modules {
-            if self.is_init_py_module(module) {
+            // Use the actual init_modules set instead of heuristic check
+            if self.init_modules.contains(module) {
                 // Check if other modules are submodules of this package
                 let package_prefix = format!("{}.", module);
                 if modules
@@ -1039,7 +1048,7 @@ impl AstRewriter {
         bundled_modules: &IndexMap<String, String>,
     ) -> Result<()> {
         // Only transform if this is an __init__.py file
-        if !self.is_init_py_module(module_name) {
+        if !self.init_modules.contains(module_name) {
             return Ok(());
         }
 
@@ -1090,27 +1099,6 @@ impl AstRewriter {
         }
 
         Ok(())
-    }
-
-    /// Check if a module name represents an __init__.py file
-    ///
-    /// This uses a heuristic based on the module name structure since we don't have
-    /// direct access to file paths in the AST rewriter. A module is considered to be
-    /// from __init__.py if it's a simple name (no dots) that could be a package.
-    fn is_init_py_module(&self, module_name: &str) -> bool {
-        // Basic validation
-        if module_name.is_empty() {
-            return false;
-        }
-
-        // A module from __init__.py typically:
-        // 1. Has no dots (is a top-level package name like "greetings")
-        // 2. Is not a standard library module
-        // 3. Could potentially have submodules
-
-        // Simple heuristic: if it's a package name without dots
-        // This avoids false positives for deeply nested modules like "greetings.sub.module"
-        !module_name.contains('.')
     }
 
     /// Transform attribute access expressions in statements

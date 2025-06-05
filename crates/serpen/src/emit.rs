@@ -270,6 +270,9 @@ impl CodeEmitter {
             .context("Failed to parse target Python version")?;
         let mut ast_rewriter = AstRewriter::new(python_version);
 
+        // Set the init_modules set so the AST rewriter can accurately identify package interfaces
+        ast_rewriter.set_init_modules(&self.init_modules);
+
         // Collect import aliases from the entry module before they are removed
         if let Some(entry_module_data) = modules
             .iter()
