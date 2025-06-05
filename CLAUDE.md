@@ -186,7 +186,11 @@ Under no circumstances should you justify a design or implementation by citing "
   - `feat(ai): enhance Claude Code integration`
   - `docs(ai): update CLAUDE.md configuration`
 
-- **Available scopes**: `parser`, `bundler`, `resolver`, `ast`, `emit`, `deps`, `config`, `cli`, `test`, `ci`, `docs`, `ai`, `build`, `npm`, `pypi`, `release`
+- **Available scopes**:
+  - **Core components**: `parser`, `bundler`, `resolver`, `ast`, `emit`, `deps`, `config`, `cli`
+  - **Testing & CI**: `test`, `ci`
+  - **Documentation & AI**: `docs`, `ai`
+  - **Build & packaging**: `build`, `npm`, `pypi`, `release`
 
 **Enforcement**:
 
