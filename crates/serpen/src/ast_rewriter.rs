@@ -1,9 +1,9 @@
 use anyhow::Result;
 use cow_utils::CowUtils;
+use indexmap::{IndexMap, IndexSet};
 use ruff_python_ast::{self as ast, Alias, Expr, ExprContext, Identifier, Stmt};
 use ruff_python_stdlib::{builtins, keyword};
 use ruff_text_size::TextRange;
-use std::collections::{HashMap, HashSet};
 
 /// Scope type for tracking different kinds of scopes in Python
 #[derive(Debug, Clone, PartialEq)]
@@ -52,21 +52,21 @@ pub struct NameConflict {
     /// Modules that define this name
     pub modules: Vec<String>,
     /// Renamed versions for each module
-    pub renamed_versions: HashMap<String, String>,
+    pub renamed_versions: IndexMap<String, String>,
 }
 
 /// AST rewriter for handling import aliases and name conflicts
 pub struct AstRewriter {
     /// Map of import aliases that need to be resolved in the entry module
-    import_aliases: HashMap<String, ImportAlias>,
+    import_aliases: IndexMap<String, ImportAlias>,
     /// Map of name conflicts and their resolutions
-    name_conflicts: HashMap<String, NameConflict>,
+    name_conflicts: IndexMap<String, NameConflict>,
     /// Map of renamed identifiers per module
-    module_renames: HashMap<String, HashMap<String, String>>,
+    module_renames: IndexMap<String, IndexMap<String, String>>,
     /// Set of all reserved names (builtins, keywords, already used names)
-    reserved_names: HashSet<String>,
+    reserved_names: IndexSet<String>,
     /// Symbol table for comprehensive scope analysis
-    symbols: HashMap<String, Symbol>,
+    symbols: IndexMap<String, Symbol>,
     /// Python version for builtin checks
     python_version: u8,
 }
@@ -74,7 +74,7 @@ pub struct AstRewriter {
 impl AstRewriter {
     pub fn new(python_version: u8) -> Self {
         // Initialize reserved names with Python builtins and keywords using ruff_python_stdlib
-        let mut reserved_names = HashSet::new();
+        let mut reserved_names = IndexSet::new();
 
         // Add all Python built-ins for the specified version
         for builtin in builtins::python_builtins(python_version, false) {
@@ -85,22 +85,22 @@ impl AstRewriter {
         // rather than pre-populating the set, for better maintainability
 
         Self {
-            import_aliases: HashMap::new(),
-            name_conflicts: HashMap::new(),
-            module_renames: HashMap::new(),
+            import_aliases: IndexMap::new(),
+            name_conflicts: IndexMap::new(),
+            module_renames: IndexMap::new(),
             reserved_names,
-            symbols: HashMap::new(),
+            symbols: IndexMap::new(),
             python_version,
         }
     }
 
     /// Public getter for import_aliases (for testing)
-    pub fn import_aliases(&self) -> &HashMap<String, ImportAlias> {
+    pub fn import_aliases(&self) -> &IndexMap<String, ImportAlias> {
         &self.import_aliases
     }
 
     /// Get module renames for a specific module
-    pub fn get_module_renames(&self, module_name: &str) -> Option<&HashMap<String, String>> {
+    pub fn get_module_renames(&self, module_name: &str) -> Option<&IndexMap<String, String>> {
         self.module_renames.get(module_name)
     }
 
@@ -321,8 +321,8 @@ impl AstRewriter {
     fn collect_module_level_identifiers(
         &self,
         modules: &[(String, &ast::ModModule)],
-    ) -> HashMap<String, Vec<String>> {
-        let mut name_to_modules: HashMap<String, Vec<String>> = HashMap::new();
+    ) -> IndexMap<String, Vec<String>> {
+        let mut name_to_modules: IndexMap<String, Vec<String>> = IndexMap::new();
 
         for (module_name, _) in modules {
             self.collect_symbols_for_module(module_name, &mut name_to_modules);
@@ -335,7 +335,7 @@ impl AstRewriter {
     fn collect_symbols_for_module(
         &self,
         module_name: &str,
-        name_to_modules: &mut HashMap<String, Vec<String>>,
+        name_to_modules: &mut IndexMap<String, Vec<String>>,
     ) {
         for (symbol_key, symbol) in &self.symbols {
             if self.is_conflictable_symbol(symbol_key, symbol, module_name) {
@@ -355,7 +355,7 @@ impl AstRewriter {
     }
 
     /// Generate conflict resolutions for conflicting names
-    fn generate_conflict_resolutions(&mut self, name_to_modules: HashMap<String, Vec<String>>) {
+    fn generate_conflict_resolutions(&mut self, name_to_modules: IndexMap<String, Vec<String>>) {
         for (name, modules) in name_to_modules {
             if modules.len() > 1 {
                 self.resolve_name_conflict(&name, &modules);
@@ -365,7 +365,7 @@ impl AstRewriter {
 
     /// Resolve a specific name conflict
     fn resolve_name_conflict(&mut self, name: &str, modules: &[String]) {
-        let mut renamed_versions = HashMap::new();
+        let mut renamed_versions = IndexMap::new();
 
         for module in modules {
             let renamed = self.generate_unique_name(name, module);
@@ -455,7 +455,7 @@ impl AstRewriter {
     fn apply_renames_to_ast(
         &self,
         statements: &mut Vec<Stmt>,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         for stmt in statements {
             self.apply_renames_to_stmt(stmt, renames)?;
@@ -467,7 +467,7 @@ impl AstRewriter {
     fn apply_renames_to_generators(
         &self,
         generators: &mut [ast::Comprehension],
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         for generator in generators {
             self.apply_renames_to_expr(&mut generator.target, renames)?;
@@ -483,7 +483,7 @@ impl AstRewriter {
     fn apply_renames_to_stmt(
         &self,
         stmt: &mut Stmt,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         match stmt {
             Stmt::FunctionDef(func_def) => self.apply_renames_to_function_def(func_def, renames),
@@ -506,7 +506,7 @@ impl AstRewriter {
     fn apply_renames_to_function_def(
         &self,
         func_def: &mut ast::StmtFunctionDef,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         if let Some(new_name) = renames.get(func_def.name.as_str()) {
             func_def.name = Identifier::new(new_name.clone(), TextRange::default());
@@ -521,7 +521,7 @@ impl AstRewriter {
     fn apply_renames_to_class_def(
         &self,
         class_def: &mut ast::StmtClassDef,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         if let Some(new_name) = renames.get(class_def.name.as_str()) {
             class_def.name = Identifier::new(new_name.clone(), TextRange::default());
@@ -533,7 +533,7 @@ impl AstRewriter {
     fn apply_renames_to_assign(
         &self,
         assign: &mut ast::StmtAssign,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         for target in &mut assign.targets {
             self.apply_renames_to_expr(target, renames)?;
@@ -545,7 +545,7 @@ impl AstRewriter {
     fn apply_renames_to_return(
         &self,
         return_stmt: &mut ast::StmtReturn,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         if let Some(value) = &mut return_stmt.value {
             self.apply_renames_to_expr(value, renames)?;
@@ -557,7 +557,7 @@ impl AstRewriter {
     fn apply_renames_to_if(
         &self,
         if_stmt: &mut ast::StmtIf,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         self.apply_renames_to_expr(&mut if_stmt.test, renames)?;
         self.apply_renames_to_ast(&mut if_stmt.body, renames)?;
@@ -575,7 +575,7 @@ impl AstRewriter {
     fn apply_renames_to_while(
         &self,
         while_stmt: &mut ast::StmtWhile,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         self.apply_renames_to_expr(&mut while_stmt.test, renames)?;
         self.apply_renames_to_ast(&mut while_stmt.body, renames)?;
@@ -586,7 +586,7 @@ impl AstRewriter {
     fn apply_renames_to_for(
         &self,
         for_stmt: &mut ast::StmtFor,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         self.apply_renames_to_expr(&mut for_stmt.target, renames)?;
         self.apply_renames_to_expr(&mut for_stmt.iter, renames)?;
@@ -598,7 +598,7 @@ impl AstRewriter {
     fn apply_renames_to_with(
         &self,
         with_stmt: &mut ast::StmtWith,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         for item in &mut with_stmt.items {
             self.apply_renames_to_expr(&mut item.context_expr, renames)?;
@@ -613,7 +613,7 @@ impl AstRewriter {
     fn apply_renames_to_try(
         &self,
         try_stmt: &mut ast::StmtTry,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         self.apply_renames_to_ast(&mut try_stmt.body, renames)?;
 
@@ -629,7 +629,7 @@ impl AstRewriter {
     fn apply_renames_to_exception_handler(
         &self,
         handler: &mut ast::ExceptHandler,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         let ast::ExceptHandler::ExceptHandler(except_data) = handler;
 
@@ -645,7 +645,7 @@ impl AstRewriter {
     fn apply_renames_to_exception_name(
         &self,
         name: &mut Option<Identifier>,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) {
         if let Some(name_ident) = name {
             if let Some(new_name) = renames.get(name_ident.as_str()) {
@@ -658,7 +658,7 @@ impl AstRewriter {
     fn apply_renames_to_aug_assign(
         &self,
         aug_assign: &mut ast::StmtAugAssign,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         self.apply_renames_to_expr(&mut aug_assign.target, renames)?;
         self.apply_renames_to_expr(&mut aug_assign.value, renames)
@@ -668,7 +668,7 @@ impl AstRewriter {
     fn apply_renames_to_ann_assign(
         &self,
         ann_assign: &mut ast::StmtAnnAssign,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         self.apply_renames_to_expr(&mut ann_assign.target, renames)?;
         self.apply_renames_to_expr(&mut ann_assign.annotation, renames)?;
@@ -682,7 +682,7 @@ impl AstRewriter {
     fn apply_renames_to_expr(
         &self,
         expr: &mut Expr,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         match expr {
             Expr::Name(name) => self.apply_renames_to_name(name, renames),
@@ -744,7 +744,7 @@ impl AstRewriter {
     fn apply_renames_to_name(
         &self,
         name: &mut ast::ExprName,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         if let Some(new_name) = renames.get(name.id.as_str()) {
             log::debug!("Renaming '{}' to '{}'", name.id.as_str(), new_name);
@@ -757,7 +757,7 @@ impl AstRewriter {
     fn apply_renames_to_call(
         &self,
         call: &mut ast::ExprCall,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         self.apply_renames_to_expr(&mut call.func, renames)?;
         for arg in &mut call.arguments.args {
@@ -773,7 +773,7 @@ impl AstRewriter {
     fn apply_renames_to_binop(
         &self,
         binop: &mut ast::ExprBinOp,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         self.apply_renames_to_expr(&mut binop.left, renames)?;
         self.apply_renames_to_expr(&mut binop.right, renames)
@@ -783,7 +783,7 @@ impl AstRewriter {
     fn apply_renames_to_compare(
         &self,
         compare: &mut ast::ExprCompare,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         self.apply_renames_to_expr(&mut compare.left, renames)?;
         for comparator in &mut compare.comparators {
@@ -796,7 +796,7 @@ impl AstRewriter {
     fn apply_renames_to_list(
         &self,
         list: &mut ast::ExprList,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         self.apply_renames_to_collection(&mut list.elts, renames)
     }
@@ -805,7 +805,7 @@ impl AstRewriter {
     fn apply_renames_to_dict(
         &self,
         dict: &mut ast::ExprDict,
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         for item in &mut dict.items {
             if let Some(key) = &mut item.key {
@@ -820,7 +820,7 @@ impl AstRewriter {
     fn apply_renames_to_collection(
         &self,
         elts: &mut [Expr],
-        renames: &HashMap<String, String>,
+        renames: &IndexMap<String, String>,
     ) -> Result<()> {
         for elt in elts {
             self.apply_renames_to_expr(elt, renames)?;
@@ -976,7 +976,7 @@ impl AstRewriter {
         &self,
         module_name: &str,
         module_ast: &mut ast::ModModule,
-        _bundled_modules: &HashMap<String, String>,
+        _bundled_modules: &IndexMap<String, String>,
     ) -> Result<()> {
         // Only transform if this is an __init__.py file
         if !self.is_init_py_module(module_name) {
@@ -989,7 +989,7 @@ impl AstRewriter {
         );
 
         // Build a mapping of imported module names to their bundled variables
-        let mut imported_modules = HashMap::new();
+        let mut imported_modules = IndexMap::new();
         let mut statements_to_remove = Vec::new();
 
         // Find relative import statements and build the mapping
@@ -1002,8 +1002,8 @@ impl AstRewriter {
                         // Map imported name to its bundled variable prefix
                         let module_prefix = format!(
                             "{}_{}",
-                            module_name.replace('.', "_"),
-                            imported_name.replace('.', "_")
+                            module_name.cow_replace('.', "_"),
+                            imported_name.cow_replace('.', "_")
                         );
                         imported_modules.insert(imported_name.to_string(), module_prefix);
                     }
@@ -1043,7 +1043,7 @@ impl AstRewriter {
         &self,
         module_name: &str,
         _import_from: &ast::StmtImportFrom,
-        _bundled_modules: &HashMap<String, String>,
+        _bundled_modules: &IndexMap<String, String>,
     ) -> Result<Vec<Stmt>> {
         // For relative imports in __init__.py, we need a different approach
         // Instead of creating module objects, we should directly map to bundled variables
@@ -1145,7 +1145,7 @@ impl AstRewriter {
     fn transform_attribute_access_in_statements(
         &self,
         statements: &mut [Stmt],
-        imported_modules: &HashMap<String, String>,
+        imported_modules: &IndexMap<String, String>,
     ) -> Result<()> {
         for stmt in statements {
             self.transform_attribute_access_in_stmt(stmt, imported_modules)?;
@@ -1157,7 +1157,7 @@ impl AstRewriter {
     fn transform_attribute_access_in_stmt(
         &self,
         stmt: &mut Stmt,
-        imported_modules: &HashMap<String, String>,
+        imported_modules: &IndexMap<String, String>,
     ) -> Result<()> {
         match stmt {
             Stmt::Assign(assign) => {
@@ -1179,7 +1179,7 @@ impl AstRewriter {
     fn transform_attribute_access_in_expr(
         &self,
         expr: &mut Expr,
-        imported_modules: &HashMap<String, String>,
+        imported_modules: &IndexMap<String, String>,
     ) -> Result<()> {
         match expr {
             Expr::Attribute(attr) => {
@@ -1231,8 +1231,8 @@ impl AstRewriter {
         );
 
         // Collect the modules and aliases that have alias assignments
-        let mut aliased_imports = HashSet::new();
-        let mut aliased_from_imports = HashMap::new();
+        let mut aliased_imports = IndexSet::new();
+        let mut aliased_from_imports = IndexMap::new();
 
         for (alias_name, import_alias) in &self.import_aliases {
             if import_alias.has_explicit_alias {
@@ -1240,7 +1240,7 @@ impl AstRewriter {
                     // For from imports, track module -> alias mappings
                     aliased_from_imports
                         .entry(import_alias.module_name.clone())
-                        .or_insert_with(HashSet::new)
+                        .or_insert_with(IndexSet::new)
                         .insert(alias_name.clone());
                 } else {
                     // For regular imports, track the module being aliased
@@ -1266,8 +1266,8 @@ impl AstRewriter {
     fn filter_import_statement(
         &self,
         stmt: Stmt,
-        aliased_imports: &HashSet<String>,
-        aliased_from_imports: &HashMap<String, HashSet<String>>,
+        aliased_imports: &IndexSet<String>,
+        aliased_from_imports: &IndexMap<String, IndexSet<String>>,
     ) -> Option<Stmt> {
         match &stmt {
             Stmt::Import(import_stmt) => {

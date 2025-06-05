@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::collections::{HashMap, HashSet};
+use indexmap::{IndexMap, IndexSet};
 use std::fs;
 
 use crate::ast_rewriter::AstRewriter;
@@ -15,13 +15,13 @@ use ruff_python_parser;
 use ruff_text_size::TextRange;
 
 /// Type alias for import sets to reduce complexity
-type ImportSets = (HashSet<String>, HashSet<String>);
+type ImportSets = (IndexSet<String>, IndexSet<String>);
 
 /// Pre-parsed module data with AST for efficient processing
 struct ParsedModuleData {
     ast: ModModule,
-    unused_imports: HashSet<String>,
-    first_party_imports: HashSet<String>,
+    unused_imports: IndexSet<String>,
+    first_party_imports: IndexSet<String>,
 }
 
 /// Import strategy for how a module should be bundled
@@ -40,11 +40,11 @@ pub struct CodeEmitter {
     _preserve_comments: bool,
     _preserve_type_hints: bool,
     /// Track which parent namespaces have already been created to avoid duplicates
-    created_namespaces: HashSet<String>,
+    created_namespaces: IndexSet<String>,
     /// Track which modules are from __init__.py files
-    init_modules: HashSet<String>,
+    init_modules: IndexSet<String>,
     /// Track bundled variable names for each module
-    bundled_variables: HashMap<String, HashMap<String, String>>,
+    bundled_variables: IndexMap<String, IndexMap<String, String>>,
 }
 
 impl CodeEmitter {
@@ -57,9 +57,9 @@ impl CodeEmitter {
             resolver,
             _preserve_comments: preserve_comments,
             _preserve_type_hints: preserve_type_hints,
-            created_namespaces: HashSet::new(),
-            init_modules: HashSet::new(),
-            bundled_variables: HashMap::new(),
+            created_namespaces: IndexSet::new(),
+            init_modules: IndexSet::new(),
+            bundled_variables: IndexMap::new(),
         }
     }
 
@@ -67,8 +67,8 @@ impl CodeEmitter {
     fn classify_and_add_import(
         &self,
         import: &str,
-        third_party_imports: &mut HashSet<String>,
-        stdlib_imports: &mut HashSet<String>,
+        third_party_imports: &mut IndexSet<String>,
+        stdlib_imports: &mut IndexSet<String>,
     ) {
         match self.resolver.classify_import(import) {
             ImportType::ThirdParty => {
@@ -85,8 +85,8 @@ impl CodeEmitter {
 
     /// Collect imports and categorize them by type
     fn collect_import_sets(&self, modules: &[&ModuleNode]) -> ImportSets {
-        let mut third_party_imports = HashSet::new();
-        let mut stdlib_imports = HashSet::new();
+        let mut third_party_imports = IndexSet::new();
+        let mut stdlib_imports = IndexSet::new();
 
         for module in modules {
             for import in &module.imports {
@@ -101,15 +101,15 @@ impl CodeEmitter {
     /// Returns the aliased imports that need to be added separately
     fn filter_aliased_imports(
         &self,
-        third_party_imports: &mut HashSet<String>,
-        stdlib_imports: &mut HashSet<String>,
+        third_party_imports: &mut IndexSet<String>,
+        stdlib_imports: &mut IndexSet<String>,
         ast_rewriter: &AstRewriter,
     ) -> ImportSets {
         let import_aliases = ast_rewriter.import_aliases();
 
         // Collect aliased modules that need to be imported for alias assignments
-        let mut aliased_third_party = HashSet::new();
-        let mut aliased_stdlib = HashSet::new();
+        let mut aliased_third_party = IndexSet::new();
+        let mut aliased_stdlib = IndexSet::new();
 
         for import_alias in import_aliases.values() {
             if import_alias.has_explicit_alias && !import_alias.is_from_import {
@@ -118,10 +118,10 @@ impl CodeEmitter {
                 // Check if this module was in third_party or stdlib imports
                 if third_party_imports.contains(module_name) {
                     aliased_third_party.insert(module_name.clone());
-                    third_party_imports.remove(module_name);
+                    third_party_imports.shift_remove(module_name);
                 } else if stdlib_imports.contains(module_name) {
                     aliased_stdlib.insert(module_name.clone());
-                    stdlib_imports.remove(module_name);
+                    stdlib_imports.shift_remove(module_name);
                 }
             }
         }
@@ -211,8 +211,8 @@ impl CodeEmitter {
         };
 
         // Parse all modules once and store AST + metadata
-        let mut all_unused_imports = HashSet::new();
-        let mut parsed_modules_data = HashMap::new();
+        let mut all_unused_imports = IndexSet::new();
+        let mut parsed_modules_data = IndexMap::new();
 
         for module in modules {
             // Check if this module is from an __init__.py file
@@ -244,7 +244,7 @@ impl CodeEmitter {
                 Vec::new()
             });
 
-            let module_unused_names: HashSet<String> = unused_imports
+            let module_unused_names: IndexSet<String> = unused_imports
                 .iter()
                 .map(|import| import.name.clone())
                 .collect();
@@ -287,7 +287,7 @@ impl CodeEmitter {
 
         // Pre-compute module import flags based on resolver information
         let module_flags = {
-            let mut flags = std::collections::HashMap::new();
+            let mut flags = IndexMap::new();
             for import_alias in ast_rewriter.import_aliases().values() {
                 if import_alias.is_from_import {
                     let full_module_name = format!(
@@ -864,9 +864,9 @@ impl CodeEmitter {
         &self,
         modules: &[&ModuleNode],
         entry_module: &str,
-        parsed_modules_data: &HashMap<std::path::PathBuf, ParsedModuleData>,
-    ) -> Result<HashMap<String, ImportStrategy>> {
-        let mut strategies = HashMap::new();
+        parsed_modules_data: &IndexMap<std::path::PathBuf, ParsedModuleData>,
+    ) -> Result<IndexMap<String, ImportStrategy>> {
+        let mut strategies = IndexMap::new();
 
         // Find the entry module data
         let entry_module_node = modules
@@ -898,7 +898,7 @@ impl CodeEmitter {
     fn process_import_strategies(
         &self,
         import_stmt: &StmtImport,
-        strategies: &mut HashMap<String, ImportStrategy>,
+        strategies: &mut IndexMap<String, ImportStrategy>,
     ) {
         // `import module` - needs namespace
         for alias in &import_stmt.names {
@@ -913,7 +913,7 @@ impl CodeEmitter {
     fn process_import_from_strategies(
         &self,
         import_from_stmt: &StmtImportFrom,
-        strategies: &mut HashMap<String, ImportStrategy>,
+        strategies: &mut IndexMap<String, ImportStrategy>,
     ) {
         // `from module import ...` - needs direct inlining
         if let Some(module) = &import_from_stmt.module {
@@ -947,7 +947,7 @@ impl CodeEmitter {
     fn remove_first_party_imports(
         &self,
         module: &mut ModModule,
-        first_party_imports: &HashSet<String>,
+        first_party_imports: &IndexSet<String>,
     ) -> Result<()> {
         log::info!("Removing first-party imports: {:?}", first_party_imports);
         module.body = self.filter_import_statements(&module.body, |import_name| {
@@ -974,7 +974,7 @@ impl CodeEmitter {
     fn remove_unused_imports(
         &self,
         module: &mut ModModule,
-        unused_imports: &HashSet<String>,
+        unused_imports: &IndexSet<String>,
     ) -> Result<()> {
         module.body = self.filter_import_statements(&module.body, |import_name| {
             !unused_imports.contains(import_name)
@@ -1112,8 +1112,8 @@ impl CodeEmitter {
     }
 
     /// Collect first-party imports from AST instead of re-parsing source
-    fn collect_first_party_imports_from_ast(&self, module: &ModModule) -> Result<HashSet<String>> {
-        let mut first_party_imports = HashSet::new();
+    fn collect_first_party_imports_from_ast(&self, module: &ModModule) -> Result<IndexSet<String>> {
+        let mut first_party_imports = IndexSet::new();
 
         for stmt in &module.body {
             self.collect_first_party_from_statement(stmt, &mut first_party_imports);
@@ -1124,7 +1124,7 @@ impl CodeEmitter {
     }
 
     /// Extract first-party imports from an AST statement
-    fn collect_first_party_from_statement(&self, stmt: &Stmt, imports: &mut HashSet<String>) {
+    fn collect_first_party_from_statement(&self, stmt: &Stmt, imports: &mut IndexSet<String>) {
         match stmt {
             Stmt::Import(import_stmt) => {
                 self.collect_first_party_from_import(import_stmt, imports);
@@ -1140,7 +1140,7 @@ impl CodeEmitter {
     fn collect_first_party_from_import_from(
         &self,
         import_from_stmt: &StmtImportFrom,
-        imports: &mut HashSet<String>,
+        imports: &mut IndexSet<String>,
     ) {
         // Handle relative imports (e.g., `from . import x`) as first-party
         if import_from_stmt.module.is_none() {
@@ -1165,7 +1165,7 @@ impl CodeEmitter {
     fn collect_first_party_from_import(
         &self,
         import_stmt: &StmtImport,
-        imports: &mut HashSet<String>,
+        imports: &mut IndexSet<String>,
     ) {
         for alias in &import_stmt.names {
             let import_name = alias.name.as_str();
@@ -1189,7 +1189,7 @@ impl CodeEmitter {
 
     /// Generate requirements.txt content from third-party imports
     pub fn generate_requirements(&mut self, modules: &[&ModuleNode]) -> Result<String> {
-        let mut third_party_imports = HashSet::new();
+        let mut third_party_imports = IndexSet::new();
 
         for module in modules {
             self.collect_third_party_imports_from_module(module, &mut third_party_imports);
@@ -1205,7 +1205,7 @@ impl CodeEmitter {
     fn collect_third_party_imports_from_module(
         &mut self,
         module: &ModuleNode,
-        third_party_imports: &mut HashSet<String>,
+        third_party_imports: &mut IndexSet<String>,
     ) {
         for import in &module.imports {
             if let ImportType::ThirdParty = self.resolver.classify_import(import) {
@@ -1277,8 +1277,8 @@ impl CodeEmitter {
     fn add_preserved_imports_to_bundle(
         &self,
         bundle_ast: &mut ModModule,
-        stdlib_imports: HashSet<String>,
-        third_party_imports: HashSet<String>,
+        stdlib_imports: IndexSet<String>,
+        third_party_imports: IndexSet<String>,
     ) {
         if stdlib_imports.is_empty() && third_party_imports.is_empty() {
             return;
@@ -1320,8 +1320,8 @@ impl CodeEmitter {
 
     /// Create a mapping of module names to their bundled variable names
     /// This is used for transforming relative imports in __init__.py files
-    fn create_bundled_modules_mapping(&self) -> HashMap<String, String> {
-        let mut mapping = HashMap::new();
+    fn create_bundled_modules_mapping(&self) -> IndexMap<String, String> {
+        let mut mapping = IndexMap::new();
 
         for (module_name, variables) in &self.bundled_variables {
             for (original_name, bundled_name) in variables {
