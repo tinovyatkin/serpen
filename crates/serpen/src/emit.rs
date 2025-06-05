@@ -216,13 +216,7 @@ impl CodeEmitter {
 
         for module in modules {
             // Check if this module is from an __init__.py file
-            if module
-                .path
-                .file_name()
-                .and_then(|f| f.to_str())
-                .map(|name| name == "__init__.py")
-                .unwrap_or(false)
-            {
+            if module.path.file_name() == Some(std::ffi::OsStr::new("__init__.py")) {
                 self.init_modules.insert(module.name.clone());
             }
 
@@ -755,10 +749,13 @@ impl CodeEmitter {
     }
 
     /// Create statements to expose renamed variables with their original names
+    ///
+    /// TODO: This method is a placeholder that needs dynamic implementation.
+    /// It should analyze the module's exports and create appropriate variable
+    /// exposure statements based on the actual renames that occurred during
+    /// conflict resolution. Currently returns empty to avoid hardcoding values.
     fn create_variable_exposure_statements(&self, _module_name: &str) -> Result<Vec<Stmt>> {
-        // This method needs to be implemented to dynamically determine which variables
-        // need to be exposed based on the actual renames that occurred
-        // For now, return empty to avoid hardcoding test values
+        // Placeholder implementation - needs dynamic variable exposure logic
         Ok(Vec::new())
     }
 

@@ -1086,119 +1086,24 @@ impl AstRewriter {
     }
 
     /// Check if a module name represents an __init__.py file
+    ///
+    /// This uses a heuristic based on the module name structure since we don't have
+    /// direct access to file paths in the AST rewriter. A module is considered to be
+    /// from __init__.py if it's a simple name (no dots) that could be a package.
     fn is_init_py_module(&self, module_name: &str) -> bool {
-        // A module is from __init__.py if:
-        // 1. It doesn't end with a specific module name (like "greetings" vs "greetings.greeting")
-        // 2. It has submodules that start with its name
-        // For now, we'll use a simple heuristic: if it's a package name without dots at the end
-        // and we have other modules that start with this name + ".", it's likely an __init__.py
+        // Basic validation
+        if module_name.is_empty() {
+            return false;
+        }
 
-        // For example: "greetings" is __init__.py if we have "greetings.greeting"
-        // TODO: This could be enhanced to check the actual file paths
-        !module_name.is_empty() && !module_name.contains('.')
-    }
+        // A module from __init__.py typically:
+        // 1. Has no dots (is a top-level package name like "greetings")
+        // 2. Is not a standard library module
+        // 3. Could potentially have submodules
 
-    /// Create replacement statements for a relative import
-    fn create_relative_import_replacement(
-        &self,
-        module_name: &str,
-        _import_from: &ast::StmtImportFrom,
-        _bundled_modules: &IndexMap<String, String>,
-    ) -> Result<Vec<Stmt>> {
-        // For relative imports in __init__.py, we need a different approach
-        // Instead of creating module objects, we should directly map to bundled variables
-
-        // Don't create any replacement statements here - instead, we should transform
-        // the expressions that use the imported modules later in the AST transformation
-        // For now, return empty to skip the transformation
-        log::debug!(
-            "Skipping relative import transformation for {}",
-            module_name
-        );
-        Ok(Vec::new())
-    }
-
-    /// Create a module type assignment statement
-    fn create_module_type_assignment(&self, module_name: &str) -> Result<Stmt> {
-        use ast::*;
-
-        // Create: module_name = types.ModuleType('module_name')
-        let assignment = StmtAssign {
-            targets: vec![Expr::Name(ExprName {
-                id: Identifier::new(module_name, TextRange::default()).into(),
-                ctx: ExprContext::Store,
-                range: TextRange::default(),
-            })],
-            value: Box::new(Expr::Call(ExprCall {
-                func: Box::new(Expr::Attribute(ExprAttribute {
-                    value: Box::new(Expr::Name(ExprName {
-                        id: Identifier::new("types", TextRange::default()).into(),
-                        ctx: ExprContext::Load,
-                        range: TextRange::default(),
-                    })),
-                    attr: Identifier::new("ModuleType", TextRange::default()),
-                    ctx: ExprContext::Load,
-                    range: TextRange::default(),
-                })),
-                arguments: ast::Arguments {
-                    args: vec![Expr::StringLiteral(ExprStringLiteral {
-                        value: ast::StringLiteralValue::single(ast::StringLiteral {
-                            range: TextRange::default(),
-                            value: module_name.to_string().into_boxed_str(),
-                            flags: ast::StringLiteralFlags::empty(),
-                        }),
-                        range: TextRange::default(),
-                    })]
-                    .into(),
-                    keywords: vec![].into(),
-                    range: TextRange::default(),
-                },
-                range: TextRange::default(),
-            })),
-            range: TextRange::default(),
-        };
-
-        Ok(Stmt::Assign(assignment))
-    }
-
-    /// Create attribute assignment statements for module content
-    fn create_attribute_assignments(
-        &self,
-        module_name: &str,
-        bundled_var_name: &str,
-    ) -> Result<Vec<Stmt>> {
-        use ast::*;
-
-        // Instead of hardcoding "message", we should create an exec statement that
-        // assigns all the module's content to the module object
-        let mut statements = Vec::new();
-
-        // Create: exec(f'import types; {module_name}.__dict__.update({{k: v for k, v in globals().items() if k.startswith("__{module_name.replace(".", "_")}_")}})', globals())
-        // This will copy all bundled variables that belong to this module into the module's namespace
-
-        // For now, as a simpler approach, create a direct assignment
-        // This is a temporary solution - ideally we'd analyze the module's exports
-        let populate_module = StmtAssign {
-            targets: vec![Expr::Attribute(ExprAttribute {
-                value: Box::new(Expr::Name(ExprName {
-                    id: Identifier::new(module_name, TextRange::default()).into(),
-                    ctx: ExprContext::Load,
-                    range: TextRange::default(),
-                })),
-                attr: Identifier::new("message", TextRange::default()),
-                ctx: ExprContext::Store,
-                range: TextRange::default(),
-            })],
-            value: Box::new(Expr::Name(ExprName {
-                id: Identifier::new(bundled_var_name, TextRange::default()).into(),
-                ctx: ExprContext::Load,
-                range: TextRange::default(),
-            })),
-            range: TextRange::default(),
-        };
-        statements.push(Stmt::Assign(populate_module));
-
-        Ok(statements)
+        // Simple heuristic: if it's a package name without dots
+        // This avoids false positives for deeply nested modules like "greetings.sub.module"
+        !module_name.contains('.')
     }
 
     /// Transform attribute access expressions in statements
@@ -1268,6 +1173,37 @@ impl AstRewriter {
                 self.transform_attribute_access_in_expr(&mut call.func, imported_modules)?;
                 for arg in &mut call.arguments.args {
                     self.transform_attribute_access_in_expr(arg, imported_modules)?;
+                }
+                for keyword in &mut call.arguments.keywords {
+                    self.transform_attribute_access_in_expr(&mut keyword.value, imported_modules)?;
+                }
+            }
+            Expr::BinOp(binop) => {
+                self.transform_attribute_access_in_expr(&mut binop.left, imported_modules)?;
+                self.transform_attribute_access_in_expr(&mut binop.right, imported_modules)?;
+            }
+            Expr::Compare(compare) => {
+                self.transform_attribute_access_in_expr(&mut compare.left, imported_modules)?;
+                for comparator in &mut compare.comparators {
+                    self.transform_attribute_access_in_expr(comparator, imported_modules)?;
+                }
+            }
+            Expr::List(list) => {
+                for elt in &mut list.elts {
+                    self.transform_attribute_access_in_expr(elt, imported_modules)?;
+                }
+            }
+            Expr::Tuple(tuple) => {
+                for elt in &mut tuple.elts {
+                    self.transform_attribute_access_in_expr(elt, imported_modules)?;
+                }
+            }
+            Expr::Dict(dict) => {
+                for item in &mut dict.items {
+                    if let Some(key) = &mut item.key {
+                        self.transform_attribute_access_in_expr(key, imported_modules)?;
+                    }
+                    self.transform_attribute_access_in_expr(&mut item.value, imported_modules)?;
                 }
             }
             // Add more expression types as needed
