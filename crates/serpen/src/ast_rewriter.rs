@@ -358,9 +358,69 @@ impl AstRewriter {
     fn generate_conflict_resolutions(&mut self, name_to_modules: IndexMap<String, Vec<String>>) {
         for (name, modules) in name_to_modules {
             if modules.len() > 1 {
+                // Special handling for __init__.py package interfaces
+                // If one of the modules is a package (init.py) and the others are its submodules,
+                // don't rename the package interface variable
+                if let Some(package_module) = self.find_package_interface_module(&modules) {
+                    // Only rename the submodule variables, not the package interface
+                    let submodules: Vec<String> = modules
+                        .iter()
+                        .filter(|m| {
+                            *m != &package_module && m.starts_with(&format!("{}.", package_module))
+                        })
+                        .cloned()
+                        .collect();
+
+                    if !submodules.is_empty() {
+                        self.resolve_submodule_conflicts(&name, &submodules);
+                        continue;
+                    }
+                }
+
+                // Default conflict resolution for all other cases
                 self.resolve_name_conflict(&name, &modules);
             }
         }
+    }
+
+    /// Find if one of the modules is a package interface (__init__.py) for the others
+    fn find_package_interface_module(&self, modules: &[String]) -> Option<String> {
+        for module in modules {
+            if self.is_init_py_module(module) {
+                // Check if other modules are submodules of this package
+                let package_prefix = format!("{}.", module);
+                if modules
+                    .iter()
+                    .any(|m| m != module && m.starts_with(&package_prefix))
+                {
+                    return Some(module.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Resolve conflicts for submodules only, leaving package interface unchanged
+    fn resolve_submodule_conflicts(&mut self, name: &str, submodules: &[String]) {
+        let mut renamed_versions = IndexMap::new();
+
+        for module in submodules {
+            let renamed = self.generate_unique_name(name, module);
+            renamed_versions.insert(module.clone(), renamed.clone());
+
+            // Track renames for this module
+            self.module_renames
+                .entry(module.clone())
+                .or_default()
+                .insert(name.to_string(), renamed);
+        }
+
+        let conflict = NameConflict {
+            name: name.to_string(),
+            modules: submodules.to_vec(),
+            renamed_versions,
+        };
+        self.name_conflicts.insert(name.to_string(), conflict);
     }
 
     /// Resolve a specific name conflict
