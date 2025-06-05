@@ -369,7 +369,7 @@ impl Bundler {
             }
 
             // Parse the module and extract imports (including module imports)
-            let imports = self.extract_imports_with_resolver(&module_path, resolver)?;
+            let imports = self.extract_imports(&module_path, Some(resolver))?;
             debug!("Extracted imports from {}: {:?}", module_name, imports);
 
             // Store module data for later processing
@@ -423,27 +423,10 @@ impl Bundler {
 
     /// Extract import statements from a Python file using AST parsing
     /// This handles all import variations including multi-line, aliased, relative, and parenthesized imports
-    pub fn extract_imports(&self, file_path: &Path) -> Result<Vec<String>> {
-        let source = fs::read_to_string(file_path)
-            .with_context(|| format!("Failed to read file: {:?}", file_path))?;
-
-        let parsed = ruff_python_parser::parse_module(&source)
-            .with_context(|| format!("Failed to parse Python file: {:?}", file_path))?;
-
-        let mut imports = Vec::new();
-
-        for stmt in parsed.syntax().body.iter() {
-            self.extract_imports_from_statement(stmt, &mut imports, file_path);
-        }
-
-        Ok(imports)
-    }
-
-    /// Enhanced version of extract_imports that can check for module imports using a resolver
-    fn extract_imports_with_resolver(
+    pub fn extract_imports(
         &self,
         file_path: &Path,
-        resolver: &mut ModuleResolver,
+        mut resolver: Option<&mut ModuleResolver>,
     ) -> Result<Vec<String>> {
         let source = fs::read_to_string(file_path)
             .with_context(|| format!("Failed to read file: {:?}", file_path))?;
@@ -454,11 +437,11 @@ impl Bundler {
         let mut imports = Vec::new();
 
         for stmt in parsed.syntax().body.iter() {
-            self.extract_imports_from_statement_with_resolver(
+            self.extract_imports_from_statement(
                 stmt,
                 &mut imports,
                 file_path,
-                resolver,
+                resolver.as_deref_mut(),
             );
         }
 
@@ -471,6 +454,7 @@ impl Bundler {
         stmt: &Stmt,
         imports: &mut Vec<String>,
         file_path: &Path,
+        resolver: Option<&mut ModuleResolver>,
     ) {
         if let Stmt::Import(import_stmt) = stmt {
             for alias in &import_stmt.names {
@@ -481,30 +465,7 @@ impl Bundler {
                 imports.push(module_name);
             }
         } else if let Stmt::ImportFrom(import_from_stmt) = stmt {
-            self.process_import_from_statement(import_from_stmt, imports, file_path);
-        }
-    }
-
-    /// Enhanced version that can detect module imports using a resolver
-    fn extract_imports_from_statement_with_resolver(
-        &self,
-        stmt: &Stmt,
-        imports: &mut Vec<String>,
-        file_path: &Path,
-        resolver: &mut ModuleResolver,
-    ) {
-        if let Stmt::Import(import_stmt) = stmt {
-            for alias in &import_stmt.names {
-                let module_name = alias.name.id.to_string();
-                imports.push(module_name);
-            }
-        } else if let Stmt::ImportFrom(import_from_stmt) = stmt {
-            self.process_import_from_statement_with_resolver(
-                import_from_stmt,
-                imports,
-                file_path,
-                resolver,
-            );
+            self.process_import_from_statement(import_from_stmt, imports, file_path, resolver);
         }
     }
 
@@ -514,38 +475,21 @@ impl Bundler {
         import_from_stmt: &StmtImportFrom,
         imports: &mut Vec<String>,
         file_path: &Path,
+        mut resolver: Option<&mut ModuleResolver>,
     ) {
         let level = import_from_stmt.level;
 
         if level == 0 {
-            self.process_absolute_import(import_from_stmt, imports);
+            if let Some(ref mut resolver) = resolver {
+                self.process_absolute_import_with_resolver(import_from_stmt, imports, resolver);
+            } else {
+                self.process_absolute_import(import_from_stmt, imports);
+            }
             return;
         }
 
         // Handle relative imports
-        if let Some(base_module) = self.resolve_relative_import(file_path, level) {
-            self.process_resolved_relative_import(import_from_stmt, imports, &base_module);
-        } else {
-            self.process_fallback_relative_import(import_from_stmt, imports, level);
-        }
-    }
-
-    /// Enhanced version that can detect module imports using a resolver
-    fn process_import_from_statement_with_resolver(
-        &self,
-        import_from_stmt: &StmtImportFrom,
-        imports: &mut Vec<String>,
-        file_path: &Path,
-        resolver: &mut ModuleResolver,
-    ) {
-        let level = import_from_stmt.level;
-
-        if level == 0 {
-            self.process_absolute_import_with_resolver(import_from_stmt, imports, resolver);
-            return;
-        }
-
-        // Handle relative imports (use existing logic for now)
+        // TODO: Consider extending resolver support to relative imports as well
         if let Some(base_module) = self.resolve_relative_import(file_path, level) {
             self.process_resolved_relative_import(import_from_stmt, imports, &base_module);
         } else {
