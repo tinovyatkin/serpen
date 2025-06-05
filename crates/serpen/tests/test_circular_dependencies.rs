@@ -152,6 +152,61 @@ fn test_unresolvable_circular_dependency() {
 }
 
 #[test]
+fn test_mixed_resolvable_and_unresolvable_cycles() {
+    // This tests the bundler code path where we have both types of cycles
+    let result = bundle_test_script("mixed_cycles");
+
+    // This should fail because there are unresolvable cycles present
+    match result {
+        Ok(_) => {
+            panic!("Mixed cycles with unresolvable cycles should not bundle successfully");
+        }
+        Err(error) => {
+            let error_msg = error.to_string();
+
+            // The error should mention that it's an unresolvable circular dependency
+            assert!(
+                error_msg.contains("Unresolvable circular dependencies detected"),
+                "Error should mention unresolvable cycles: {}",
+                error_msg
+            );
+
+            // Should contain specific module names
+            assert!(
+                error_msg.contains("constants_module") || error_msg.contains("config_constants"),
+                "Error should mention the constants modules: {}",
+                error_msg
+            );
+
+            assert_snapshot!("mixed_cycles_error", error_msg);
+        }
+    }
+}
+
+#[test]
+fn test_class_level_circular_dependency() {
+    // This tests class-level circular dependencies
+    let result = bundle_test_script("class_level_cycles");
+
+    // Currently, class-level cycles are treated as resolvable but not yet implemented
+    match result {
+        Ok(bundled_content) => {
+            // If it succeeds, the bundler resolved it
+            assert_snapshot!("class_level_cycles_bundled", bundled_content);
+        }
+        Err(error) => {
+            let error_msg = error.to_string();
+            assert!(
+                error_msg.contains("Circular dependencies detected"),
+                "Error should mention circular dependency: {}",
+                error_msg
+            );
+            assert_snapshot!("class_level_cycles_error", error_msg);
+        }
+    }
+}
+
+#[test]
 fn test_circular_dependency_detection_in_dependency_graph() {
     use serpen::dependency_graph::{DependencyGraph, ModuleNode};
     use std::path::PathBuf;
@@ -709,5 +764,287 @@ fn test_import_chain_building() {
     // Check that import type is set (simplified implementation uses Direct)
     for edge in &cycle.import_chain {
         assert!(matches!(edge.import_type, ImportType::Direct));
+    }
+}
+
+#[test]
+fn test_cycle_type_classification() {
+    use serpen::dependency_graph::{CircularDependencyType, DependencyGraph, ModuleNode};
+    use std::path::PathBuf;
+
+    let mut graph = DependencyGraph::new();
+
+    // Test 1: Module with "constants" in name should be classified as ModuleConstants
+    let constants_modules = vec![
+        ("constants_a", vec!["constants_b"]),
+        ("constants_b", vec!["constants_a"]),
+    ];
+
+    for (name, imports) in &constants_modules {
+        let module = ModuleNode {
+            name: name.to_string(),
+            path: PathBuf::from(format!("/test/{}.py", name)),
+            imports: imports.iter().map(|s| s.to_string()).collect(),
+        };
+        graph.add_module(module);
+    }
+
+    for (from, imports) in &constants_modules {
+        for to in imports {
+            graph.add_dependency(from, to).unwrap();
+        }
+    }
+
+    let analysis = graph.classify_circular_dependencies();
+
+    // Should have one unresolvable cycle
+    assert_eq!(analysis.unresolvable_cycles.len(), 1);
+    assert_eq!(analysis.resolvable_cycles.len(), 0);
+
+    let unresolvable = &analysis.unresolvable_cycles[0];
+    assert!(matches!(
+        unresolvable.cycle_type,
+        CircularDependencyType::ModuleConstants
+    ));
+
+    // Test 2: Regular modules should be classified as FunctionLevel
+    let mut graph2 = DependencyGraph::new();
+
+    let regular_modules = vec![
+        ("module_x", vec!["module_y"]),
+        ("module_y", vec!["module_x"]),
+    ];
+
+    for (name, imports) in &regular_modules {
+        let module = ModuleNode {
+            name: name.to_string(),
+            path: PathBuf::from(format!("/test/{}.py", name)),
+            imports: imports.iter().map(|s| s.to_string()).collect(),
+        };
+        graph2.add_module(module);
+    }
+
+    for (from, imports) in &regular_modules {
+        for to in imports {
+            graph2.add_dependency(from, to).unwrap();
+        }
+    }
+
+    let analysis2 = graph2.classify_circular_dependencies();
+
+    // Should have one resolvable cycle
+    assert_eq!(analysis2.resolvable_cycles.len(), 1);
+    assert_eq!(analysis2.unresolvable_cycles.len(), 0);
+
+    let resolvable = &analysis2.resolvable_cycles[0];
+    assert!(matches!(
+        resolvable.cycle_type,
+        CircularDependencyType::FunctionLevel
+    ));
+}
+
+#[test]
+fn test_resolution_strategy_suggestions() {
+    use serpen::dependency_graph::{DependencyGraph, ModuleNode, ResolutionStrategy};
+    use std::path::PathBuf;
+
+    let mut graph = DependencyGraph::new();
+
+    // Create modules to test different resolution strategies
+    let modules = vec![
+        ("func_module_a", vec!["func_module_b"]),
+        ("func_module_b", vec!["func_module_a"]),
+    ];
+
+    for (name, imports) in &modules {
+        let module = ModuleNode {
+            name: name.to_string(),
+            path: PathBuf::from(format!("/test/{}.py", name)),
+            imports: imports.iter().map(|s| s.to_string()).collect(),
+        };
+        graph.add_module(module);
+    }
+
+    for (from, imports) in &modules {
+        for to in imports {
+            graph.add_dependency(from, to).unwrap();
+        }
+    }
+
+    let analysis = graph.classify_circular_dependencies();
+
+    assert_eq!(analysis.resolvable_cycles.len(), 1);
+    let cycle = &analysis.resolvable_cycles[0];
+
+    // FunctionLevel cycles should get LazyImport resolution
+    match &cycle.suggested_resolution {
+        ResolutionStrategy::LazyImport { modules } => {
+            assert!(!modules.is_empty());
+            assert!(
+                modules.contains(&"func_module_a".to_string())
+                    || modules.contains(&"func_module_b".to_string())
+            );
+        }
+        _ => panic!("Expected LazyImport resolution for FunctionLevel cycle"),
+    }
+}
+
+#[test]
+fn test_cycle_detection_with_back_edge() {
+    use serpen::dependency_graph::{DependencyGraph, ModuleNode};
+    use std::path::PathBuf;
+
+    let mut graph = DependencyGraph::new();
+
+    // Create a more complex graph to test back edge detection
+    // A -> B -> C -> B (back edge from C to B)
+    let modules = vec![
+        ("module_a", vec!["module_b"]),
+        ("module_b", vec!["module_c"]),
+        ("module_c", vec!["module_b"]), // Back edge
+    ];
+
+    for (name, imports) in &modules {
+        let module = ModuleNode {
+            name: name.to_string(),
+            path: PathBuf::from(format!("/test/{}.py", name)),
+            imports: imports.iter().map(|s| s.to_string()).collect(),
+        };
+        graph.add_module(module);
+    }
+
+    for (from, imports) in &modules {
+        for to in imports {
+            graph.add_dependency(from, to).unwrap();
+        }
+    }
+
+    // Test find_cycle_paths
+    let cycle_paths = graph.find_cycle_paths().unwrap();
+
+    assert!(
+        !cycle_paths.is_empty(),
+        "Should detect cycles with back edges"
+    );
+
+    // Should find the B -> C -> B cycle
+    let has_expected_cycle = cycle_paths.iter().any(|path| {
+        path.len() >= 2
+            && ((path.contains(&"module_b".to_string()) && path.contains(&"module_c".to_string()))
+                || (path == &vec!["module_b", "module_c"] || path == &vec!["module_c", "module_b"]))
+    });
+
+    assert!(has_expected_cycle, "Should find the B-C cycle");
+}
+
+#[test]
+fn test_import_time_cycle_classification() {
+    use serpen::dependency_graph::{
+        CircularDependencyType, DependencyGraph, ModuleNode, ResolutionStrategy,
+    };
+    use std::path::PathBuf;
+
+    let mut graph = DependencyGraph::new();
+
+    // Test modules with "import" or "loader" in name
+    let import_modules = vec![
+        ("import_manager", vec!["loader_module"]),
+        ("loader_module", vec!["import_manager"]),
+    ];
+
+    for (name, imports) in &import_modules {
+        let module = ModuleNode {
+            name: name.to_string(),
+            path: PathBuf::from(format!("/test/{}.py", name)),
+            imports: imports.iter().map(|s| s.to_string()).collect(),
+        };
+        graph.add_module(module);
+    }
+
+    for (from, imports) in &import_modules {
+        for to in imports {
+            graph.add_dependency(from, to).unwrap();
+        }
+    }
+
+    let analysis = graph.classify_circular_dependencies();
+
+    // Should have one resolvable cycle of ImportTime type
+    assert_eq!(analysis.resolvable_cycles.len(), 1);
+    assert_eq!(analysis.unresolvable_cycles.len(), 0);
+
+    let cycle = &analysis.resolvable_cycles[0];
+    assert!(matches!(
+        cycle.cycle_type,
+        CircularDependencyType::ImportTime
+    ));
+
+    // ImportTime cycles should get ModuleSplit resolution
+    match &cycle.suggested_resolution {
+        ResolutionStrategy::ModuleSplit { suggestions } => {
+            assert!(!suggestions.is_empty());
+            assert!(
+                suggestions
+                    .iter()
+                    .any(|s| s.contains("extract") || s.contains("separate"))
+            );
+        }
+        _ => panic!("Expected ModuleSplit resolution for ImportTime cycle"),
+    }
+}
+
+#[test]
+fn test_class_level_cycle_resolution_strategy() {
+    use serpen::dependency_graph::{
+        CircularDependencyType, DependencyGraph, ModuleNode, ResolutionStrategy,
+    };
+    use std::path::PathBuf;
+
+    let mut graph = DependencyGraph::new();
+
+    // Test modules with "class" in name
+    let class_modules = vec![
+        ("user_class", vec!["admin_class"]),
+        ("admin_class", vec!["user_class"]),
+    ];
+
+    for (name, imports) in &class_modules {
+        let module = ModuleNode {
+            name: name.to_string(),
+            path: PathBuf::from(format!("/test/{}.py", name)),
+            imports: imports.iter().map(|s| s.to_string()).collect(),
+        };
+        graph.add_module(module);
+    }
+
+    for (from, imports) in &class_modules {
+        for to in imports {
+            graph.add_dependency(from, to).unwrap();
+        }
+    }
+
+    let analysis = graph.classify_circular_dependencies();
+
+    // Should have one resolvable cycle of ClassLevel type
+    assert_eq!(analysis.resolvable_cycles.len(), 1);
+    assert_eq!(analysis.unresolvable_cycles.len(), 0);
+
+    let cycle = &analysis.resolvable_cycles[0];
+    assert!(matches!(
+        cycle.cycle_type,
+        CircularDependencyType::ClassLevel
+    ));
+
+    // ClassLevel cycles should get FunctionScopedImport resolution
+    match &cycle.suggested_resolution {
+        ResolutionStrategy::FunctionScopedImport { import_statements } => {
+            assert!(!import_statements.is_empty());
+            assert!(
+                import_statements
+                    .iter()
+                    .any(|s| s.contains("Move") && s.contains("inside functions"))
+            );
+        }
+        _ => panic!("Expected FunctionScopedImport resolution for ClassLevel cycle"),
     }
 }

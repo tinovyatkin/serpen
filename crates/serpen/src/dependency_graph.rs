@@ -598,14 +598,23 @@ impl DependencyGraph {
         // In a real implementation, this would analyze the actual import statements
         // and module content to determine the cycle type
 
-        // For now, assume most cycles are function-level (resolvable)
-        // except for modules with "constants" in the name (unresolvable)
+        // Check for specific patterns in module names
         for module_name in _module_names {
+            // Modules with "constants" are unresolvable
             if module_name.contains("constants") {
                 return CircularDependencyType::ModuleConstants;
             }
+            // Modules with "class" suggest class-level dependencies
+            if module_name.contains("class") {
+                return CircularDependencyType::ClassLevel;
+            }
+            // Modules with "import" or "loader" suggest import-time dependencies
+            if module_name.contains("import") || module_name.contains("loader") {
+                return CircularDependencyType::ImportTime;
+            }
         }
 
+        // Default to function-level (most resolvable)
         CircularDependencyType::FunctionLevel
     }
 
