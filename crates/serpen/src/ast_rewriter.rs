@@ -1036,7 +1036,7 @@ impl AstRewriter {
         &self,
         module_name: &str,
         module_ast: &mut ast::ModModule,
-        _bundled_modules: &IndexMap<String, String>,
+        bundled_modules: &IndexMap<String, String>,
     ) -> Result<()> {
         // Only transform if this is an __init__.py file
         if !self.is_init_py_module(module_name) {
@@ -1048,24 +1048,31 @@ impl AstRewriter {
             module_name
         );
 
-        // Build a mapping of imported module names to their bundled variables
+        // Use the provided bundled_modules mapping instead of constructing internally
         let mut imported_modules = IndexMap::new();
         let mut statements_to_remove = Vec::new();
 
-        // Find relative import statements and build the mapping
+        // Find relative import statements and map them to bundled variables
         for (i, stmt) in module_ast.body.iter().enumerate() {
             if let Stmt::ImportFrom(import_from) = stmt {
                 if import_from.level > 0 && import_from.module.is_none() {
                     // This is a relative import like "from . import module"
                     for alias in &import_from.names {
                         let imported_name = alias.name.as_str();
-                        // Map imported name to its bundled variable prefix
-                        let module_prefix = format!(
-                            "{}_{}",
-                            module_name.cow_replace('.', "_"),
-                            imported_name.cow_replace('.', "_")
-                        );
-                        imported_modules.insert(imported_name.to_string(), module_prefix);
+                        // Look up the bundled variable name from the provided mapping
+                        let module_key = format!("{}.{}", module_name, imported_name);
+                        if let Some(bundled_name) = bundled_modules.get(&module_key) {
+                            imported_modules
+                                .insert(imported_name.to_string(), bundled_name.clone());
+                        } else {
+                            // Fallback to constructed prefix if not found in mapping
+                            let module_prefix = format!(
+                                "{}_{}",
+                                module_name.cow_replace('.', "_"),
+                                imported_name.cow_replace('.', "_")
+                            );
+                            imported_modules.insert(imported_name.to_string(), module_prefix);
+                        }
                     }
                     statements_to_remove.push(i);
                 }

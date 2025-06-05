@@ -487,7 +487,17 @@ impl CodeEmitter {
             }
             ImportStrategy::FromImport | ImportStrategy::Dependency => {
                 // For modules imported as "from module import" or dependency modules,
-                // return the transformed AST directly
+                // add variable exposure statements and return the transformed AST
+                let exposure_statements = self.create_variable_exposure_statements(module_name)?;
+                let exposure_count = exposure_statements.len();
+                if !exposure_statements.is_empty() {
+                    transformed_ast.body.extend(exposure_statements);
+                    log::debug!(
+                        "Added {} variable exposure statements to module '{}'",
+                        exposure_count,
+                        module_name
+                    );
+                }
                 Ok(transformed_ast)
             }
         }
@@ -750,13 +760,42 @@ impl CodeEmitter {
 
     /// Create statements to expose renamed variables with their original names
     ///
-    /// TODO: This method is a placeholder that needs dynamic implementation.
-    /// It should analyze the module's exports and create appropriate variable
-    /// exposure statements based on the actual renames that occurred during
-    /// conflict resolution. Currently returns empty to avoid hardcoding values.
-    fn create_variable_exposure_statements(&self, _module_name: &str) -> Result<Vec<Stmt>> {
-        // Placeholder implementation - needs dynamic variable exposure logic
-        Ok(Vec::new())
+    /// This creates assignment statements like `__module_name_var = __module_name_var`
+    /// to make renamed variables accessible for import resolution in other modules.
+    fn create_variable_exposure_statements(&self, module_name: &str) -> Result<Vec<Stmt>> {
+        let mut statements = Vec::new();
+
+        // Get renamed variables for this module from bundled_variables
+        if let Some(renames) = self.bundled_variables.get(module_name) {
+            log::debug!(
+                "Creating exposure statements for module '{}' with {} renames",
+                module_name,
+                renames.len()
+            );
+
+            for (_original_name, renamed_name) in renames {
+                // Create assignment: renamed_name = renamed_name
+                // This exposes the renamed variable so it can be referenced by other modules
+                let assignment = Stmt::Assign(StmtAssign {
+                    targets: vec![Expr::Name(ExprName {
+                        id: renamed_name.clone().into(),
+                        ctx: ExprContext::Store,
+                        range: TextRange::default(),
+                    })],
+                    value: Box::new(Expr::Name(ExprName {
+                        id: renamed_name.clone().into(),
+                        ctx: ExprContext::Load,
+                        range: TextRange::default(),
+                    })),
+                    range: TextRange::default(),
+                });
+                statements.push(assignment);
+            }
+        } else {
+            log::debug!("No renamed variables found for module '{}'", module_name);
+        }
+
+        Ok(statements)
     }
 
     /// Create an AST for the exec statement that executes module code in its namespace
