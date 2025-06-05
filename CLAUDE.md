@@ -534,6 +534,65 @@ When CI failures are detected:
 
 This comprehensive approach ensures robust CI verification and prevents broken code from being merged.
 
+### MANDATORY: Review Comment Response Protocol
+
+**🚨 CRITICAL REQUIREMENT 🚨**: When addressing review comments on PRs, you MUST follow the individual comment reply protocol. Never post a single summary comment.
+
+#### Required Comment Response Flow
+
+**For EVERY individual review comment you address:**
+
+1. **Reply to the specific comment thread** - Use GitHub's inline comment reply feature
+2. **Document your fix clearly** - Explain exactly what you changed
+3. **Reference specific commits/files** - Provide commit SHA and file paths when relevant
+4. **Resolve the conversation** - Mark the conversation as resolved after providing your response
+
+#### Correct Protocol Example
+
+```
+For each individual CodeRabbit/Copilot comment:
+
+1. Reply directly to that comment with specific fix details
+2. Example reply: "✅ Fixed: Added comprehensive documentation to CircularDependencyAnalysis struct in dependency_graph.rs:16-31. Commit: c666055"
+3. Mark the conversation as resolved
+```
+
+#### NEVER Do This
+
+❌ **Don't post a single large summary comment** - This doesn't follow GitHub's conversation resolution workflow
+
+❌ **Don't group multiple fixes into one response** - Each comment thread needs individual attention
+
+❌ **Don't leave conversations unresolved** - Every addressed comment must be marked as resolved
+
+#### Proper Individual Response Template
+
+For each review comment:
+
+```markdown
+✅ **Addressed in [commit-sha]**
+
+[Specific description of the fix made]
+
+Changes made in `path/to/file.rs:line-numbers`:
+
+- [Detailed change 1]
+- [Detailed change 2]
+
+[Any additional context about the fix]
+```
+
+#### Comment Resolution Workflow
+
+1. **Find the specific review comment** that needs addressing
+2. **Make the code changes** to fix the issue
+3. **Commit the changes** with a clear commit message
+4. **Reply to the individual comment thread** with fix details
+5. **Mark the conversation as resolved** using GitHub's resolve feature
+6. **Repeat for each comment** until all are addressed
+
+This ensures proper traceability and follows GitHub's intended review workflow for collaborative development.
+
 ## Memories
 
 - Don't add timing complexity estimation to any documents - you don't know the team velocity
