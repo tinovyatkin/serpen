@@ -1,7 +1,7 @@
 use anyhow::Result;
+use indexmap::{IndexMap, IndexSet};
 use log::debug;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -174,11 +174,11 @@ pub enum ImportType {
 pub struct ModuleResolver {
     config: Config,
     /// Cache of resolved module paths
-    module_cache: HashMap<String, Option<PathBuf>>,
+    module_cache: IndexMap<String, Option<PathBuf>>,
     /// Set of all first-party modules discovered in src directories
-    first_party_modules: HashSet<String>,
+    first_party_modules: IndexSet<String>,
     /// Cache of virtual environment packages to avoid repeated filesystem scans
-    virtualenv_packages_cache: RefCell<Option<HashSet<String>>>,
+    virtualenv_packages_cache: RefCell<Option<IndexSet<String>>>,
 }
 
 impl ModuleResolver {
@@ -204,8 +204,8 @@ impl ModuleResolver {
     ) -> Result<Self> {
         let mut resolver = Self {
             config,
-            module_cache: HashMap::new(),
-            first_party_modules: HashSet::new(),
+            module_cache: IndexMap::new(),
+            first_party_modules: IndexSet::new(),
             virtualenv_packages_cache: RefCell::new(None),
         };
 
@@ -248,7 +248,7 @@ impl ModuleResolver {
         pythonpath_override: Option<&str>,
         _virtualenv_override: Option<&str>,
     ) -> Vec<PathBuf> {
-        let mut unique_dirs = HashSet::new();
+        let mut unique_dirs = IndexSet::new();
 
         // Add configured src directories
         for dir in &self.config.src {
@@ -277,7 +277,7 @@ impl ModuleResolver {
     }
 
     /// Helper method to add a PYTHONPATH directory to the unique set
-    fn add_pythonpath_directory(&self, unique_dirs: &mut HashSet<PathBuf>, path_str: &str) {
+    fn add_pythonpath_directory(&self, unique_dirs: &mut IndexSet<PathBuf>, path_str: &str) {
         if path_str.is_empty() {
             return;
         }
@@ -420,7 +420,7 @@ impl ModuleResolver {
 
     /// Get the set of third-party packages installed in the virtual environment
     /// Used for improving import classification accuracy
-    fn get_virtualenv_packages(&self, virtualenv_override: Option<&str>) -> HashSet<String> {
+    fn get_virtualenv_packages(&self, virtualenv_override: Option<&str>) -> IndexSet<String> {
         // If we have a cached result and no override is specified, return it
         if virtualenv_override.is_none() {
             if let Some(cached_packages) = self.get_cached_virtualenv_packages() {
@@ -433,14 +433,14 @@ impl ModuleResolver {
     }
 
     /// Get cached virtualenv packages if available
-    fn get_cached_virtualenv_packages(&self) -> Option<HashSet<String>> {
+    fn get_cached_virtualenv_packages(&self) -> Option<IndexSet<String>> {
         let cache_ref = self.virtualenv_packages_cache.try_borrow().ok()?;
         cache_ref.as_ref().cloned()
     }
 
     /// Compute virtualenv packages by scanning the filesystem
-    fn compute_virtualenv_packages(&self, virtualenv_override: Option<&str>) -> HashSet<String> {
-        let mut packages = HashSet::new();
+    fn compute_virtualenv_packages(&self, virtualenv_override: Option<&str>) -> IndexSet<String> {
+        let mut packages = IndexSet::new();
 
         // First, try to get explicit VIRTUAL_ENV (either override or environment variable)
         let explicit_virtualenv = virtualenv_override
@@ -479,7 +479,7 @@ impl ModuleResolver {
     fn scan_site_packages_directory(
         &self,
         site_packages_dir: &PathBuf,
-        packages: &mut HashSet<String>,
+        packages: &mut IndexSet<String>,
     ) {
         let Ok(entries) = std::fs::read_dir(site_packages_dir) else {
             return;
@@ -745,7 +745,7 @@ impl ModuleResolver {
     }
 
     /// Get all discovered first-party modules
-    pub fn get_first_party_modules(&self) -> &HashSet<String> {
+    pub fn get_first_party_modules(&self) -> &IndexSet<String> {
         &self.first_party_modules
     }
 
@@ -759,7 +759,6 @@ impl ModuleResolver {
 mod tests {
     use super::*;
     use crate::config::Config;
-    use std::collections::{HashMap, HashSet};
     use std::path::Path;
 
     #[test]
@@ -769,8 +768,8 @@ mod tests {
         let file_path = Path::new("/path/to/mypkg/__init__.py");
         let resolver = ModuleResolver {
             config: Config::default(),
-            module_cache: HashMap::new(),
-            first_party_modules: HashSet::new(),
+            module_cache: IndexMap::new(),
+            first_party_modules: IndexSet::new(),
             virtualenv_packages_cache: RefCell::new(None),
         };
         assert_eq!(
@@ -787,8 +786,8 @@ mod tests {
         };
         let resolver = ModuleResolver {
             config,
-            module_cache: HashMap::new(),
-            first_party_modules: HashSet::new(),
+            module_cache: IndexMap::new(),
+            first_party_modules: IndexSet::new(),
             virtualenv_packages_cache: RefCell::new(None),
         };
 
@@ -820,8 +819,8 @@ mod tests {
         };
         let resolver = ModuleResolver {
             config,
-            module_cache: HashMap::new(),
-            first_party_modules: HashSet::new(),
+            module_cache: IndexMap::new(),
+            first_party_modules: IndexSet::new(),
             virtualenv_packages_cache: RefCell::new(None),
         };
 

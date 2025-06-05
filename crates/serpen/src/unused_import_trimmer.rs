@@ -5,10 +5,10 @@
 //! generating clean Python code using AST rewriting techniques.
 
 use anyhow::{Context, Result};
+use indexmap::IndexSet;
 use ruff_python_ast::{self as ast, Stmt};
 use ruff_python_codegen::{Generator, Stylist};
 use ruff_python_parser;
-use std::collections::HashSet;
 
 use crate::unused_imports_simple::{UnusedImport, UnusedImportAnalyzer};
 
@@ -128,7 +128,7 @@ impl UnusedImportTrimmer {
         imports_to_remove: Vec<UnusedImport>,
     ) -> Result<TrimResult> {
         // Build set of import names to remove for efficient lookup
-        let remove_set: HashSet<String> = imports_to_remove
+        let remove_set: IndexSet<String> = imports_to_remove
             .iter()
             .map(|import| import.name.clone())
             .collect();
@@ -202,7 +202,7 @@ impl UnusedImportTrimmer {
     fn filter_statements(
         &self,
         statements: &[Stmt],
-        remove_set: &HashSet<String>,
+        remove_set: &IndexSet<String>,
     ) -> Result<Vec<Stmt>> {
         let mut filtered_statements = Vec::new();
 
@@ -236,7 +236,7 @@ impl UnusedImportTrimmer {
     fn process_import_statement(
         &self,
         import_stmt: &ast::StmtImport,
-        remove_set: &HashSet<String>,
+        remove_set: &IndexSet<String>,
         filtered_statements: &mut Vec<Stmt>,
     ) {
         let filtered_aliases = self.filter_import_aliases(&import_stmt.names, remove_set);
@@ -253,7 +253,7 @@ impl UnusedImportTrimmer {
     fn process_import_from_statement(
         &self,
         import_from_stmt: &ast::StmtImportFrom,
-        remove_set: &HashSet<String>,
+        remove_set: &IndexSet<String>,
         filtered_statements: &mut Vec<Stmt>,
     ) {
         let filtered_aliases = self.filter_import_aliases(&import_from_stmt.names, remove_set);
@@ -270,7 +270,7 @@ impl UnusedImportTrimmer {
     fn filter_import_aliases(
         &self,
         aliases: &[ast::Alias],
-        remove_set: &HashSet<String>,
+        remove_set: &IndexSet<String>,
     ) -> Vec<ast::Alias> {
         aliases
             .iter()

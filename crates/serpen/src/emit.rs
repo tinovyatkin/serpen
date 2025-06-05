@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use cow_utils::CowUtils;
 use indexmap::{IndexMap, IndexSet};
 use std::fs;
 
@@ -1411,7 +1412,10 @@ impl CodeEmitter {
     /// This ensures reproducible builds regardless of the platform where bundling occurs
     fn normalize_line_endings(&self, content: String) -> String {
         // Replace Windows CRLF (\r\n) and Mac CR (\r) with Unix LF (\n)
-        content.replace("\r\n", "\n").replace('\r', "\n")
+        content
+            .cow_replace("\r\n", "\n")
+            .cow_replace('\r', "\n")
+            .into_owned()
     }
 }
 

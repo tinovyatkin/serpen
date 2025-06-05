@@ -1,9 +1,8 @@
 use anyhow::{Result, anyhow};
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 use log::debug;
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -73,7 +72,7 @@ pub enum ImportType {
 #[derive(Debug)]
 pub struct DependencyGraph {
     graph: DiGraph<ModuleNode, ()>,
-    node_indices: HashMap<String, NodeIndex>,
+    node_indices: IndexMap<String, NodeIndex>,
 }
 
 impl Default for DependencyGraph {
@@ -86,7 +85,7 @@ impl DependencyGraph {
     pub fn new() -> Self {
         Self {
             graph: DiGraph::new(),
-            node_indices: HashMap::new(),
+            node_indices: IndexMap::new(),
         }
     }
 
@@ -109,7 +108,7 @@ impl DependencyGraph {
             }
         }) {
             // Remove old entry and insert new name
-            let existing_index = self.node_indices.remove(&old_key).unwrap();
+            let existing_index = self.node_indices.shift_remove(&old_key).unwrap();
             self.node_indices
                 .insert(module_name.clone(), existing_index);
             self.graph[existing_index] = module;
@@ -278,7 +277,7 @@ impl DependencyGraph {
     /// Create a new filtered graph containing only the visited modules
     fn create_filtered_graph(&self, visited: IndexSet<NodeIndex>) -> Result<DependencyGraph> {
         let mut filtered_graph = DependencyGraph::new();
-        let mut _index_mapping = HashMap::new();
+        let mut _index_mapping = IndexMap::new();
 
         // Add all reachable nodes
         self.add_reachable_nodes_to_filtered_graph(
@@ -298,7 +297,7 @@ impl DependencyGraph {
         &self,
         visited: &IndexSet<NodeIndex>,
         filtered_graph: &mut DependencyGraph,
-        _index_mapping: &mut HashMap<NodeIndex, NodeIndex>,
+        _index_mapping: &mut IndexMap<NodeIndex, NodeIndex>,
     ) {
         for &old_index in visited {
             let module = self.graph[old_index].clone();
@@ -364,9 +363,9 @@ impl DependencyGraph {
     pub fn find_strongly_connected_components(&self) -> Vec<Vec<NodeIndex>> {
         let mut index_counter = 0;
         let mut stack = Vec::new();
-        let mut indices = HashMap::new();
-        let mut lowlinks = HashMap::new();
-        let mut on_stack = HashMap::new();
+        let mut indices = IndexMap::new();
+        let mut lowlinks = IndexMap::new();
+        let mut on_stack = IndexMap::new();
         let mut components = Vec::new();
 
         for node_index in self.graph.node_indices() {
@@ -386,31 +385,44 @@ impl DependencyGraph {
         components
     }
 
-    /// Tarjan's strongly connected components algorithm implementation
+    fn pop_scc_component(
+        &self,
+        stack: &mut Vec<NodeIndex>,
+        on_stack: &mut IndexMap<NodeIndex, bool>,
+        v: NodeIndex,
+    ) -> Vec<NodeIndex> {
+        let mut component = Vec::new();
+        while let Some(w) = stack.pop() {
+            on_stack.insert(w, false);
+            component.push(w);
+            if w == v {
+                break;
+            }
+        }
+        component
+    }
+
     fn tarjan_strongconnect(
         &self,
         v: NodeIndex,
         index_counter: &mut usize,
         stack: &mut Vec<NodeIndex>,
-        indices: &mut HashMap<NodeIndex, usize>,
-        lowlinks: &mut HashMap<NodeIndex, usize>,
-        on_stack: &mut HashMap<NodeIndex, bool>,
+        indices: &mut IndexMap<NodeIndex, usize>,
+        lowlinks: &mut IndexMap<NodeIndex, usize>,
+        on_stack: &mut IndexMap<NodeIndex, bool>,
         components: &mut Vec<Vec<NodeIndex>>,
     ) {
-        // Set the depth index for v to the smallest unused index
         indices.insert(v, *index_counter);
         lowlinks.insert(v, *index_counter);
         *index_counter += 1;
         stack.push(v);
         on_stack.insert(v, true);
 
-        // Consider successors of v (outgoing edges in dependency graph)
         for w in self
             .graph
             .neighbors_directed(v, petgraph::Direction::Outgoing)
         {
             if !indices.contains_key(&w) {
-                // Successor w has not yet been visited; recurse on it
                 self.tarjan_strongconnect(
                     w,
                     index_counter,
@@ -424,91 +436,71 @@ impl DependencyGraph {
                 let v_lowlink = *lowlinks.get(&v).unwrap();
                 lowlinks.insert(v, v_lowlink.min(w_lowlink));
             } else if *on_stack.get(&w).unwrap_or(&false) {
-                // Successor w is in stack S and hence in the current SCC
                 let w_index = *indices.get(&w).unwrap();
                 let v_lowlink = *lowlinks.get(&v).unwrap();
                 lowlinks.insert(v, v_lowlink.min(w_index));
             }
         }
 
-        // If v is a root node, pop the stack and print an SCC
         if lowlinks[&v] == indices[&v] {
-            let mut component = Vec::new();
-            loop {
-                let w = stack.pop().unwrap();
-                on_stack.insert(w, false);
-                component.push(w);
-                if w == v {
-                    break;
-                }
-            }
-            // Only include components with more than 1 node (actual cycles)
+            let component = self.pop_scc_component(stack, on_stack, v);
             if component.len() > 1 {
                 components.push(component);
             }
         }
     }
 
-    /// Get detailed cycle information for diagnostics using three-color DFS
     pub fn find_cycle_paths(&self) -> Result<Vec<Vec<String>>> {
-        let mut visited = HashMap::new();
+        let mut visited = IndexMap::new();
         let mut path = Vec::new();
         let mut cycles = Vec::new();
 
-        // Initialize all nodes as white (unvisited)
         for node_index in self.graph.node_indices() {
             visited.insert(node_index, Color::White);
         }
 
-        // Start DFS from each unvisited node
+        let mut ctx = DfsCycleContext {
+            visited: &mut visited,
+            path: &mut path,
+            cycles: &mut cycles,
+        };
+
         for node_index in self.graph.node_indices() {
-            if visited[&node_index] == Color::White {
-                self.dfs_find_cycles(node_index, &mut visited, &mut path, &mut cycles);
+            if ctx.visited[&node_index] == Color::White {
+                self.dfs_find_cycles_internal(node_index, &mut ctx);
             }
         }
 
-        Ok(cycles)
+        Ok(ctx.cycles.clone())
     }
 
-    /// Three-color DFS to find cycles with exact paths
-    fn dfs_find_cycles(
-        &self,
-        node: NodeIndex,
-        visited: &mut HashMap<NodeIndex, Color>,
-        path: &mut Vec<NodeIndex>,
-        cycles: &mut Vec<Vec<String>>,
-    ) {
-        visited.insert(node, Color::Gray);
-        path.push(node);
+    fn dfs_find_cycles_internal(&self, node: NodeIndex, ctx: &mut DfsCycleContext) {
+        ctx.visited.insert(node, Color::Gray);
+        ctx.path.push(node);
 
-        // Visit all outgoing neighbors
         for neighbor in self
             .graph
             .neighbors_directed(node, petgraph::Direction::Outgoing)
         {
-            match visited[&neighbor] {
+            match ctx.visited[&neighbor] {
                 Color::White => {
-                    // Unvisited node, continue DFS
-                    self.dfs_find_cycles(neighbor, visited, path, cycles);
+                    self.dfs_find_cycles_internal(neighbor, ctx);
                 }
                 Color::Gray => {
-                    // Back edge found - we have a cycle!
-                    if let Some(cycle_start) = path.iter().position(|&n| n == neighbor) {
-                        let cycle_path: Vec<String> = path[cycle_start..]
+                    if let Some(cycle_start) = ctx.path.iter().position(|&n| n == neighbor) {
+                        let cycle_path: Vec<String> = ctx.path[cycle_start..]
                             .iter()
                             .map(|&idx| self.graph[idx].name.clone())
                             .collect();
-                        cycles.push(cycle_path);
+                        ctx.cycles.push(cycle_path);
                     }
                 }
-                Color::Black => {
-                    // Already processed, skip
-                }
+                Color::Black => {}
             }
         }
 
-        path.pop();
-        visited.insert(node, Color::Black);
+        ctx.path.pop();
+        ctx.visited.insert(node, Color::Black);
     }
 
     /// Classify circular dependencies by type for resolution strategy
@@ -661,4 +653,10 @@ enum Color {
     White, // Unvisited
     Gray,  // Currently being processed
     Black, // Completely processed
+}
+
+struct DfsCycleContext<'a> {
+    visited: &'a mut IndexMap<NodeIndex, Color>,
+    path: &'a mut Vec<NodeIndex>,
+    cycles: &'a mut Vec<Vec<String>>,
 }

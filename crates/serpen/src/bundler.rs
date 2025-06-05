@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
+use indexmap::IndexSet;
 use log::{debug, info, warn};
 use ruff_python_ast::{Stmt, StmtImportFrom};
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,14 +14,14 @@ use crate::util::module_name_from_relative;
 /// Type alias for module processing queue
 type ModuleQueue = Vec<(String, PathBuf)>;
 /// Type alias for processed modules set
-type ProcessedModules = HashSet<String>;
+type ProcessedModules = IndexSet<String>;
 
 /// Parameters for discovery phase operations
 struct DiscoveryParams<'a> {
     resolver: &'a mut ModuleResolver,
     modules_to_process: &'a mut ModuleQueue,
     processed_modules: &'a ProcessedModules,
-    queued_modules: &'a mut HashSet<String>,
+    queued_modules: &'a mut IndexSet<String>,
 }
 
 pub struct Bundler {
@@ -276,7 +276,7 @@ impl Bundler {
 
         // For now, use a simple approach: put all modules from cycles at the end
         // and sort the rest topologically
-        let mut cycle_modules = std::collections::HashSet::new();
+        let mut cycle_modules = IndexSet::new();
         for cycle in &analysis.resolvable_cycles {
             for module_name in &cycle.modules {
                 cycle_modules.insert(module_name.as_str());
@@ -350,7 +350,7 @@ impl Bundler {
     ) -> Result<DependencyGraph> {
         let mut graph = DependencyGraph::new();
         let mut processed_modules = ProcessedModules::new();
-        let mut queued_modules = HashSet::new();
+        let mut queued_modules = IndexSet::new();
         let mut modules_to_process = ModuleQueue::new();
         modules_to_process.push((entry_module_name.to_string(), entry_path.to_path_buf()));
         queued_modules.insert(entry_module_name.to_string());

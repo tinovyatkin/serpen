@@ -35,7 +35,7 @@ env_logger = "0.11"
 log = "0.4"
 
 # Graph and data structures
-indexmap = "2.9.0"
+indexmap = { version = "2", features = ["serde"] }
 petgraph = "0.8"
 
 # Utilities
