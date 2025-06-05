@@ -361,13 +361,29 @@ mcp__github__create_pull_request \
 
 - Review all automated CodeRabbit comments
 - Address each comment with code changes
-- Create a pending review to respond to comments:
+- **IMPORTANT**: When resolving comments after making changes:
+  - **DO NOT** create a new review with `mcp__github__create_pending_pull_request_review`
+  - **DO** reply directly to the original comment thread
+  - **DO** resolve/close the thread after responding
+
+  **Correct approach for resolving attended comments:**
   ```bash
+  # Reply to the specific comment thread (not yet available in MCP tools)
+  # For now, use GitHub web interface to:
+  # 1. Reply to each comment explaining what was done
+  # 2. Click "Resolve conversation" on each addressed comment
+  ```
+
+  **Incorrect approach (creates new review comments):**
+  ```bash
+  # DON'T DO THIS when resolving existing comments:
   mcp__github__create_pending_pull_request_review
   mcp__github__add_pull_request_review_comment_to_pending_review
   mcp__github__submit_pending_pull_request_review --event "COMMENT"
   ```
-- Provide detailed explanations of what was changed and why
+
+- The pending review approach is only for adding NEW review comments, not for responding to existing ones
+- Provide detailed explanations of what was changed and why when replying
 
 #### 7. **Final Validation**
 
@@ -402,3 +418,4 @@ mcp__github__create_pull_request \
 - Remember you have full ruff repository cloned locally at references/type-strip/ruff so you may search in files easier
 - lefhook config is at .lefthook.yaml
 - use bun to manage Node.js dependencies
+- CRITICAL: When asked to "resolve PR comments that you attended" - DO NOT create a new review. Instead, reply directly to the original comment threads and mark them as resolved. Creating a new review adds duplicate comments instead of resolving the existing ones.
