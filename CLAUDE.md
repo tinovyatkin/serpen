@@ -437,6 +437,103 @@ This ensures your local main branch stays synchronized and prevents merge confli
 - **Document changes** - update relevant documentation
 - **Use conventional commits** - for automated versioning and changelog generation
 
+### MANDATORY: PR Status and CI Checks Verification
+
+**🚨 CRITICAL REQUIREMENT 🚨**: When checking PR status, you MUST verify both high-level status AND detailed CI check results. The high-level GitHub status can be misleading.
+
+#### Complete PR Status Check Process
+
+**ALWAYS follow this complete verification sequence:**
+
+```bash
+# 1. Get overall PR status (may not show all details)
+mcp__github__get_pull_request_status --owner <owner> --repo <repo> --pullNumber <pr_number>
+
+# 2. Check detailed workflow runs for the specific commit
+gh run list --repo <owner>/<repo> --commit <commit_sha>
+
+# 3. If any runs show 'failure', get detailed failure information
+gh run view <failed_run_id> --repo <owner>/<repo>
+
+# 4. For failed runs, get the actual failure logs
+gh run view <failed_run_id> --log-failed --repo <owner>/<repo>
+```
+
+#### Critical Verification Points
+
+1. **Check ALL Workflow Runs**: Don't rely solely on `mcp__github__get_pull_request_status` as it may only show limited status checks (like CodeRabbit reviews)
+
+2. **Look for Platform-Specific Failures**:
+   - Windows builds may fail due to line endings, path separators, or platform-specific behavior
+   - macOS builds may have different behavior than Linux
+   - Different Python versions (3.10, 3.11, 3.12) may exhibit different failures
+
+3. **Common CI Failure Patterns**:
+   - **Snapshot test failures**: Often due to line ending differences (CRLF vs LF)
+   - **Clippy warnings/errors**: Must be fixed with actual code changes, not `#[allow]` annotations
+   - **Test failures**: Check for platform-specific test issues
+   - **Build failures**: Dependency conflicts, compilation errors, missing dependencies
+
+#### Status Check Interpretation
+
+**❌ These indicate failures requiring attention:**
+
+- `status: "completed", conclusion: "failure"` - Actual test/build failure
+- `status: "completed", conclusion: "action_required"` - Manual intervention needed
+- Any workflow run showing `X` or `failure` status
+
+**✅ These indicate successful runs:**
+
+- `status: "completed", conclusion: "success"` - All checks passed
+- `status: "completed", conclusion: "skipped"` - Intentionally skipped (often due to path filters)
+
+#### Failure Response Protocol
+
+When CI failures are detected:
+
+1. **Identify Root Cause**: Use failure logs to understand the specific issue
+2. **Fix Locally**: Implement the necessary fix in your local branch
+3. **Test Thoroughly**: Ensure the fix works locally before pushing
+4. **Push Fix**: Commit and push the fix to trigger new CI runs
+5. **Verify Fix**: Wait for new CI runs and verify all checks pass
+
+#### Example Failure Scenarios
+
+**Snapshot Test Failure (Windows line endings):**
+
+```bash
+# Failure log will show something like:
+# -expected content with \n
+# +actual content with \r\n
+```
+
+**Fix**: Normalize line endings in output generation code
+
+**Clippy Warnings:**
+
+```bash
+# Failure log shows clippy warnings/errors
+```
+
+**Fix**: Refactor code to address warnings, never use `#[allow]` annotations
+
+**Platform-Specific Test Failure:**
+
+```bash
+# Tests pass on Linux/macOS but fail on Windows
+```
+
+**Fix**: Investigate platform-specific behavior and implement cross-platform solution
+
+#### Never Make These Mistakes
+
+- ❌ **Don't rely only on high-level PR status** - always check detailed workflow runs
+- ❌ **Don't ignore "skipped" workflows** - verify they were skipped for valid reasons
+- ❌ **Don't assume "action_required" means manual approval** - often indicates test failures
+- ❌ **Don't merge with any failing checks** - all platforms must pass
+
+This comprehensive approach ensures robust CI verification and prevents broken code from being merged.
+
 ## Memories
 
 - Don't add timing complexity estimation to any documents - you don't know the team velocity
