@@ -570,9 +570,9 @@ impl CodeEmitter {
                 names: vec![Alias {
                     name: Identifier::new("types", TextRange::default()),
                     asname: None,
-                    range: Default::default(),
+                    range: TextRange::default(),
                 }],
-                range: Default::default(),
+                range: TextRange::default(),
             };
             statements.insert(0, Stmt::Import(import_types));
         }
@@ -688,27 +688,7 @@ impl CodeEmitter {
         let target_expr = if module_name.contains('.') {
             // Handle dotted module names like "greetings.greeting"
             let parts: Vec<&str> = module_name.split('.').collect();
-            let mut current_expr = Expr::Name(ExprName {
-                id: Identifier::new(parts[0], TextRange::default()).into(),
-                ctx: ExprContext::Load,
-                range: TextRange::default(),
-            });
-
-            // Build the attribute chain, with the last part having Store context
-            for (idx, &part) in parts[1..].iter().enumerate() {
-                let is_last = idx == parts.len() - 2;
-                current_expr = Expr::Attribute(ExprAttribute {
-                    value: Box::new(current_expr),
-                    attr: Identifier::new(part, TextRange::default()),
-                    ctx: if is_last {
-                        ExprContext::Store
-                    } else {
-                        ExprContext::Load
-                    },
-                    range: TextRange::default(),
-                });
-            }
-            current_expr
+            Self::build_dotted_name_expr(&parts)
         } else {
             // Simple module name
             Expr::Name(ExprName {
@@ -1416,6 +1396,30 @@ impl CodeEmitter {
             .cow_replace("\r\n", "\n")
             .cow_replace('\r', "\n")
             .into_owned()
+    }
+
+    /// Helper to build a nested dotted name expression for assignment target
+    fn build_dotted_name_expr(parts: &[&str]) -> Expr {
+        let mut current_expr = Expr::Name(ExprName {
+            id: Identifier::new(parts[0], TextRange::default()).into(),
+            ctx: ExprContext::Load,
+            range: TextRange::default(),
+        });
+        let len = parts.len();
+        for (idx, &part) in parts[1..].iter().enumerate() {
+            let ctx = if idx + 2 == len {
+                ExprContext::Store
+            } else {
+                ExprContext::Load
+            };
+            current_expr = Expr::Attribute(ExprAttribute {
+                value: Box::new(current_expr),
+                attr: Identifier::new(part, TextRange::default()),
+                ctx,
+                range: TextRange::default(),
+            });
+        }
+        current_expr
     }
 }
 
