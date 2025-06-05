@@ -292,6 +292,108 @@ cargo clippy --workspace --all-targets
 
 If tests fail or clippy reports issues, the implementation is NOT complete until these are resolved.
 
+### Git Workflow for Feature Development
+
+**MANDATORY**: Follow this standardized git workflow when implementing new features:
+
+#### 1. **Create Feature Branch**
+
+```bash
+# Use MCP Git tools to create and switch to feature branch
+mcp__git__branch_create --name "feat/<feature-name>"
+# Or for other types: fix/<issue>, chore/<task>, docs/<topic>
+```
+
+#### 2. **Implement Feature**
+
+- Write code following all guidelines above
+- Add comprehensive tests for new functionality
+- Update documentation as needed
+- Run tests and clippy frequently during development
+
+#### 3. **Commit Changes**
+
+```bash
+# Stage files using MCP Git tools
+mcp__git__add --files ["path/to/file1", "path/to/file2"]
+
+# Commit with conventional commit message
+mcp__git__commit --message "feat(scope): add new feature
+
+- Detailed description of what was added
+- Why it was needed
+- Any technical details
+
+🤖 Generated with [Claude Code](https://claude.ai/code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+#### 4. **Push and Create PR**
+
+```bash
+# Push branch to remote
+mcp__git__push --branch "feat/<feature-name>"
+
+# Create pull request
+mcp__github__create_pull_request \
+  --title "feat(scope): add new feature" \
+  --body "## Summary
+- Brief description of changes
+
+## Test plan
+- [ ] All tests pass
+- [ ] Clippy warnings resolved
+- [ ] Documentation updated
+
+🤖 Generated with [Claude Code](https://claude.ai/code)" \
+  --head "feat/<feature-name>" \
+  --base "main"
+```
+
+#### 5. **Wait for CI Checks**
+
+- Monitor PR for all checks to pass (tests, clippy, commit validation)
+- The repository has automated AI-powered review (CodeRabbit)
+- Wait for all checks to complete before proceeding
+
+#### 6. **Address Review Comments**
+
+- Review all automated CodeRabbit comments
+- Address each comment with code changes
+- Create a pending review to respond to comments:
+  ```bash
+  mcp__github__create_pending_pull_request_review
+  mcp__github__add_pull_request_review_comment_to_pending_review
+  mcp__github__submit_pending_pull_request_review --event "COMMENT"
+  ```
+- Provide detailed explanations of what was changed and why
+
+#### 7. **Final Validation**
+
+- Ensure all CI checks still pass after addressing comments
+- Run final validation locally:
+  ```bash
+  cargo test --workspace
+  cargo clippy --workspace --all-targets
+  ```
+- Push any additional fixes
+
+#### 8. **Merge PR**
+
+- Once all checks pass and comments are addressed
+- The PR will be merged automatically or by maintainers
+- Delete the feature branch after merge
+
+#### Important Notes:
+
+- **Never skip CI checks** - always wait for them to complete
+- **Address ALL review comments** - including nitpicks and suggestions
+- **Keep commits atomic** - each commit should represent a complete, working change
+- **Update tests** - new features must include tests
+- **Document changes** - update relevant documentation
+- **Use conventional commits** - for automated versioning and changelog generation
+
 ## Memories
 
 - Don't add timing complexity estimation to any documents - you don't know the team velocity
