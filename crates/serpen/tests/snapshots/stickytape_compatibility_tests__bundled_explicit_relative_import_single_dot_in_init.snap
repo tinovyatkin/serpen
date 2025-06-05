@@ -12,7 +12,7 @@ __greetings_greeting_message = "Hello"
 # ─ Module: greetings ─
 import types
 greetings = types.ModuleType('greetings')
-exec('import types\ngreeting = types.ModuleType(\'greeting\')\ngreeting.message = __greetings_greeting_message\nmessage = greeting.message\n__all__ = ["message"]\n__greetings_message = greeting.message', globals(), greetings.__dict__)
+exec('__all__ = ["message"]\nmessage = __greetings_greeting_message', globals(), greetings.__dict__)
 
 # ─ Entry Module: hello ─
 print(greetings.message)
