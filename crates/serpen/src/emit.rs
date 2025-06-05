@@ -773,12 +773,12 @@ impl CodeEmitter {
                 renames.len()
             );
 
-            for (_original_name, renamed_name) in renames {
-                // Create assignment: renamed_name = renamed_name
-                // This exposes the renamed variable so it can be referenced by other modules
+            for (original_name, renamed_name) in renames {
+                // Create assignment: original_name = renamed_name
+                // This exposes the renamed variable under its original name for access by other modules
                 let assignment = Stmt::Assign(StmtAssign {
                     targets: vec![Expr::Name(ExprName {
-                        id: renamed_name.clone().into(),
+                        id: original_name.clone().into(),
                         ctx: ExprContext::Store,
                         range: TextRange::default(),
                     })],

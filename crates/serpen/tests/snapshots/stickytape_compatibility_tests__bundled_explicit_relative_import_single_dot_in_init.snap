@@ -8,7 +8,7 @@ description: Bundled content for explicit_relative_import_single_dot_in_init
 
 # ─ Module: greetings.greeting ─
 __greetings_greeting_message = "Hello"
-__greetings_greeting_message = __greetings_greeting_message
+message = __greetings_greeting_message
 
 # ─ Module: greetings ─
 import types
