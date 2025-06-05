@@ -1213,6 +1213,18 @@ impl AstRewriter {
                     self.transform_attribute_access_in_expr(&mut item.value, imported_modules)?;
                 }
             }
+            Expr::If(if_expr) => {
+                self.transform_attribute_access_in_expr(&mut if_expr.test, imported_modules)?;
+                self.transform_attribute_access_in_expr(&mut if_expr.body, imported_modules)?;
+                self.transform_attribute_access_in_expr(&mut if_expr.orelse, imported_modules)?;
+            }
+            Expr::UnaryOp(unary) => {
+                self.transform_attribute_access_in_expr(&mut unary.operand, imported_modules)?;
+            }
+            Expr::Subscript(subscript) => {
+                self.transform_attribute_access_in_expr(&mut subscript.value, imported_modules)?;
+                self.transform_attribute_access_in_expr(&mut subscript.slice, imported_modules)?;
+            }
             // Add more expression types as needed
             _ => {}
         }
