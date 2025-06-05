@@ -591,6 +591,39 @@ Changes made in `path/to/file.rs:line-numbers`:
 5. **Mark the conversation as resolved** using GitHub's resolve feature
 6. **Repeat for each comment** until all are addressed
 
+#### MANDATORY: Correct API Usage for Comment Replies
+
+**🚨 CRITICAL REQUIREMENT 🚨**: Always use the correct GitHub API method for replying to comments.
+
+**CORRECT API for Pull Request Review Comments:**
+
+- Use `mcp__github__add_pull_request_review_comment_to_pending_review` for new review comments
+- Use the correct GitHub CLI command for replies:
+
+```bash
+# For replying to existing review comments (line-level comments)
+gh api repos/OWNER/REPO/pulls/PR_NUMBER/comments/COMMENT_ID/replies \
+  --method POST \
+  --field body="Your reply message here"
+
+# For replying to general PR comments  
+gh api repos/OWNER/REPO/issues/PR_NUMBER/comments \
+  --method POST \
+  --field body="Your reply message here"
+```
+
+**NEVER use these incorrect approaches:**
+❌ **Don't edit existing comments** - This overwrites the original reviewer's comment
+❌ **Don't use the wrong API endpoint** - Each comment type requires specific endpoints
+❌ **Don't create new top-level comments** - These don't thread properly with the original comment
+
+**Debugging Comment API Issues:**
+
+1. **Identify comment type first**: Review comment (line-level) vs. general PR comment
+2. **Get the correct comment ID**: Use `gh pr view PR_NUMBER --comments` to find comment IDs
+3. **Use the appropriate API endpoint**: Review comments vs. issue comments have different APIs
+4. **Test the reply**: Verify the reply appears threaded under the original comment
+
 This ensures proper traceability and follows GitHub's intended review workflow for collaborative development.
 
 ## Memories
