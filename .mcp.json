@@ -10,9 +10,7 @@
         "git": {
             "command": "uvx",
             "args": [
-                "mcp-server-git",
-                "--repository",
-                "."
+                "mcp-server-git"
             ]
         },
         "docs-manager": {
