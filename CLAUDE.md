@@ -368,10 +368,14 @@ mcp__github__create_pull_request \
 
   **Correct approach for resolving attended comments:**
   ```bash
-  # Reply to the specific comment thread (not yet available in MCP tools)
-  # For now, use GitHub web interface to:
-  # 1. Reply to each comment explaining what was done
-  # 2. Click "Resolve conversation" on each addressed comment
+  # Reply to a specific review comment thread using gh CLI:
+  gh api repos/{owner}/{repo}/pulls/{pull_number}/comments \
+    -X POST \
+    -f body="Your reply explaining what was done" \
+    -F in_reply_to={comment_id}
+
+  # Note: This creates a reply in the thread, but doesn't mark it as resolved
+  # Marking as resolved still requires the web interface
   ```
 
   **Incorrect approach (creates new review comments):**
