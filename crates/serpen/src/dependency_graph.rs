@@ -13,11 +13,20 @@ pub struct ModuleNode {
     pub imports: Vec<String>,
 }
 
+/// Comprehensive analysis of circular dependencies in the module dependency graph.
+///
+/// This struct provides detailed information about detected circular dependencies,
+/// categorizing them into resolvable and unresolvable types with specific resolution
+/// strategies for each category.
 #[derive(Debug, Clone)]
 pub struct CircularDependencyAnalysis {
+    /// Circular dependencies that can be resolved through code transformations
     pub resolvable_cycles: Vec<CircularDependencyGroup>,
+    /// Circular dependencies that cannot be resolved (e.g., temporal paradox patterns)
     pub unresolvable_cycles: Vec<CircularDependencyGroup>,
+    /// Total number of cycles detected across all strongly connected components
     pub total_cycles_detected: usize,
+    /// Size of the largest cycle (number of modules involved)
     pub largest_cycle_size: usize,
 }
 

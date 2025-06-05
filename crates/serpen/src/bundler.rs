@@ -143,39 +143,70 @@ impl Bundler {
                 let mut error_msg =
                     String::from("Circular dependencies detected in the module graph:\n\n");
 
-                for (i, cycle) in analysis.resolvable_cycles.iter().enumerate() {
-                    error_msg.push_str(&format!(
-                        "Cycle {}: {}\n",
-                        i + 1,
-                        cycle.modules.join(" → ")
-                    ));
-                    error_msg.push_str(&format!("  Type: {:?}\n", cycle.cycle_type));
-
-                    match &cycle.suggested_resolution {
-                        crate::dependency_graph::ResolutionStrategy::LazyImport { modules: _ } => {
-                            error_msg.push_str("  Suggestion: Move imports inside functions to enable lazy loading\n");
+                // First, show unresolvable cycles if any
+                if !analysis.unresolvable_cycles.is_empty() {
+                    error_msg.push_str("UNRESOLVABLE CYCLES:\n");
+                    for (i, cycle) in analysis.unresolvable_cycles.iter().enumerate() {
+                        error_msg.push_str(&format!(
+                            "Cycle {}: {}\n",
+                            i + 1,
+                            cycle.modules.join(" → ")
+                        ));
+                        error_msg.push_str(&format!("  Type: {:?}\n", cycle.cycle_type));
+                        if let crate::dependency_graph::ResolutionStrategy::Unresolvable {
+                            reason,
+                        } = &cycle.suggested_resolution
+                        {
+                            error_msg.push_str(&format!("  Reason: {}\n", reason));
                         }
-                        crate::dependency_graph::ResolutionStrategy::FunctionScopedImport {
-                            import_statements,
-                        } => {
-                            error_msg.push_str("  Suggestions:\n");
-                            for suggestion in import_statements {
-                                error_msg.push_str(&format!("    {}\n", suggestion));
-                            }
-                        }
-                        crate::dependency_graph::ResolutionStrategy::ModuleSplit {
-                            suggestions,
-                        } => {
-                            error_msg.push_str("  Suggestions:\n");
-                            for suggestion in suggestions {
-                                error_msg.push_str(&format!("    {}\n", suggestion));
-                            }
-                        }
-                        crate::dependency_graph::ResolutionStrategy::Unresolvable { .. } => {
-                            // This shouldn't happen in resolvable cycles
-                        }
+                        error_msg.push('\n');
                     }
-                    error_msg.push('\n');
+                }
+
+                // Then show resolvable cycles that are not yet supported
+                if !analysis.resolvable_cycles.is_empty() {
+                    if !analysis.unresolvable_cycles.is_empty() {
+                        error_msg.push_str("RESOLVABLE CYCLES (not yet implemented):\n");
+                    }
+                    for (i, cycle) in analysis.resolvable_cycles.iter().enumerate() {
+                        let cycle_num = i + 1 + analysis.unresolvable_cycles.len();
+                        error_msg.push_str(&format!(
+                            "Cycle {}: {}\n",
+                            cycle_num,
+                            cycle.modules.join(" → ")
+                        ));
+                        error_msg.push_str(&format!("  Type: {:?}\n", cycle.cycle_type));
+
+                        match &cycle.suggested_resolution {
+                            crate::dependency_graph::ResolutionStrategy::LazyImport {
+                                modules: _,
+                            } => {
+                                error_msg.push_str("  Suggestion: Move imports inside functions to enable lazy loading\n");
+                            }
+                            crate::dependency_graph::ResolutionStrategy::FunctionScopedImport {
+                                import_statements,
+                            } => {
+                                error_msg.push_str("  Suggestions:\n");
+                                for suggestion in import_statements {
+                                    error_msg.push_str(&format!("    {}\n", suggestion));
+                                }
+                            }
+                            crate::dependency_graph::ResolutionStrategy::ModuleSplit {
+                                suggestions,
+                            } => {
+                                error_msg.push_str("  Suggestions:\n");
+                                for suggestion in suggestions {
+                                    error_msg.push_str(&format!("    {}\n", suggestion));
+                                }
+                            }
+                            crate::dependency_graph::ResolutionStrategy::Unresolvable {
+                                ..
+                            } => {
+                                // This shouldn't happen in resolvable cycles
+                            }
+                        }
+                        error_msg.push('\n');
+                    }
                 }
 
                 return Err(anyhow!(error_msg));

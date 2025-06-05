@@ -319,12 +319,12 @@ Cycle 1: constants_b → constants_a
 
 ## Comparison with Other Tools
 
-| Tool        | Language | Tree Shaking | Import Cleanup | Circular Deps | PySpark Ready | Type Hints |
-| ----------- | -------- | ------------ | -------------- | ------------- | ------------- | ---------- |
-| Serpen      | Rust     | ✅           | ✅             | ✅ Smart      | ✅            | ✅         |
-| PyInstaller | Python   | ❌           | ❌             | ❌ Fails      | ❌            | ✅         |
-| Nuitka      | Python   | ❌           | ❌             | ❌ Fails      | ❌            | ✅         |
-| Pex         | Python   | ❌           | ❌             | ❌ Fails      | ❌            | ✅         |
+| Tool        | Language | Tree Shaking | Import Cleanup | Circular Deps       | PySpark Ready | Type Hints |
+| ----------- | -------- | ------------ | -------------- | ------------------- | ------------- | ---------- |
+| Serpen      | Rust     | ✅           | ✅             | ✅ Smart Resolution | ✅            | ✅         |
+| PyInstaller | Python   | ❌           | ❌             | ❌ Fails            | ❌            | ✅         |
+| Nuitka      | Python   | ❌           | ❌             | ❌ Fails            | ❌            | ✅         |
+| Pex         | Python   | ❌           | ❌             | ❌ Fails            | ❌            | ✅         |
 
 ## Development
 
