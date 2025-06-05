@@ -237,6 +237,106 @@ When implementing functionality, consult these high-quality repositories:
 - **[astral-sh/uv](https://github.com/astral-sh/uv)** - For package resolution, dependency management, Python ecosystem integration
 - **[web-infra-dev/rspack](https://github.com/web-infra-dev/rspack)** - For module graph construction, dependency resolution
 
+### GitHub CLI for PR Review Management
+
+#### Replying to PR Review Comments
+
+To reply to an existing PR review comment:
+
+```bash
+gh api repos/{owner}/{repo}/pulls/{pull_number}/comments \
+  -X POST \
+  -f body="Your reply text" \
+  -F in_reply_to={comment_id}
+```
+
+#### Resolving PR Review Comments
+
+To mark a PR review thread as resolved using GraphQL:
+
+```bash
+gh api graphql -f query='
+  mutation {
+    resolveReviewThread(input: {
+      threadId: "THREAD_ID_HERE"
+    }) {
+      thread {
+        id
+        isResolved
+      }
+    }
+  }'
+```
+
+To mark a PR review thread as unresolved:
+
+```bash
+gh api graphql -f query='
+  mutation {
+    unresolveReviewThread(input: {
+      threadId: "THREAD_ID_HERE"
+    }) {
+      thread {
+        id
+        isResolved
+      }
+    }
+  }'
+```
+
+**Note**: You'll need to obtain the thread ID from the review thread. Each review comment belongs to a thread, and the thread ID can be retrieved through GitHub's API or GraphQL queries.
+
+#### Re-requesting Reviews (Clear "Blocked" Status)
+
+When CodeRabbit or other reviewers request changes, the PR becomes "blocked" even after addressing all comments. To clear this status, re-request review from the same reviewers:
+
+```bash
+# Get the pull request Node ID and reviewer user IDs first
+gh api graphql -f query='
+  query {
+    repository(owner: "OWNER", name: "REPO") {
+      pullRequest(number: PULL_NUMBER) {
+        id
+        reviews(last: 10) {
+          nodes {
+            author {
+              login
+              ... on User {
+                id
+              }
+            }
+            state
+          }
+        }
+      }
+    }
+  }'
+
+# Then re-request reviews using the PR ID and user IDs
+gh api graphql -f query='
+  mutation {
+    requestReviews(input: {
+      pullRequestId: "PULL_REQUEST_NODE_ID"
+      userIds: ["USER_ID_1", "USER_ID_2"]
+    }) {
+      pullRequest {
+        id
+        reviewRequests(first: 10) {
+          nodes {
+            requestedReviewer {
+              ... on User {
+                login
+              }
+            }
+          }
+        }
+      }
+    }
+  }'
+```
+
+This clears the "blocked" status by converting the "changes requested" state back to a "review requested" state.
+
 ### Snapshot Testing with Insta
 
 Accept new or updated snapshots using:
