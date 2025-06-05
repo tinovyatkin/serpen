@@ -41,6 +41,10 @@ pub struct CodeEmitter {
     _preserve_type_hints: bool,
     /// Track which parent namespaces have already been created to avoid duplicates
     created_namespaces: HashSet<String>,
+    /// Track which modules are from __init__.py files
+    init_modules: HashSet<String>,
+    /// Track bundled variable names for each module
+    bundled_variables: HashMap<String, HashMap<String, String>>,
 }
 
 impl CodeEmitter {
@@ -54,6 +58,8 @@ impl CodeEmitter {
             _preserve_comments: preserve_comments,
             _preserve_type_hints: preserve_type_hints,
             created_namespaces: HashSet::new(),
+            init_modules: HashSet::new(),
+            bundled_variables: HashMap::new(),
         }
     }
 
@@ -209,6 +215,17 @@ impl CodeEmitter {
         let mut parsed_modules_data = HashMap::new();
 
         for module in modules {
+            // Check if this module is from an __init__.py file
+            if module
+                .path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .map(|name| name == "__init__.py")
+                .unwrap_or(false)
+            {
+                self.init_modules.insert(module.name.clone());
+            }
+
             let source = fs::read_to_string(&module.path)
                 .with_context(|| format!("Failed to read module file: {:?}", module.path))?;
 
@@ -439,9 +456,26 @@ impl CodeEmitter {
         // Apply AST rewriting for name conflict resolution FIRST
         ast_rewriter.rewrite_module_ast(module_name, &mut transformed_ast)?;
 
+        // Track bundled variables from the rewriter
+        self.collect_bundled_variables_from_rewriter(module_name, ast_rewriter);
+
         // Apply import alias transformations BEFORE removing imports
         // This ensures that alias information is available when transforming expressions
         ast_rewriter.transform_module_ast(&mut transformed_ast)?;
+
+        // Transform relative imports in __init__.py files BEFORE removing imports
+        // This ensures relative imports are resolved to bundled variable references
+        let bundled_modules = self.create_bundled_modules_mapping();
+        log::debug!(
+            "Bundled modules mapping for {}: {:?}",
+            module_name,
+            bundled_modules
+        );
+        ast_rewriter.transform_init_py_relative_imports(
+            module_name,
+            &mut transformed_ast,
+            &bundled_modules,
+        )?;
 
         // Remove first-party imports and unused imports AFTER transformations
         self.remove_first_party_imports(&mut transformed_ast, &parsed_data.first_party_imports)?;
@@ -492,7 +526,10 @@ impl CodeEmitter {
         };
 
         // Add the exec call that will execute the module code in its namespace
-        let exec_stmt = self.create_module_exec_statement(module_name, &module_code)?;
+        // For __init__.py files, include globals to access bundled variables
+        let needs_globals = self.is_init_py_module(module_name);
+        let exec_stmt =
+            self.create_module_exec_statement(module_name, &module_code, needs_globals)?;
         namespace_stmts.push(exec_stmt);
 
         Ok(namespace_stmts)
@@ -710,9 +747,98 @@ impl CodeEmitter {
         })
     }
 
+    /// Check if a module name represents an __init__.py file
+    fn is_init_py_module(&self, module_name: &str) -> bool {
+        // Check if this module was identified as coming from an __init__.py file
+        // during the parsing phase
+        self.init_modules.contains(module_name)
+    }
+
+    /// Create statements to expose renamed variables with their original names
+    fn create_variable_exposure_statements(&self, _module_name: &str) -> Result<Vec<Stmt>> {
+        // This method needs to be implemented to dynamically determine which variables
+        // need to be exposed based on the actual renames that occurred
+        // For now, return empty to avoid hardcoding test values
+        Ok(Vec::new())
+    }
+
     /// Create an AST for the exec statement that executes module code in its namespace
-    fn create_module_exec_statement(&self, module_name: &str, module_code: &str) -> Result<Stmt> {
-        // Create the exec call: exec(module_code, module_name.__dict__)
+    fn create_module_exec_statement(
+        &self,
+        module_name: &str,
+        module_code: &str,
+        include_globals: bool,
+    ) -> Result<Stmt> {
+        // Create the module code string literal
+        let code_literal = Expr::StringLiteral(ruff_python_ast::ExprStringLiteral {
+            value: ruff_python_ast::StringLiteralValue::single(ruff_python_ast::StringLiteral {
+                range: TextRange::default(),
+                value: module_code.to_string().into_boxed_str(),
+                flags: ruff_python_ast::StringLiteralFlags::empty(),
+            }),
+            range: TextRange::default(),
+        });
+
+        // Create the module __dict__ expression
+        let module_dict = Expr::Attribute(ExprAttribute {
+            value: Box::new(if module_name.contains('.') {
+                // Handle dotted module names
+                let parts: Vec<&str> = module_name.split('.').collect();
+                let mut current_expr = Expr::Name(ExprName {
+                    id: Identifier::new(parts[0], TextRange::default()).into(),
+                    ctx: ExprContext::Load,
+                    range: TextRange::default(),
+                });
+
+                for &part in &parts[1..] {
+                    current_expr = Expr::Attribute(ExprAttribute {
+                        value: Box::new(current_expr),
+                        attr: Identifier::new(part, TextRange::default()),
+                        ctx: ExprContext::Load,
+                        range: TextRange::default(),
+                    });
+                }
+                current_expr
+            } else {
+                // Simple module name
+                Expr::Name(ExprName {
+                    id: Identifier::new(module_name, TextRange::default()).into(),
+                    ctx: ExprContext::Load,
+                    range: TextRange::default(),
+                })
+            }),
+            attr: Identifier::new("__dict__", TextRange::default()),
+            ctx: ExprContext::Load,
+            range: TextRange::default(),
+        });
+
+        // Create the arguments based on whether globals are needed
+        let args = if include_globals {
+            // exec(code, globals(), module.__dict__)
+            vec![
+                code_literal,
+                // globals() call
+                Expr::Call(ExprCall {
+                    func: Box::new(Expr::Name(ExprName {
+                        id: Identifier::new("globals", TextRange::default()).into(),
+                        ctx: ExprContext::Load,
+                        range: TextRange::default(),
+                    })),
+                    arguments: Arguments {
+                        args: vec![].into(),
+                        keywords: vec![].into(),
+                        range: TextRange::default(),
+                    },
+                    range: TextRange::default(),
+                }),
+                module_dict,
+            ]
+        } else {
+            // exec(code, module.__dict__)
+            vec![code_literal, module_dict]
+        };
+
+        // Create the exec call
         let exec_call = Expr::Call(ExprCall {
             func: Box::new(Expr::Name(ExprName {
                 id: Identifier::new("exec", TextRange::default()).into(),
@@ -720,52 +846,7 @@ impl CodeEmitter {
                 range: TextRange::default(),
             })),
             arguments: Arguments {
-                args: vec![
-                    // First argument: the module code as a string literal
-                    Expr::StringLiteral(ruff_python_ast::ExprStringLiteral {
-                        value: ruff_python_ast::StringLiteralValue::single(
-                            ruff_python_ast::StringLiteral {
-                                range: TextRange::default(),
-                                value: module_code.to_string().into_boxed_str(),
-                                flags: ruff_python_ast::StringLiteralFlags::empty(),
-                            },
-                        ),
-                        range: TextRange::default(),
-                    }),
-                    // Second argument: module_name.__dict__
-                    Expr::Attribute(ExprAttribute {
-                        value: Box::new(if module_name.contains('.') {
-                            // Handle dotted module names
-                            let parts: Vec<&str> = module_name.split('.').collect();
-                            let mut current_expr = Expr::Name(ExprName {
-                                id: Identifier::new(parts[0], TextRange::default()).into(),
-                                ctx: ExprContext::Load,
-                                range: TextRange::default(),
-                            });
-
-                            for &part in &parts[1..] {
-                                current_expr = Expr::Attribute(ExprAttribute {
-                                    value: Box::new(current_expr),
-                                    attr: Identifier::new(part, TextRange::default()),
-                                    ctx: ExprContext::Load,
-                                    range: TextRange::default(),
-                                });
-                            }
-                            current_expr
-                        } else {
-                            // Simple module name
-                            Expr::Name(ExprName {
-                                id: Identifier::new(module_name, TextRange::default()).into(),
-                                ctx: ExprContext::Load,
-                                range: TextRange::default(),
-                            })
-                        }),
-                        attr: Identifier::new("__dict__", TextRange::default()),
-                        ctx: ExprContext::Load,
-                        range: TextRange::default(),
-                    }),
-                ]
-                .into(),
+                args: args.into(),
                 keywords: vec![].into(),
                 range: TextRange::default(),
             },
@@ -1235,6 +1316,56 @@ impl CodeEmitter {
 
         // Add an empty line comment after imports
         bundle_ast.body.push(self.create_comment_stmt(""));
+    }
+
+    /// Create a mapping of module names to their bundled variable names
+    /// This is used for transforming relative imports in __init__.py files
+    fn create_bundled_modules_mapping(&self) -> HashMap<String, String> {
+        let mut mapping = HashMap::new();
+
+        for (module_name, variables) in &self.bundled_variables {
+            for (original_name, bundled_name) in variables {
+                // Map "module.original_name" -> "bundled_name"
+                let key = format!("{}.{}", module_name, original_name);
+                mapping.insert(key, bundled_name.clone());
+            }
+        }
+
+        mapping
+    }
+
+    /// Track a bundled variable for a module
+    fn track_bundled_variable(
+        &mut self,
+        module_name: &str,
+        original_name: &str,
+        bundled_name: &str,
+    ) {
+        self.bundled_variables
+            .entry(module_name.to_string())
+            .or_default()
+            .insert(original_name.to_string(), bundled_name.to_string());
+    }
+
+    /// Collect bundled variables from the AST rewriter
+    fn collect_bundled_variables_from_rewriter(
+        &mut self,
+        module_name: &str,
+        ast_rewriter: &AstRewriter,
+    ) {
+        if let Some(renames) = ast_rewriter.get_module_renames(module_name) {
+            log::debug!(
+                "Found {} renames for module {}: {:?}",
+                renames.len(),
+                module_name,
+                renames
+            );
+            for (original_name, renamed_name) in renames {
+                self.track_bundled_variable(module_name, original_name, renamed_name);
+            }
+        } else {
+            log::debug!("No renames found for module {}", module_name);
+        }
     }
 
     /// Normalize line endings to LF (\n) for cross-platform consistency
