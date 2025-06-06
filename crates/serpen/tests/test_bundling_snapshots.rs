@@ -8,6 +8,7 @@ use tempfile::TempDir;
 
 use serpen::bundler::Bundler;
 use serpen::config::Config;
+use serpen::util::get_python_executable;
 
 // Ruff linting integration for cross-validation
 use ruff_linter::linter::{ParseSource, lint_only};
@@ -163,7 +164,7 @@ fn test_single_bundling_fixture(fixtures_dir: &Path, fixture_name: &str) -> Resu
     bundler.bundle(&main_py_path, &bundle_path, false)?;
 
     // Optionally validate Python syntax before execution
-    let python_cmd = std::env::var("PYTHON_EXECUTABLE").unwrap_or_else(|_| "python3".to_string());
+    let python_cmd = get_python_executable();
     let syntax_check = Command::new(&python_cmd)
         .args(["-m", "py_compile"])
         .arg(&bundle_path)
@@ -185,8 +186,8 @@ fn test_single_bundling_fixture(fixtures_dir: &Path, fixture_name: &str) -> Resu
     let ruff_results = run_ruff_lint_on_bundle(&bundled_code);
 
     // Execute the bundled code with Python and capture output
-    // Use configurable Python executable for different environments
-    let python_cmd = std::env::var("PYTHON_EXECUTABLE").unwrap_or_else(|_| "python3".to_string());
+    // Use Python executable with virtual environment support
+    let python_cmd = get_python_executable();
 
     let python_output = Command::new(&python_cmd)
         .arg(&bundle_path)
