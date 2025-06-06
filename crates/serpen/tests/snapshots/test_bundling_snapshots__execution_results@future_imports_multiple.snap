@@ -1,0 +1,9 @@
+---
+source: crates/serpen/tests/test_bundling_snapshots.rs
+expression: execution_results
+---
+Status: SUCCESS
+Stdout:
+Function A
+Function B
+Stderr:

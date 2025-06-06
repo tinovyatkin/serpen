@@ -78,26 +78,32 @@ fn test_single_bundling_fixture(fixtures_dir: &Path, fixture_name: &str) -> Resu
         .output()
         .map_err(|e| anyhow::anyhow!("Failed to execute Python: {}", e))?;
 
-    // Create snapshot content with both bundled code and execution results
-    let execution_status = if python_output.status.success() {
-        "SUCCESS"
-    } else {
-        "FAILED"
-    };
+    // Create separate snapshots using insta's named snapshot feature
+    insta::with_settings!({
+        snapshot_suffix => fixture_name
+    }, {
+        // Snapshot the bundled code
+        insta::assert_snapshot!("bundled_code", bundled_code.trim());
 
-    let stdout = String::from_utf8_lossy(&python_output.stdout);
-    let stderr = String::from_utf8_lossy(&python_output.stderr);
+        // Create execution results snapshot
+        let execution_status = if python_output.status.success() {
+            "SUCCESS"
+        } else {
+            "FAILED"
+        };
 
-    let snapshot_content = format!(
-        "=== BUNDLED CODE ===\n{}\n\n=== EXECUTION STATUS ===\n{}\n\n=== STDOUT ===\n{}\n\n=== STDERR ===\n{}",
-        bundled_code.trim(),
-        execution_status,
-        stdout.trim(),
-        stderr.trim()
-    );
+        let stdout = String::from_utf8_lossy(&python_output.stdout);
+        let stderr = String::from_utf8_lossy(&python_output.stderr);
 
-    // Create insta snapshot
-    insta::assert_snapshot!(format!("bundling_{}", fixture_name), snapshot_content);
+        let execution_results = format!(
+            "Status: {}\nStdout:\n{}\nStderr:\n{}",
+            execution_status,
+            stdout.trim(),
+            stderr.trim()
+        );
+
+        insta::assert_snapshot!("execution_results", execution_results);
+    });
 
     Ok(())
 }
