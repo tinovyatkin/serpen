@@ -547,7 +547,7 @@ impl Bundler {
 
     /// Resolve a relative import to its absolute module name
     /// Returns None if the relative import goes beyond the module hierarchy
-    #[allow(clippy::all)]
+    #[allow(clippy::manual_ok_err)]
     fn resolve_relative_import(&self, file_path: &Path, level: u32) -> Option<String> {
         // Get the directory containing the current file
         let current_dir = file_path.parent()?;
