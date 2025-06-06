@@ -46,6 +46,8 @@ pub struct CodeEmitter {
     init_modules: IndexSet<String>,
     /// Track bundled variable names for each module
     bundled_variables: IndexMap<String, IndexMap<String, String>>,
+    /// Track future imports that need to be hoisted to the top
+    future_imports: IndexSet<String>,
 }
 
 impl CodeEmitter {
@@ -61,6 +63,7 @@ impl CodeEmitter {
             created_namespaces: IndexSet::new(),
             init_modules: IndexSet::new(),
             bundled_variables: IndexMap::new(),
+            future_imports: IndexSet::new(),
         }
     }
 
@@ -71,6 +74,11 @@ impl CodeEmitter {
         third_party_imports: &mut IndexSet<String>,
         stdlib_imports: &mut IndexSet<String>,
     ) {
+        // Skip __future__ imports as they are handled separately
+        if import == "__future__" {
+            return;
+        }
+
         match self.resolver.classify_import(import) {
             ImportType::ThirdParty => {
                 third_party_imports.insert(import.to_string());
@@ -136,6 +144,35 @@ impl CodeEmitter {
         }
 
         (aliased_third_party, aliased_stdlib)
+    }
+
+    /// Add future imports to the bundle at the very top
+    fn add_future_imports_to_bundle(&self, bundle_ast: &mut ModModule) {
+        if self.future_imports.is_empty() {
+            return;
+        }
+
+        // Sort future imports for deterministic output
+        let mut sorted_features: Vec<_> = self.future_imports.iter().collect();
+        sorted_features.sort();
+
+        // Create a single from __future__ import statement with all features
+        let future_import = Stmt::ImportFrom(StmtImportFrom {
+            module: Some(Identifier::new("__future__", TextRange::default())),
+            names: sorted_features
+                .into_iter()
+                .map(|feature| Alias {
+                    name: Identifier::new(feature.clone(), TextRange::default()),
+                    asname: None,
+                    range: TextRange::default(),
+                })
+                .collect(),
+            level: 0,
+            range: TextRange::default(),
+        });
+
+        bundle_ast.body.push(future_import);
+        bundle_ast.body.push(self.create_comment_stmt("")); // Add blank line after future imports
     }
 
     /// Add aliased imports to the bundle separately (for alias assignments)
@@ -247,6 +284,9 @@ impl CodeEmitter {
             // Collect first-party imports from AST
             let first_party_imports = self.collect_first_party_imports_from_ast(ast.syntax())?;
 
+            // Collect future imports
+            self.collect_future_imports_from_ast(ast.syntax());
+
             // Store parsed data
             parsed_modules_data.insert(
                 module.path.clone(),
@@ -338,6 +378,9 @@ impl CodeEmitter {
             &mut stdlib_imports,
             &ast_rewriter,
         );
+
+        // Add future imports at the very top (after shebang/comments)
+        self.add_future_imports_to_bundle(&mut bundle_ast);
 
         // Add preserved imports at the top
         self.add_preserved_imports_to_bundle(&mut bundle_ast, stdlib_imports, third_party_imports);
@@ -1131,7 +1174,12 @@ impl CodeEmitter {
         F: Fn(&str) -> bool,
     {
         if let Some(module) = &import_from_stmt.module {
-            keep_predicate(module.as_str())
+            let module_name = module.as_str();
+            // Always remove __future__ imports as they are hoisted to the top
+            if module_name == "__future__" {
+                return false;
+            }
+            keep_predicate(module_name)
         } else {
             // Relative import - keep for now (could be refined later)
             true
@@ -1188,6 +1236,29 @@ impl CodeEmitter {
             ImportType::FirstParty
         ) {
             imports.insert(module_name.to_string());
+        }
+    }
+
+    /// Collect future imports from AST
+    fn collect_future_imports_from_ast(&mut self, module: &ModModule) {
+        for stmt in &module.body {
+            let Stmt::ImportFrom(import_from_stmt) = stmt else {
+                continue;
+            };
+
+            let Some(module) = &import_from_stmt.module else {
+                continue;
+            };
+
+            if module.as_str() != "__future__" {
+                continue;
+            }
+
+            // Collect all features imported from __future__
+            for alias in &import_from_stmt.names {
+                let feature_name = alias.name.as_str();
+                self.future_imports.insert(feature_name.to_string());
+            }
         }
     }
 
