@@ -96,13 +96,16 @@ fn test_single_bundling_fixture(fixtures_dir: &Path, fixture_name: &str) -> Resu
         .output()
         .map_err(|e| anyhow::anyhow!("Failed to execute Python: {}", e))?;
 
+    // Normalize line endings for cross-platform compatibility
+    let normalized_bundled_code = bundled_code.trim().replace("\r\n", "\n");
+
     // Create separate snapshots using insta's named snapshot feature
     insta::with_settings!({
         snapshot_suffix => fixture_name,
         omit_expression => true
     }, {
-        // Snapshot the bundled code with normalized line endings for cross-platform compatibility
-        insta::assert_snapshot!("bundled_code", bundled_code.trim().replace("\r\n", "\n"));
+        // Snapshot the bundled code
+        insta::assert_snapshot!("bundled_code", normalized_bundled_code);
 
         // Create structured execution results snapshot
         let execution_status = if python_output.status.success() {
