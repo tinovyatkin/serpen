@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 /// Comprehensive test suite based on stickytape test scenarios
 ///
 /// This test suite mirrors the functionality and test cases from the stickytape Python bundler

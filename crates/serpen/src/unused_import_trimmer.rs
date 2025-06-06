@@ -311,6 +311,7 @@ impl Default for UnusedImportTrimmer {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use insta::{assert_snapshot, with_settings};
@@ -361,7 +362,9 @@ if __name__ == "__main__":
     main()
 "#;
 
-        let result = trimmer.trim_unused_imports(source, &config).unwrap();
+        let result = trimmer
+            .trim_unused_imports(source, &config)
+            .expect("trim_unused_imports should succeed");
 
         with_settings!({
             description => "Basic unused import trimming removes only unused imports"
@@ -384,7 +387,9 @@ def process_data(items: List[str]) -> Dict[str, int]:
     return result
 "#;
 
-        let result = trimmer.trim_unused_imports(source, &config).unwrap();
+        let result = trimmer
+            .trim_unused_imports(source, &config)
+            .expect("trim_unused_imports should succeed for partial import trimming");
 
         with_settings!({
             description => "Partial import trimming removes only unused items from from-imports"
@@ -407,7 +412,9 @@ def calculate(x):
     return data
 "#;
 
-        let result = trimmer.trim_unused_imports(source, &config).unwrap();
+        let result = trimmer
+            .trim_unused_imports(source, &config)
+            .expect("trim_unused_imports should succeed when no unused imports");
 
         with_settings!({
             description => "Code with no unused imports remains unchanged"
@@ -443,7 +450,9 @@ def main():
     print(f"Defaultdict: {dict(dd)}")
 "#;
 
-        let result = trimmer.trim_unused_imports(source, &config).unwrap();
+        let result = trimmer
+            .trim_unused_imports(source, &config)
+            .expect("trim_unused_imports should succeed for complex import scenarios");
 
         with_settings!({
             description => "Complex import scenario with mixed used and unused imports"
@@ -465,7 +474,9 @@ def main():
     print(sys.version)
 "#;
 
-        let result = trimmer.trim_unused_imports(source, &config).unwrap();
+        let result = trimmer
+            .trim_unused_imports(source, &config)
+            .expect("trim_unused_imports should succeed for future imports");
 
         with_settings!({
             description => "Future imports are preserved by default configuration"
@@ -489,7 +500,9 @@ def main():
     print(p)
 "#;
 
-        let unused_imports = trimmer.analyze_only(source, &config).unwrap();
+        let unused_imports = trimmer
+            .analyze_only(source, &config)
+            .expect("analyze_only should succeed");
 
         let mut output = String::new();
         output.push_str(&format!("Unused imports count: {}\n", unused_imports.len()));
@@ -524,7 +537,9 @@ def main():
     pass
 "#;
 
-        let result = trimmer.trim_unused_imports(source, &config).unwrap();
+        let result = trimmer
+            .trim_unused_imports(source, &config)
+            .expect("trim_unused_imports should succeed for custom preserve patterns");
 
         with_settings!({
             description => "Custom preserve patterns keep specified imports even if unused"
@@ -546,7 +561,9 @@ def process(data: Optional[str]) -> str:
     return data or "default"
 "#;
 
-        let result = trimmer.trim_unused_imports(source, &config).unwrap();
+        let result = trimmer
+            .trim_unused_imports(source, &config)
+            .expect("trim_unused_imports should succeed for empty import statements removal");
 
         with_settings!({
             description => "Import statements with all unused items are completely removed"

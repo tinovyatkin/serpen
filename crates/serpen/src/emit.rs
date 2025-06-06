@@ -1434,12 +1434,14 @@ impl CodeEmitter {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use crate::config::Config;
     fn create_test_emitter() -> CodeEmitter {
         let config = Config::default();
-        let resolver = ModuleResolver::new(config).unwrap();
+        let resolver =
+            ModuleResolver::new(config).expect("ModuleResolver creation should succeed in test");
         CodeEmitter::new(resolver, false, false)
     }
 
@@ -1453,7 +1455,7 @@ mod tests {
             let keep_predicate = |_module: &str| true; // Keep all imports for this test
             let filtered = emitter
                 .filter_import_statements(&module.syntax().body, keep_predicate)
-                .unwrap();
+                .expect("filter_import_statements should succeed in test");
 
             // Should keep both import statements
             assert_eq!(filtered.len(), 2);

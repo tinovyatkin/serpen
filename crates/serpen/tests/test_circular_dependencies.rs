@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 use anyhow::Result;
 use insta::assert_snapshot;
 use serpen::bundler::Bundler;
