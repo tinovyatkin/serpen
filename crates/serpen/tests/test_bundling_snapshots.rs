@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)] // insta macros use unwrap internally
+
 use anyhow::Result;
 use std::fs;
 use std::path::Path;
