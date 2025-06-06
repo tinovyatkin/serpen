@@ -503,6 +503,97 @@ for import in sorted_imports { ... }
 - Test with different module discovery orders - final bundle must be same
 - Verify sorting applies to all user-visible output elements
 
+#### Generic Snapshot Testing Framework (REUSE FOR NEW FEATURES)
+
+**MANDATORY**: Before implementing custom test logic for bundling features, **ALWAYS** evaluate if the existing generic snapshot testing framework can be used or extended. This framework provides comprehensive testing with minimal implementation effort.
+
+**Framework Location**: `crates/serpen/tests/test_bundling_snapshots.rs`
+
+**How It Works**:
+
+- **Automatic Discovery**: Scans `crates/serpen/tests/fixtures/bundling/` for test directories
+- **Convention-Based**: Each directory with `main.py` becomes a test case automatically
+- **Dual Snapshots**: Generates both bundled code and execution result snapshots
+- **Deterministic**: All output is sorted and reproducible across runs
+
+**Usage Pattern**:
+
+```bash
+# 1. Create fixture directory
+mkdir crates/serpen/tests/fixtures/bundling/my_new_feature
+
+# 2. Add test files (main.py + any supporting modules)
+echo "print('Hello Feature')" > crates/serpen/tests/fixtures/bundling/my_new_feature/main.py
+
+# 3. Run tests - automatically discovered and tested
+cargo test test_all_bundling_fixtures
+
+# 4. Accept snapshots
+cargo insta accept
+```
+
+**Generated Snapshots**:
+
+- **`bundled_code@my_new_feature.snap`**: Clean Python code showing bundling structure
+- **`execution_results@my_new_feature.snap`**: Structured execution results with status/output
+
+**When to Use This Framework**:
+
+- ✅ **New bundling features** (import handling, transformations, etc.)
+- ✅ **Regression testing** for existing functionality
+- ✅ **Integration testing** requiring end-to-end bundling + execution
+- ✅ **Cross-platform validation** (consistent Python output)
+
+**When NOT to Use**:
+
+- ❌ **Unit tests** for individual functions (use direct unit tests)
+- ❌ **Parser-only testing** (use AST unit tests)
+- ❌ **Error condition testing** (use targeted error tests)
+
+**Framework Benefits**:
+
+- 🎯 **Zero Code Required**: Add fixture directory → get comprehensive tests
+- 📸 **Dual Verification**: Both bundling correctness AND runtime behavior
+- 🔄 **Automatic Maintenance**: New fixtures auto-discovered, no test code updates
+- 🐛 **Excellent Debugging**: Separate snapshots pinpoint bundling vs execution issues
+- 📊 **Great Diffs**: insta provides excellent change visualization
+- 🚀 **Scales Infinitely**: Supports unlimited test cases with no code growth
+
+**Snapshot Technology**:
+
+- **Bundled Code**: Uses `insta::assert_snapshot!` for clean Python code
+- **Execution Results**: Uses `insta::assert_debug_snapshot!` with structured `ExecutionResults` type
+- **Named Snapshots**: Uses `insta::with_settings!` for organized, fixture-specific snapshots
+
+**Example Fixture Structure**:
+
+```
+crates/serpen/tests/fixtures/bundling/
+├── future_imports_basic/          # Complex nested packages + future imports
+│   ├── main.py
+│   └── mypackage/
+│       ├── __init__.py
+│       ├── core.py
+│       └── submodule/...
+├── future_imports_multiple/       # Multiple future features + deduplication  
+│   ├── main.py
+│   ├── module_a.py
+│   └── module_b.py
+└── simple_math/                   # Basic bundling without special features
+    ├── main.py
+    ├── calculator.py
+    └── utils.py
+```
+
+**MANDATORY Practice**: When implementing ANY new bundling feature:
+
+1. **First**: Create fixture directory showcasing the feature
+2. **Second**: Run snapshot tests to establish baseline
+3. **Third**: Implement feature with snapshot-driven development
+4. **Fourth**: Verify snapshots show correct bundling + execution
+
+This approach provides **comprehensive validation with minimal effort** and creates **excellent regression protection** for all bundling functionality.
+
 #### General Coding Standards
 
 - Follow Rust idiomatic practices and use the Rust 2024 edition or later
