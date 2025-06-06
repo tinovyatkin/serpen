@@ -113,17 +113,17 @@ impl CodeEmitter {
         let mut aliased_stdlib = IndexSet::new();
 
         for import_alias in import_aliases.values() {
-            if import_alias.has_explicit_alias && !import_alias.is_from_import {
-                let module_name = &import_alias.module_name;
-
-                // Check if this module was in third_party or stdlib imports
-                if third_party_imports.contains(module_name) {
-                    aliased_third_party.insert(module_name.clone());
-                    third_party_imports.shift_remove(module_name);
-                } else if stdlib_imports.contains(module_name) {
-                    aliased_stdlib.insert(module_name.clone());
-                    stdlib_imports.shift_remove(module_name);
-                }
+            if !import_alias.has_explicit_alias || import_alias.is_from_import {
+                continue;
+            }
+            let module_name = &import_alias.module_name;
+            // Check if this module was in third_party or stdlib imports
+            if third_party_imports.contains(module_name) {
+                aliased_third_party.insert(module_name.clone());
+                third_party_imports.shift_remove(module_name);
+            } else if stdlib_imports.contains(module_name) {
+                aliased_stdlib.insert(module_name.clone());
+                stdlib_imports.shift_remove(module_name);
             }
         }
 
@@ -286,19 +286,21 @@ impl CodeEmitter {
         // Pre-compute module import flags based on resolver information
         let module_flags = {
             let mut flags = IndexMap::new();
-            for import_alias in ast_rewriter.import_aliases().values() {
-                if import_alias.is_from_import {
-                    let full_module_name = format!(
-                        "{}.{}",
-                        import_alias.module_name, import_alias.original_name
-                    );
-                    let is_module = self
-                        .resolver
-                        .resolve_module_path(&full_module_name)
-                        .unwrap_or(None)
-                        .is_some();
-                    flags.insert(full_module_name, is_module);
-                }
+            for import_alias in ast_rewriter
+                .import_aliases()
+                .values()
+                .filter(|a| a.is_from_import)
+            {
+                let full_module_name = format!(
+                    "{}.{}",
+                    import_alias.module_name, import_alias.original_name
+                );
+                let is_module = self
+                    .resolver
+                    .resolve_module_path(&full_module_name)
+                    .unwrap_or(None)
+                    .is_some();
+                flags.insert(full_module_name, is_module);
             }
             flags
         };
@@ -935,23 +937,28 @@ impl CodeEmitter {
         import_from_stmt: &StmtImportFrom,
         strategies: &mut IndexMap<String, ImportStrategy>,
     ) {
-        // `from module import ...` - needs direct inlining
         if let Some(module) = &import_from_stmt.module {
             let module_name = module.as_str();
-            if self.is_first_party_module(module_name) {
-                strategies.insert(module_name.to_string(), ImportStrategy::FromImport);
-
-                // Check if any of the imported names are actually modules
-                for alias in &import_from_stmt.names {
-                    let imported_name = alias.name.as_str();
-                    let full_module_name = format!("{}.{}", module_name, imported_name);
-
-                    // If the imported name resolves to a module, it needs module import strategy
-                    if self.is_first_party_module(&full_module_name) {
-                        strategies.insert(full_module_name, ImportStrategy::ModuleImport);
-                    }
-                }
+            if !self.is_first_party_module(module_name) {
+                return;
             }
+            strategies.insert(module_name.to_string(), ImportStrategy::FromImport);
+
+            for alias in &import_from_stmt.names {
+                let imported_name = alias.name.as_str();
+                let full_module_name = format!("{}.{}", module_name, imported_name);
+                self.insert_module_import_strategy(&full_module_name, strategies);
+            }
+        }
+    }
+
+    fn insert_module_import_strategy(
+        &self,
+        full_module_name: &str,
+        strategies: &mut IndexMap<String, ImportStrategy>,
+    ) {
+        if self.is_first_party_module(full_module_name) {
+            strategies.insert(full_module_name.to_string(), ImportStrategy::ModuleImport);
         }
     }
 

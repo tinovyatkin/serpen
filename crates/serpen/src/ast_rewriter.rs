@@ -1049,14 +1049,8 @@ impl AstRewriter {
             // This is a relative import like "from . import module"
             for alias in &import_from.names {
                 let imported_name = alias.name.as_str();
-                // Look up the bundled variable name from the provided mapping
-                let module_key = format!("{}.{}", module_name, imported_name);
-                let bundled_name = bundled_modules
-                    .get(&module_key)
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        Self::generate_fallback_bundled_name(module_name, imported_name)
-                    });
+                let bundled_name =
+                    Self::get_bundled_name(module_name, imported_name, bundled_modules);
                 imported_modules.insert(imported_name.to_string(), bundled_name);
             }
             statements_to_remove.push(i);
@@ -1378,6 +1372,19 @@ impl AstRewriter {
             module_name.cow_replace('.', "_"),
             imported_name.cow_replace('.', "_")
         )
+    }
+
+    /// Get the bundled name for a module, falling back to a generated name if not found
+    fn get_bundled_name(
+        module_name: &str,
+        imported_name: &str,
+        bundled_modules: &IndexMap<String, String>,
+    ) -> String {
+        let module_key = format!("{}.{}", module_name, imported_name);
+        bundled_modules
+            .get(&module_key)
+            .cloned()
+            .unwrap_or_else(|| Self::generate_fallback_bundled_name(module_name, imported_name))
     }
 }
 
