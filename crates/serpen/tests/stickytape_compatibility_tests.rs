@@ -193,7 +193,8 @@ fn test_circular_references_dont_cause_stack_overflow() {
     assert_script_output("circular_reference", "Hello");
 }
 
-// #[test]
+#[test]
+#[ignore = "Not passing yet"]
 fn test_explicit_relative_imports_with_single_dot_are_resolved_correctly() {
     assert_script_output("explicit_relative_import_single_dot", "Hello");
 }
@@ -203,22 +204,26 @@ fn test_explicit_relative_imports_with_single_dot_in_package_init_are_resolved_c
     assert_script_output("explicit_relative_import_single_dot_in_init", "Hello");
 }
 
-// #[test]
+#[test]
+#[ignore = "Not passing yet"]
 fn test_explicit_relative_imports_from_parent_package_are_resolved_correctly() {
     assert_script_output("explicit_relative_import_from_parent_package", "Hello");
 }
 
-// #[test]
+#[test]
+#[ignore = "Not passing yet"]
 fn test_explicit_relative_imports_with_module_name_are_resolved_correctly() {
     assert_script_output("explicit_relative_import", "Hello");
 }
 
-// #[test]
+#[test]
+#[ignore = "Not passing yet"]
 fn test_explicit_relative_imports_with_module_name_in_package_init_are_resolved_correctly() {
     assert_script_output("explicit_relative_import_in_init", "Hello");
 }
 
-// #[test]
+#[test]
+#[ignore = "Not passing yet"]
 fn test_package_init_can_be_used_even_if_not_imported_explicitly() {
     assert_script_output("implicit_init_import", "Hello");
 }
@@ -238,7 +243,7 @@ fn test_modules_with_triple_quotes_can_be_bundled() {
     assert_script_output("module_with_triple_quotes", "Hello\n'''\n\"\"\"");
 }
 
-// #[test]
+#[test]
 fn test_additional_python_modules_can_be_explicitly_included() {
     // This test is for dynamic imports which may require special handling
     // We'll test if we can bundle scripts with dynamic imports
