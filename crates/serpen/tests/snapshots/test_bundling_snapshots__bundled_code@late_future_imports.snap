@@ -7,19 +7,13 @@ source: crates/serpen/tests/test_bundling_snapshots.rs
 
 from __future__ import annotations
 
-# Preserved imports
-import os
-import sys
-
 # ─ Entry Module: main ─
 """Test late future imports - these should trigger F404 rule"""
-import os
-import sys
+from pathlib import Path
 def main():
     """Main function with future annotations"""
     name: str = "test"
     print(f"Hello {name}")
-    print(f"OS: {os.name}")
-    print(f"Python version: {sys.version[:5]}")
+    print(f"from: {Path(__file__).name}")
 if __name__ == "__main__":
     main()
