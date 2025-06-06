@@ -16,6 +16,20 @@ type ModuleQueue = Vec<(String, PathBuf)>;
 /// Type alias for processed modules set
 type ProcessedModules = IndexSet<String>;
 
+/// Context for import extraction operations
+struct ImportExtractionContext<'a> {
+    imports: &'a mut Vec<String>,
+    file_path: &'a Path,
+    resolver: Option<&'a mut ModuleResolver>,
+}
+
+/// Context for module import checking operations
+struct ModuleImportContext<'a> {
+    imports: &'a mut Vec<String>,
+    base_module: &'a str,
+    resolver: &'a mut ModuleResolver,
+}
+
 /// Parameters for discovery phase operations
 struct DiscoveryParams<'a> {
     resolver: &'a mut ModuleResolver,
@@ -357,7 +371,7 @@ impl Bundler {
     pub fn extract_imports(
         &self,
         file_path: &Path,
-        mut resolver: Option<&mut ModuleResolver>,
+        resolver: Option<&mut ModuleResolver>,
     ) -> Result<Vec<String>> {
         let source = fs::read_to_string(file_path)
             .with_context(|| format!("Failed to read file: {:?}", file_path))?;
@@ -367,13 +381,14 @@ impl Bundler {
 
         let mut imports = Vec::new();
 
+        let mut context = ImportExtractionContext {
+            imports: &mut imports,
+            file_path,
+            resolver,
+        };
+
         for stmt in parsed.syntax().body.iter() {
-            self.extract_imports_from_statement(
-                stmt,
-                &mut imports,
-                file_path,
-                resolver.as_deref_mut(),
-            );
+            self.extract_imports_from_statement(stmt, &mut context);
         }
 
         Ok(imports)
@@ -383,9 +398,7 @@ impl Bundler {
     fn extract_imports_from_statement(
         &self,
         stmt: &Stmt,
-        imports: &mut Vec<String>,
-        file_path: &Path,
-        resolver: Option<&mut ModuleResolver>,
+        context: &mut ImportExtractionContext<'_>,
     ) {
         if let Stmt::Import(import_stmt) = stmt {
             for alias in &import_stmt.names {
@@ -393,10 +406,10 @@ impl Bundler {
                 // the root module name "xml" for classification purposes, but we should
                 // preserve the full import path for the output
                 let module_name = alias.name.id.to_string();
-                imports.push(module_name);
+                context.imports.push(module_name);
             }
         } else if let Stmt::ImportFrom(import_from_stmt) = stmt {
-            self.process_import_from_statement(import_from_stmt, imports, file_path, resolver);
+            self.process_import_from_statement(import_from_stmt, context);
         }
     }
 
@@ -404,27 +417,29 @@ impl Bundler {
     fn process_import_from_statement(
         &self,
         import_from_stmt: &StmtImportFrom,
-        imports: &mut Vec<String>,
-        file_path: &Path,
-        mut resolver: Option<&mut ModuleResolver>,
+        context: &mut ImportExtractionContext<'_>,
     ) {
         let level = import_from_stmt.level;
 
         if level == 0 {
-            if let Some(ref mut resolver) = resolver {
-                self.process_absolute_import_with_resolver(import_from_stmt, imports, resolver);
+            if let Some(ref mut resolver) = context.resolver {
+                self.process_absolute_import_with_resolver(
+                    import_from_stmt,
+                    context.imports,
+                    resolver,
+                );
             } else {
-                self.process_absolute_import(import_from_stmt, imports);
+                self.process_absolute_import(import_from_stmt, context.imports);
             }
             return;
         }
 
         // Handle relative imports
         // TODO: Consider extending resolver support to relative imports as well
-        if let Some(base_module) = self.resolve_relative_import(file_path, level) {
-            self.process_resolved_relative_import(import_from_stmt, imports, &base_module);
+        if let Some(base_module) = self.resolve_relative_import(context.file_path, level) {
+            self.process_resolved_relative_import(import_from_stmt, context.imports, &base_module);
         } else {
-            self.process_fallback_relative_import(import_from_stmt, imports, level);
+            self.process_fallback_relative_import(import_from_stmt, context.imports, level);
         }
     }
 
@@ -458,7 +473,12 @@ impl Bundler {
             }
 
             // Check if any of the imported names are actually modules
-            Self::check_and_add_module_imports(import_from_stmt, imports, &m, resolver);
+            let mut module_context = ModuleImportContext {
+                imports,
+                base_module: &m,
+                resolver,
+            };
+            self.check_and_add_module_imports(import_from_stmt, &mut module_context);
         }
     }
 
@@ -780,26 +800,28 @@ impl Bundler {
 
     /// Helper method to check and add module imports to reduce nesting
     fn check_and_add_module_imports(
+        &self,
         import_from_stmt: &StmtImportFrom,
-        imports: &mut Vec<String>,
-        base_module: &str,
-        resolver: &mut ModuleResolver,
+        context: &mut ModuleImportContext<'_>,
     ) {
         for alias in &import_from_stmt.names {
             let imported_name = alias.name.id.to_string();
-            let full_module_name = format!("{}.{}", base_module, imported_name);
+            let full_module_name = format!("{}.{}", context.base_module, imported_name);
 
             // Try to resolve the full module name to see if it's a module
-            if let Ok(Some(_)) = resolver.resolve_module_path(&full_module_name) {
-                // This is a module import (e.g., from greetings import greeting)
-                if !imports.contains(&full_module_name) {
-                    imports.push(full_module_name);
-                    debug!(
-                        "Detected module import: {} from {}",
-                        imported_name, base_module
-                    );
-                }
+            let Ok(Some(_)) = context.resolver.resolve_module_path(&full_module_name) else {
+                continue;
+            };
+
+            // This is a module import (e.g., from greetings import greeting)
+            if context.imports.contains(&full_module_name) {
+                continue;
             }
+            context.imports.push(full_module_name);
+            debug!(
+                "Detected module import: {} from {}",
+                imported_name, context.base_module
+            );
         }
     }
 }
