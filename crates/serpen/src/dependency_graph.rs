@@ -290,13 +290,13 @@ impl DependencyGraph {
     /// Create a new filtered graph containing only the visited modules
     fn create_filtered_graph(&self, visited: IndexSet<NodeIndex>) -> Result<DependencyGraph> {
         let mut filtered_graph = DependencyGraph::new();
-        let mut _index_mapping = IndexMap::new();
+        let mut index_mapping = IndexMap::new();
 
         // Add all reachable nodes
         self.add_reachable_nodes_to_filtered_graph(
             &visited,
             &mut filtered_graph,
-            &mut _index_mapping,
+            &mut index_mapping,
         );
 
         // Add all edges between reachable nodes
@@ -310,12 +310,12 @@ impl DependencyGraph {
         &self,
         visited: &IndexSet<NodeIndex>,
         filtered_graph: &mut DependencyGraph,
-        _index_mapping: &mut IndexMap<NodeIndex, NodeIndex>,
+        index_mapping: &mut IndexMap<NodeIndex, NodeIndex>,
     ) {
         for &old_index in visited {
             let module = self.graph[old_index].clone();
             let new_index = filtered_graph.add_module(module);
-            _index_mapping.insert(old_index, new_index);
+            index_mapping.insert(old_index, new_index);
         }
     }
 
