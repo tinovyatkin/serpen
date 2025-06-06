@@ -248,7 +248,10 @@ impl Bundler {
     /// Helper method to find module name in source directories
     fn find_module_in_src_dirs(&self, entry_path: &Path) -> Option<String> {
         for src_dir in &self.config.src {
-            let relative_path = entry_path.strip_prefix(src_dir).ok()?;
+            let relative_path = match entry_path.strip_prefix(src_dir) {
+                Ok(path) => path,
+                Err(_) => continue,
+            };
             if let Some(module_name) = self.path_to_module_name(relative_path) {
                 return Some(module_name);
             }
@@ -278,7 +281,7 @@ impl Bundler {
                 )
             })?;
 
-        Ok(module_name.to_string())
+        Ok(module_name.to_owned())
     }
 
     /// Convert a relative path to a module name
@@ -297,8 +300,8 @@ impl Bundler {
         let mut processed_modules = ProcessedModules::new();
         let mut queued_modules = IndexSet::new();
         let mut modules_to_process = ModuleQueue::new();
-        modules_to_process.push((entry_module_name.to_string(), entry_path.to_path_buf()));
-        queued_modules.insert(entry_module_name.to_string());
+        modules_to_process.push((entry_module_name.to_owned(), entry_path.to_path_buf()));
+        queued_modules.insert(entry_module_name.to_owned());
 
         // Store module data for phase 2
         type ModuleData = (String, PathBuf, Vec<String>);
@@ -405,6 +408,7 @@ impl Bundler {
                 // For dotted imports like "xml.etree.ElementTree", we need to extract
                 // the root module name "xml" for classification purposes, but we should
                 // preserve the full import path for the output
+                #[allow(clippy::disallowed_methods)]
                 let module_name = alias.name.id.to_string();
                 context.imports.push(module_name);
             }
@@ -450,6 +454,7 @@ impl Bundler {
         imports: &mut Vec<String>,
     ) {
         if let Some(ref module) = import_from_stmt.module {
+            #[allow(clippy::disallowed_methods)]
             let m = module.id.to_string();
             // Avoid duplicate absolute imports (e.g., import importlib + from importlib import)
             if !imports.contains(&m) {
@@ -466,6 +471,7 @@ impl Bundler {
         resolver: &mut ModuleResolver,
     ) {
         if let Some(ref module) = import_from_stmt.module {
+            #[allow(clippy::disallowed_methods)]
             let m = module.id.to_string();
             // Add the package/module being imported from
             if !imports.contains(&m) {
@@ -506,7 +512,7 @@ impl Bundler {
     /// Build a full module name by combining base module and target module
     fn build_full_module_name(&self, base_module: &str, target_module: &str) -> String {
         if base_module.is_empty() {
-            target_module.to_string()
+            target_module.to_owned()
         } else {
             format!("{}.{}", base_module, target_module)
         }
@@ -535,12 +541,13 @@ impl Bundler {
             let dots = ".".repeat(level as usize);
             format!("{}{}", dots, module)
         } else {
-            module.to_string()
+            module.to_owned()
         }
     }
 
     /// Resolve a relative import to its absolute module name
     /// Returns None if the relative import goes beyond the module hierarchy
+    #[allow(clippy::all)]
     fn resolve_relative_import(&self, file_path: &Path, level: u32) -> Option<String> {
         // Get the directory containing the current file
         let current_dir = file_path.parent()?;
@@ -549,19 +556,32 @@ impl Bundler {
         let absolute_current_dir = if current_dir.is_absolute() {
             current_dir.to_path_buf()
         } else {
-            std::env::current_dir().ok()?.join(current_dir)
+            let current_working_dir = match std::env::current_dir() {
+                Ok(dir) => dir,
+                Err(_) => return None,
+            };
+            current_working_dir.join(current_dir)
         };
 
         // Find which source directory contains this file
         let relative_dir = self.config.src.iter().find_map(|src_dir| {
             // Handle case where paths might be relative vs absolute
             if src_dir.is_absolute() {
-                absolute_current_dir.strip_prefix(src_dir).ok()
+                match absolute_current_dir.strip_prefix(src_dir) {
+                    Ok(path) => Some(path),
+                    Err(_) => None,
+                }
             } else {
                 // For relative source directories, we need to resolve them relative to the current working directory
-                let current_working_dir = std::env::current_dir().ok()?;
+                let current_working_dir = match std::env::current_dir() {
+                    Ok(dir) => dir,
+                    Err(_) => return None,
+                };
                 let absolute_src_dir = current_working_dir.join(src_dir);
-                absolute_current_dir.strip_prefix(&absolute_src_dir).ok()
+                match absolute_current_dir.strip_prefix(&absolute_src_dir) {
+                    Ok(path) => Some(path),
+                    Err(_) => None,
+                }
             }
         })?;
 
@@ -572,7 +592,7 @@ impl Bundler {
         } else {
             relative_dir
                 .components()
-                .map(|c| c.as_os_str().to_string_lossy().to_string())
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
                 .collect()
         };
 
@@ -614,8 +634,8 @@ impl Bundler {
             debug!("Adding '{}' to discovery queue", import);
             discovery_params
                 .modules_to_process
-                .push((import.to_string(), import_path));
-            discovery_params.queued_modules.insert(import.to_string());
+                .push((import.to_owned(), import_path));
+            discovery_params.queued_modules.insert(import.to_owned());
         } else {
             debug!("Module '{}' already processed or queued, skipping", import);
         }
@@ -805,6 +825,7 @@ impl Bundler {
         context: &mut ModuleImportContext<'_>,
     ) {
         for alias in &import_from_stmt.names {
+            #[allow(clippy::disallowed_methods)]
             let imported_name = alias.name.id.to_string();
             let full_module_name = format!("{}.{}", context.base_module, imported_name);
 
