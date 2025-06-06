@@ -1,5 +1,4 @@
-from __future__ import print_function
-from __future__ import annotations
+from __future__ import annotations, print_function
 
 
 def func_b():

@@ -1,5 +1,4 @@
-from __future__ import annotations
-from __future__ import print_function
+from __future__ import annotations, print_function
 
 from module_a import func_a
 from module_b import func_b

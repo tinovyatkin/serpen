@@ -1,5 +1,4 @@
-from __future__ import annotations
-from __future__ import division
+from __future__ import annotations, division
 
 
 def func_a():
