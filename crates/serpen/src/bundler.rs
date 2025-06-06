@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
-use crate::dependency_graph::{DependencyGraph, ModuleNode};
+use crate::dependency_graph::{CircularDependencyGroup, DependencyGraph, ModuleNode};
 use crate::emit::CodeEmitter;
 use crate::resolver::{ImportType, ModuleResolver};
 use crate::util::module_name_from_relative;
@@ -31,6 +31,25 @@ pub struct Bundler {
 impl Bundler {
     pub fn new(config: Config) -> Self {
         Self { config }
+    }
+
+    /// Format error message for unresolvable cycles
+    fn format_unresolvable_cycles_error(cycles: &[CircularDependencyGroup]) -> String {
+        let mut error_msg = String::from("Unresolvable circular dependencies detected:\n\n");
+
+        for (i, cycle) in cycles.iter().enumerate() {
+            error_msg.push_str(&format!("Cycle {}: {}\n", i + 1, cycle.modules.join(" → ")));
+            error_msg.push_str(&format!("  Type: {:?}\n", cycle.cycle_type));
+
+            if let crate::dependency_graph::ResolutionStrategy::Unresolvable { reason } =
+                &cycle.suggested_resolution
+            {
+                error_msg.push_str(&format!("  Reason: {}\n", reason));
+            }
+            error_msg.push('\n');
+        }
+
+        error_msg
     }
 
     /// Main bundling function
@@ -91,26 +110,8 @@ impl Bundler {
             let analysis = graph.classify_circular_dependencies();
 
             if !analysis.unresolvable_cycles.is_empty() {
-                // Format detailed error message for unresolvable cycles
-                let mut error_msg =
-                    String::from("Unresolvable circular dependencies detected:\n\n");
-
-                for (i, cycle) in analysis.unresolvable_cycles.iter().enumerate() {
-                    error_msg.push_str(&format!(
-                        "Cycle {}: {}\n",
-                        i + 1,
-                        cycle.modules.join(" → ")
-                    ));
-                    error_msg.push_str(&format!("  Type: {:?}\n", cycle.cycle_type));
-
-                    if let crate::dependency_graph::ResolutionStrategy::Unresolvable { reason } =
-                        &cycle.suggested_resolution
-                    {
-                        error_msg.push_str(&format!("  Reason: {}\n", reason));
-                    }
-                    error_msg.push('\n');
-                }
-
+                let error_msg =
+                    Self::format_unresolvable_cycles_error(&analysis.unresolvable_cycles);
                 return Err(anyhow!(error_msg));
             }
 
@@ -129,9 +130,7 @@ impl Bundler {
                     analysis.resolvable_cycles.len()
                 );
 
-                for cycle in &analysis.resolvable_cycles {
-                    info!("Resolving cycle: {}", cycle.modules.join(" → "));
-                }
+                Self::log_resolvable_cycles(&analysis.resolvable_cycles);
             } else {
                 // We have unresolvable cycles or complex resolvable cycles - still fail for now
                 warn!(
@@ -140,75 +139,7 @@ impl Bundler {
                     analysis.resolvable_cycles.len()
                 );
 
-                let mut error_msg =
-                    String::from("Circular dependencies detected in the module graph:\n\n");
-
-                // First, show unresolvable cycles if any
-                if !analysis.unresolvable_cycles.is_empty() {
-                    error_msg.push_str("UNRESOLVABLE CYCLES:\n");
-                    for (i, cycle) in analysis.unresolvable_cycles.iter().enumerate() {
-                        error_msg.push_str(&format!(
-                            "Cycle {}: {}\n",
-                            i + 1,
-                            cycle.modules.join(" → ")
-                        ));
-                        error_msg.push_str(&format!("  Type: {:?}\n", cycle.cycle_type));
-                        if let crate::dependency_graph::ResolutionStrategy::Unresolvable {
-                            reason,
-                        } = &cycle.suggested_resolution
-                        {
-                            error_msg.push_str(&format!("  Reason: {}\n", reason));
-                        }
-                        error_msg.push('\n');
-                    }
-                }
-
-                // Then show resolvable cycles that are not yet supported
-                if !analysis.resolvable_cycles.is_empty() {
-                    if !analysis.unresolvable_cycles.is_empty() {
-                        error_msg.push_str("RESOLVABLE CYCLES (not yet implemented):\n");
-                    }
-                    for (i, cycle) in analysis.resolvable_cycles.iter().enumerate() {
-                        let cycle_num = i + 1 + analysis.unresolvable_cycles.len();
-                        error_msg.push_str(&format!(
-                            "Cycle {}: {}\n",
-                            cycle_num,
-                            cycle.modules.join(" → ")
-                        ));
-                        error_msg.push_str(&format!("  Type: {:?}\n", cycle.cycle_type));
-
-                        match &cycle.suggested_resolution {
-                            crate::dependency_graph::ResolutionStrategy::LazyImport {
-                                modules: _,
-                            } => {
-                                error_msg.push_str("  Suggestion: Move imports inside functions to enable lazy loading\n");
-                            }
-                            crate::dependency_graph::ResolutionStrategy::FunctionScopedImport {
-                                import_statements,
-                            } => {
-                                error_msg.push_str("  Suggestions:\n");
-                                for suggestion in import_statements {
-                                    error_msg.push_str(&format!("    {}\n", suggestion));
-                                }
-                            }
-                            crate::dependency_graph::ResolutionStrategy::ModuleSplit {
-                                suggestions,
-                            } => {
-                                error_msg.push_str("  Suggestions:\n");
-                                for suggestion in suggestions {
-                                    error_msg.push_str(&format!("    {}\n", suggestion));
-                                }
-                            }
-                            crate::dependency_graph::ResolutionStrategy::Unresolvable {
-                                ..
-                            } => {
-                                // This shouldn't happen in resolvable cycles
-                            }
-                        }
-                        error_msg.push('\n');
-                    }
-                }
-
+                let error_msg = Self::build_cycle_error_message(&analysis);
                 return Err(anyhow!(error_msg));
             }
         }
@@ -527,19 +458,7 @@ impl Bundler {
             }
 
             // Check if any of the imported names are actually modules
-            for alias in &import_from_stmt.names {
-                let imported_name = alias.name.id.to_string();
-                let full_module_name = format!("{}.{}", m, imported_name);
-
-                // Try to resolve the full module name to see if it's a module
-                if let Ok(Some(_)) = resolver.resolve_module_path(&full_module_name) {
-                    // This is a module import (e.g., from greetings import greeting)
-                    if !imports.contains(&full_module_name) {
-                        imports.push(full_module_name);
-                        debug!("Detected module import: {} from {}", imported_name, m);
-                    }
-                }
-            }
+            Self::check_and_add_module_imports(import_from_stmt, imports, &m, resolver);
         }
     }
 
@@ -752,5 +671,135 @@ impl Bundler {
             info!("No third-party dependencies found, skipping requirements.txt");
         }
         Ok(())
+    }
+
+    /// Helper method to build detailed error message for cycles with resolvable cycles handling
+    fn build_cycle_error_message(
+        analysis: &crate::dependency_graph::CircularDependencyAnalysis,
+    ) -> String {
+        let mut error_msg = String::from("Circular dependencies detected in the module graph:\n\n");
+
+        // First, show unresolvable cycles if any
+        if !analysis.unresolvable_cycles.is_empty() {
+            error_msg.push_str("UNRESOLVABLE CYCLES:\n");
+            Self::append_unresolvable_cycles_to_error(
+                &mut error_msg,
+                &analysis.unresolvable_cycles,
+            );
+        }
+
+        // Then show resolvable cycles that are not yet supported
+        if !analysis.resolvable_cycles.is_empty() {
+            Self::append_resolvable_cycles_to_error(
+                &mut error_msg,
+                &analysis.resolvable_cycles,
+                &analysis.unresolvable_cycles,
+            );
+        }
+
+        error_msg
+    }
+
+    /// Helper method to append unresolvable cycles to error message
+    fn append_unresolvable_cycles_to_error(
+        error_msg: &mut String,
+        unresolvable_cycles: &[crate::dependency_graph::CircularDependencyGroup],
+    ) {
+        for (i, cycle) in unresolvable_cycles.iter().enumerate() {
+            error_msg.push_str(&format!("Cycle {}: {}\n", i + 1, cycle.modules.join(" → ")));
+            error_msg.push_str(&format!("  Type: {:?}\n", cycle.cycle_type));
+            if let crate::dependency_graph::ResolutionStrategy::Unresolvable { reason } =
+                &cycle.suggested_resolution
+            {
+                error_msg.push_str(&format!("  Reason: {}\n", reason));
+            }
+            error_msg.push('\n');
+        }
+    }
+
+    /// Helper method to append resolvable cycles to error message
+    fn append_resolvable_cycles_to_error(
+        error_msg: &mut String,
+        resolvable_cycles: &[crate::dependency_graph::CircularDependencyGroup],
+        unresolvable_cycles: &[crate::dependency_graph::CircularDependencyGroup],
+    ) {
+        if !unresolvable_cycles.is_empty() {
+            error_msg.push_str("RESOLVABLE CYCLES (not yet implemented):\n");
+        }
+        for (i, cycle) in resolvable_cycles.iter().enumerate() {
+            let cycle_num = i + 1 + unresolvable_cycles.len();
+            error_msg.push_str(&format!(
+                "Cycle {}: {}\n",
+                cycle_num,
+                cycle.modules.join(" → ")
+            ));
+            error_msg.push_str(&format!("  Type: {:?}\n", cycle.cycle_type));
+
+            Self::append_cycle_resolution_suggestions(error_msg, &cycle.suggested_resolution);
+            error_msg.push('\n');
+        }
+    }
+
+    /// Helper method to append cycle resolution suggestions to error message
+    fn append_cycle_resolution_suggestions(
+        error_msg: &mut String,
+        suggested_resolution: &crate::dependency_graph::ResolutionStrategy,
+    ) {
+        match suggested_resolution {
+            crate::dependency_graph::ResolutionStrategy::LazyImport { modules: _ } => {
+                error_msg.push_str(
+                    "  Suggestion: Move imports inside functions to enable lazy loading\n",
+                );
+            }
+            crate::dependency_graph::ResolutionStrategy::FunctionScopedImport {
+                import_statements,
+            } => {
+                error_msg.push_str("  Suggestions:\n");
+                for suggestion in import_statements {
+                    error_msg.push_str(&format!("    {}\n", suggestion));
+                }
+            }
+            crate::dependency_graph::ResolutionStrategy::ModuleSplit { suggestions } => {
+                error_msg.push_str("  Suggestions:\n");
+                for suggestion in suggestions {
+                    error_msg.push_str(&format!("    {}\n", suggestion));
+                }
+            }
+            crate::dependency_graph::ResolutionStrategy::Unresolvable { .. } => {
+                // This shouldn't happen in resolvable cycles
+            }
+        }
+    }
+
+    /// Helper method to log resolvable cycles
+    fn log_resolvable_cycles(cycles: &[crate::dependency_graph::CircularDependencyGroup]) {
+        for cycle in cycles {
+            info!("Resolving cycle: {}", cycle.modules.join(" → "));
+        }
+    }
+
+    /// Helper method to check and add module imports to reduce nesting
+    fn check_and_add_module_imports(
+        import_from_stmt: &StmtImportFrom,
+        imports: &mut Vec<String>,
+        base_module: &str,
+        resolver: &mut ModuleResolver,
+    ) {
+        for alias in &import_from_stmt.names {
+            let imported_name = alias.name.id.to_string();
+            let full_module_name = format!("{}.{}", base_module, imported_name);
+
+            // Try to resolve the full module name to see if it's a module
+            if let Ok(Some(_)) = resolver.resolve_module_path(&full_module_name) {
+                // This is a module import (e.g., from greetings import greeting)
+                if !imports.contains(&full_module_name) {
+                    imports.push(full_module_name);
+                    debug!(
+                        "Detected module import: {} from {}",
+                        imported_name, base_module
+                    );
+                }
+            }
+        }
     }
 }

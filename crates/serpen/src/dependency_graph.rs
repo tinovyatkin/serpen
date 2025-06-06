@@ -487,13 +487,7 @@ impl DependencyGraph {
                     self.dfs_find_cycles_internal(neighbor, ctx);
                 }
                 Color::Gray => {
-                    if let Some(cycle_start) = ctx.path.iter().position(|&n| n == neighbor) {
-                        let cycle_path: Vec<String> = ctx.path[cycle_start..]
-                            .iter()
-                            .map(|&idx| self.graph[idx].name.clone())
-                            .collect();
-                        ctx.cycles.push(cycle_path);
-                    }
+                    self.handle_cycle_detection(neighbor, ctx);
                 }
                 Color::Black => {}
             }
@@ -643,6 +637,17 @@ impl DependencyGraph {
                     reason: "Module-level constant dependencies create temporal paradox - cannot be resolved through bundling".to_string(),
                 }
             }
+        }
+    }
+
+    /// Helper method to handle cycle detection when encountering a gray node
+    fn handle_cycle_detection(&self, neighbor: NodeIndex, ctx: &mut DfsCycleContext) {
+        if let Some(cycle_start) = ctx.path.iter().position(|&n| n == neighbor) {
+            let cycle_path: Vec<String> = ctx.path[cycle_start..]
+                .iter()
+                .map(|&idx| self.graph[idx].name.clone())
+                .collect();
+            ctx.cycles.push(cycle_path);
         }
     }
 }
