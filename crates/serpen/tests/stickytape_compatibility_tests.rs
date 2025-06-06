@@ -12,6 +12,7 @@
 /// - Scripts with special edge cases
 ///
 /// Reference: https://github.com/mwilliamson/stickytape
+use cow_utils::CowUtils;
 use insta::{assert_snapshot, with_settings};
 use std::path::PathBuf;
 use std::process::Command;
@@ -94,8 +95,8 @@ fn assert_script_output(script_name: &str, expected_output: &str) {
                     eprintln!("Expected output: '{}'", expected_output);
 
                     // Normalize both outputs by trimming whitespace and normalizing line endings
-                    let actual_normalized = actual_output.trim().replace("\r\n", "\n");
-                    let expected_normalized = expected_output.trim().replace("\r\n", "\n");
+                    let actual_normalized = actual_output.trim().cow_replace("\r\n", "\n");
+                    let expected_normalized = expected_output.trim().cow_replace("\r\n", "\n");
 
                     assert_eq!(
                         actual_normalized, expected_normalized,
@@ -108,7 +109,7 @@ fn assert_script_output(script_name: &str, expected_output: &str) {
                         description => format!("Bundled content for {}", script_name),
                         omit_expression => true,
                     }, {
-                        assert_snapshot!(format!("bundled_{}", script_name.replace("/", "_")), bundled_content);
+                        assert_snapshot!(format!("bundled_{}", script_name.cow_replace("/", "_")), bundled_content);
                     });
                 }
                 Err(e) => {
@@ -180,11 +181,6 @@ fn test_can_import_multiple_values_from_module_using_from_import_syntax() {
 #[ignore = "Bundler not properly including imported modules - needs implementation fix"]
 fn test_can_import_module_from_package_using_from_import_syntax() {
     assert_script_output("script_using_from_to_import_module", "Hello");
-}
-
-// #[test]
-fn test_can_import_multiple_modules_from_module_using_from_import_syntax() {
-    assert_script_output("script_using_from_to_import_multiple_modules", "Hello");
 }
 
 #[test]
