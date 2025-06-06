@@ -98,10 +98,11 @@ fn test_single_bundling_fixture(fixtures_dir: &Path, fixture_name: &str) -> Resu
 
     // Create separate snapshots using insta's named snapshot feature
     insta::with_settings!({
-        snapshot_suffix => fixture_name
+        snapshot_suffix => fixture_name,
+        omit_expression => true
     }, {
-        // Snapshot the bundled code
-        insta::assert_snapshot!("bundled_code", bundled_code.trim());
+        // Snapshot the bundled code with normalized line endings for cross-platform compatibility
+        insta::assert_snapshot!("bundled_code", bundled_code.trim().replace("\r\n", "\n"));
 
         // Create structured execution results snapshot
         let execution_status = if python_output.status.success() {
