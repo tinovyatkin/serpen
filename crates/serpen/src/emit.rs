@@ -1539,7 +1539,8 @@ impl CodeEmitter {
         for import in imports {
             let has_specific_imports = specific_imports.iter().any(|specific_import| {
                 // Check if this general import has corresponding specific imports
-                specific_import.starts_with(&format!("{}.", &import))
+                // Use exact module name matching to avoid substring false positives
+                specific_import.split('.').next() == Some(&import)
             });
 
             if !has_specific_imports {
