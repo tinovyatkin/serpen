@@ -65,7 +65,7 @@ pub fn normalize_line_endings(content: String) -> String {
 /// This function checks for the VIRTUAL_ENV environment variable and constructs
 /// the appropriate Python executable path for the current platform:
 /// - Unix-like systems (Linux, macOS): `VIRTUAL_ENV/bin/python`
-/// - Windows: `VIRTUAL_ENV\bin\python.exe`
+/// - Windows: `VIRTUAL_ENV\Scripts\python.exe`
 ///
 /// If VIRTUAL_ENV is not set, falls back to the default Python executable name.
 ///
@@ -76,14 +76,15 @@ pub fn get_python_executable() -> String {
     match std::env::var("VIRTUAL_ENV") {
         Ok(venv_path) => {
             let mut python_path = PathBuf::from(venv_path);
-            python_path.push("bin");
 
             #[cfg(windows)]
             {
+                python_path.push("Scripts");
                 python_path.push("python.exe");
             }
             #[cfg(not(windows))]
             {
+                python_path.push("bin");
                 python_path.push("python");
             }
 
@@ -117,9 +118,14 @@ mod tests {
         let python_path = get_python_executable();
 
         #[cfg(windows)]
-        assert!(python_path.contains("python.exe"));
+        {
+            assert!(python_path.contains("Scripts"));
+            assert!(python_path.contains("python.exe"));
+        }
         #[cfg(not(windows))]
-        assert!(python_path.contains("/bin/python"));
+        {
+            assert!(python_path.contains("/bin/python"));
+        }
 
         assert!(python_path.contains(test_venv));
     }
