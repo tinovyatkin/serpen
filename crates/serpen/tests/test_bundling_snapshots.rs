@@ -7,6 +7,22 @@ use tempfile::TempDir;
 use serpen::bundler::Bundler;
 use serpen::config::Config;
 
+/// Structured execution results for better snapshot formatting
+#[derive(Debug)]
+#[allow(dead_code)] // Fields are used via Debug trait for snapshots
+struct ExecutionResults {
+    status: ExecutionStatus,
+    stdout: String,
+    stderr: String,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)] // Fields are used via Debug trait for snapshots
+enum ExecutionStatus {
+    Success,
+    Failed(i32),
+}
+
 /// Generic test that processes all fixture directories in tests/fixtures/bundling
 /// Each directory should contain a main.py entry point and will be bundled and executed
 #[test]
@@ -85,24 +101,20 @@ fn test_single_bundling_fixture(fixtures_dir: &Path, fixture_name: &str) -> Resu
         // Snapshot the bundled code
         insta::assert_snapshot!("bundled_code", bundled_code.trim());
 
-        // Create execution results snapshot
+        // Create structured execution results snapshot
         let execution_status = if python_output.status.success() {
-            "SUCCESS"
+            ExecutionStatus::Success
         } else {
-            "FAILED"
+            ExecutionStatus::Failed(python_output.status.code().unwrap_or(-1))
         };
 
-        let stdout = String::from_utf8_lossy(&python_output.stdout);
-        let stderr = String::from_utf8_lossy(&python_output.stderr);
+        let execution_results = ExecutionResults {
+            status: execution_status,
+            stdout: String::from_utf8_lossy(&python_output.stdout).trim().to_string(),
+            stderr: String::from_utf8_lossy(&python_output.stderr).trim().to_string(),
+        };
 
-        let execution_results = format!(
-            "Status: {}\nStdout:\n{}\nStderr:\n{}",
-            execution_status,
-            stdout.trim(),
-            stderr.trim()
-        );
-
-        insta::assert_snapshot!("execution_results", execution_results);
+        insta::assert_debug_snapshot!("execution_results", execution_results);
     });
 
     Ok(())
