@@ -10,13 +10,13 @@ fn get_fixture_path(fixture_name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
-        .join("future_imports")
-        .join(fixture_name)
+        .join("bundling")
+        .join(format!("future_imports_{}", fixture_name))
 }
 
 #[test]
 fn test_future_imports_bundling_and_execution() -> Result<()> {
-    let fixture_path = get_fixture_path("basic_test");
+    let fixture_path = get_fixture_path("basic");
     let temp_dir = tempfile::TempDir::new()?;
     let output_path = temp_dir.path().join("bundled.py");
 
@@ -134,7 +134,7 @@ fn test_future_imports_bundling_and_execution() -> Result<()> {
 
 #[test]
 fn test_multiple_future_imports_deduplication() -> Result<()> {
-    let fixture_path = get_fixture_path("multiple_features");
+    let fixture_path = get_fixture_path("multiple");
     let temp_dir = tempfile::TempDir::new()?;
     let output_path = temp_dir.path().join("bundled.py");
 
@@ -202,7 +202,7 @@ fn test_multiple_future_imports_deduplication() -> Result<()> {
 
 #[test]
 fn test_future_imports_deterministic_output() -> Result<()> {
-    let fixture_path = get_fixture_path("multiple_features");
+    let fixture_path = get_fixture_path("multiple");
     let temp_dir = tempfile::TempDir::new()?;
 
     // Bundle the same project multiple times
