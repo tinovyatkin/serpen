@@ -87,11 +87,13 @@ fn run_ruff_lint_on_bundle(bundled_code: &str) -> RuffLintResults {
         }
     }
 
+    let total_violations = f401_violations.len() + f404_violations.len() + other_violations.len();
+
     RuffLintResults {
         f401_violations,
         f404_violations,
         other_violations,
-        total_violations: result.messages.len(),
+        total_violations,
     }
 }
 
