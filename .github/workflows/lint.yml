@@ -1,4 +1,7 @@
-on: push
+on:
+  push:
+  pull_request:
+
 name: Clippy check
 
 # see https://doc.rust-lang.org/stable/clippy/continuous_integration/github_actions.html
