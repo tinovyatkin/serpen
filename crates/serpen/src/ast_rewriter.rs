@@ -1565,4 +1565,56 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_process_relative_dot_import() {
+        use ruff_text_size::TextRange;
+
+        let ast_rewriter = AstRewriter::new(10);
+
+        // Create test aliases for "from . import greeting, helpers"
+        let aliases = vec![
+            Alias {
+                name: Identifier::new("greeting", TextRange::default()),
+                asname: None,
+                range: TextRange::default(),
+            },
+            Alias {
+                name: Identifier::new("helpers", TextRange::default()),
+                asname: None,
+                range: TextRange::default(),
+            },
+        ];
+
+        // Create bundled modules mapping
+        let mut bundled_modules = IndexMap::new();
+        bundled_modules.insert(
+            "greetings.greeting".to_string(),
+            "greetings_greeting".to_string(),
+        );
+        bundled_modules.insert(
+            "greetings.helpers".to_string(),
+            "greetings_helpers".to_string(),
+        );
+
+        let mut imported_modules = IndexMap::new();
+
+        // Test the process_relative_dot_import method
+        ast_rewriter.process_relative_dot_import(
+            &aliases,
+            ("greetings", &bundled_modules),
+            &mut imported_modules,
+        );
+
+        // Verify the imported modules were processed correctly
+        assert_eq!(imported_modules.len(), 2);
+        assert_eq!(
+            imported_modules.get("greeting"),
+            Some(&"greetings_greeting".to_string())
+        );
+        assert_eq!(
+            imported_modules.get("helpers"),
+            Some(&"greetings_helpers".to_string())
+        );
+    }
 }
