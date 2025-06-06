@@ -463,6 +463,46 @@ serpen --entry src/main.py --output bundle.py [options]
 
 Under no circumstances should you justify a design or implementation by citing "lack of time," "limited resources," "tight deadlines," or similar human factors.
 
+#### Deterministic Output Requirements (CRITICAL FOR DEPLOYMENT)
+
+**MANDATORY**: Considering the potential use of this tool in deployment scenarios, it is **essential** to aim for deterministic, reproducible bundle output. This enables users to:
+
+- Avoid unnecessary redeployments when source code hasn't meaningfully changed
+- Simplify change diff inspection and validation
+- Maintain predictable deployment pipelines
+- Enable reliable content-based caching and optimization
+
+**This principle explains**:
+
+- Why we have disallowed types and methods in `.clippy.toml` (e.g., `HashSet` → `IndexSet` for deterministic iteration order)
+- Why we must apply sorting or deterministic rules for any output where order doesn't matter
+
+**Implementation Rules**:
+
+- **Sort imports**: `from foo import d, a, b` → `from foo import a, b, d`
+- **Sort collections**: When outputting multiple items, always apply consistent ordering
+- **Stable iteration**: Use `IndexMap`/`IndexSet` instead of `HashMap`/`HashSet` for deterministic order
+- **Consistent formatting**: Apply the same formatting rules regardless of input order
+- **Reproducible timestamps**: Avoid embedding timestamps or random values in output
+
+**Examples**:
+
+```rust
+// ❌ Non-deterministic (HashMap iteration order varies)
+for import in imports.iter() { ... }
+
+// ✅ Deterministic (sorted output)
+let mut sorted_imports: Vec<_> = imports.iter().collect();
+sorted_imports.sort();
+for import in sorted_imports { ... }
+```
+
+**Testing Determinism**:
+
+- Run bundler multiple times on same input - output must be identical
+- Test with different module discovery orders - final bundle must be same
+- Verify sorting applies to all user-visible output elements
+
 #### General Coding Standards
 
 - Follow Rust idiomatic practices and use the Rust 2024 edition or later

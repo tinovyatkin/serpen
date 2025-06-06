@@ -120,7 +120,11 @@ impl CodeEmitter {
         let mut aliased_third_party = IndexSet::new();
         let mut aliased_stdlib = IndexSet::new();
 
-        for import_alias in import_aliases.values() {
+        // Sort import aliases by key for deterministic processing order
+        let mut sorted_aliases: Vec<_> = import_aliases.iter().collect();
+        sorted_aliases.sort_by_key(|(key, _)| *key);
+
+        for (_, import_alias) in sorted_aliases {
             if !import_alias.has_explicit_alias || import_alias.is_from_import {
                 continue;
             }
@@ -326,11 +330,16 @@ impl CodeEmitter {
         // Pre-compute module import flags based on resolver information
         let module_flags = {
             let mut flags = IndexMap::new();
-            for import_alias in ast_rewriter
+
+            // Sort import aliases by key for deterministic processing order
+            let mut sorted_from_aliases: Vec<_> = ast_rewriter
                 .import_aliases()
-                .values()
-                .filter(|a| a.is_from_import)
-            {
+                .iter()
+                .filter(|(_, a)| a.is_from_import)
+                .collect();
+            sorted_from_aliases.sort_by_key(|(key, _)| *key);
+
+            for (_, import_alias) in sorted_from_aliases {
                 let full_module_name = format!(
                     "{}.{}",
                     import_alias.module_name, import_alias.original_name
@@ -1424,8 +1433,16 @@ impl CodeEmitter {
     fn create_bundled_modules_mapping(&self) -> IndexMap<String, String> {
         let mut mapping = IndexMap::new();
 
-        for (module_name, variables) in &self.bundled_variables {
-            for (original_name, bundled_name) in variables {
+        // Sort module names for deterministic processing order
+        let mut sorted_modules: Vec<_> = self.bundled_variables.iter().collect();
+        sorted_modules.sort_by_key(|(module_name, _)| *module_name);
+
+        for (module_name, variables) in sorted_modules {
+            // Sort variable names within each module for deterministic order
+            let mut sorted_variables: Vec<_> = variables.iter().collect();
+            sorted_variables.sort_by_key(|(original_name, _)| *original_name);
+
+            for (original_name, bundled_name) in sorted_variables {
                 // Map "module.original_name" -> "bundled_name"
                 let key = format!("{}.{}", module_name, original_name);
                 mapping.insert(key, bundled_name.clone());

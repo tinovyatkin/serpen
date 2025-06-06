@@ -199,3 +199,61 @@ fn test_multiple_future_imports_deduplication() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_future_imports_deterministic_output() -> Result<()> {
+    let fixture_path = get_fixture_path("multiple_features");
+    let temp_dir = tempfile::TempDir::new()?;
+
+    // Bundle the same project multiple times
+    let mut outputs = Vec::new();
+    for i in 0..3 {
+        let output_path = temp_dir.path().join(format!("bundled_{}.py", i));
+
+        let config = Config::default();
+        let mut bundler = Bundler::new(config);
+        let entry_path = fixture_path.join("main.py");
+        bundler.bundle(&entry_path, &output_path, false)?;
+
+        let content = fs::read_to_string(&output_path)?;
+        outputs.push(content);
+    }
+
+    // All outputs should be identical (deterministic)
+    assert_eq!(
+        outputs[0], outputs[1],
+        "First and second bundle outputs should be identical"
+    );
+    assert_eq!(
+        outputs[1], outputs[2],
+        "Second and third bundle outputs should be identical"
+    );
+
+    // Verify that future imports are sorted alphabetically
+    let lines: Vec<&str> = outputs[0].lines().collect();
+    let future_import_line = lines
+        .iter()
+        .find(|line| line.trim().starts_with("from __future__ import"))
+        .expect("Should find future import line");
+
+    // Extract features from the import line
+    let import_part = future_import_line
+        .split("from __future__ import ")
+        .nth(1)
+        .expect("Should have import part");
+
+    let features: Vec<&str> = import_part.split(", ").map(|f| f.trim()).collect();
+
+    // Verify features are sorted alphabetically
+    let mut sorted_features = features.clone();
+    sorted_features.sort();
+    assert_eq!(
+        features, sorted_features,
+        "Future import features should be sorted alphabetically"
+    );
+
+    // Verify expected features are present in correct order
+    assert_eq!(features, vec!["annotations", "division", "print_function"]);
+
+    Ok(())
+}
