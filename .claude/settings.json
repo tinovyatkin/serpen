@@ -22,7 +22,6 @@
             "Bash(chmod:*)",
             "Bash(cargo build:*)",
             "Bash(mv:*)",
-            "Bash(grep:*)",
             "Bash(ls:*)",
             "WebFetch(domain:github.com)",
             "WebFetch(domain:raw.githubusercontent.com)",

@@ -1069,27 +1069,18 @@ impl AstRewriter {
 
             if let Some(relative_module) = &import_from.module {
                 // This is a relative import like "from .greeting import message"
-                let relative_module_name = relative_module.as_str();
-                for alias in &import_from.names {
-                    let imported_name = alias.name.as_str();
-                    // For "from .greeting import message", assume the variable exists directly in global scope
-                    // since bundled modules emit their variables to global scope
-                    log::debug!(
-                        "Transforming relative import '{}' from module '{}.{}' to global reference",
-                        imported_name,
-                        module_name,
-                        relative_module_name
-                    );
-                    imported_modules.insert(imported_name.to_string(), imported_name.to_string());
-                }
+                self.process_relative_module_import(
+                    &import_from.names,
+                    (relative_module.as_str(), module_name),
+                    &mut imported_modules,
+                );
             } else {
                 // This is a relative import like "from . import module"
-                for alias in &import_from.names {
-                    let imported_name = alias.name.as_str();
-                    let bundled_name =
-                        Self::get_bundled_name(module_name, imported_name, bundled_modules);
-                    imported_modules.insert(imported_name.to_string(), bundled_name);
-                }
+                self.process_relative_dot_import(
+                    &import_from.names,
+                    (module_name, bundled_modules),
+                    &mut imported_modules,
+                );
             }
             statements_to_remove.push(i);
         }
@@ -1102,27 +1093,20 @@ impl AstRewriter {
         // Add assignment statements for imported variables
         let mut assignments_to_add = Vec::new();
         for (imported_name, bundled_name) in &imported_modules {
-            // Create assignment for relative imports to bring variables into module namespace
-            // Only add assignment if we have different names (to avoid "greeting = greeting" for modules)
-            if imported_name != bundled_name {
-                let assignment = self.create_variable_assignment(imported_name, bundled_name);
-                assignments_to_add.push(assignment);
-                log::debug!(
-                    "Added assignment for relative import: {} = {}",
-                    imported_name,
-                    bundled_name
-                );
-            } else {
-                // For cases where names are the same (like "from .greeting import message" -> "message = message"),
-                // we still need the assignment to bring the global variable into the module namespace
-                let assignment = self.create_variable_assignment(imported_name, bundled_name);
-                assignments_to_add.push(assignment);
-                log::debug!(
-                    "Added identity assignment for relative import: {} = {}",
-                    imported_name,
-                    bundled_name
-                );
-            }
+            // Add assignment for all cases. If names are different, create a direct assignment (e.g., "greeting = bundled_greeting").
+            // If names are identical (e.g., "greeting = greeting"), create an identity assignment to bring the variable into the module namespace.
+            let assignment = self.create_variable_assignment(imported_name, bundled_name);
+            assignments_to_add.push(assignment);
+            log::debug!(
+                "Added {} assignment for relative import: {} = {}",
+                if imported_name != bundled_name {
+                    "standard"
+                } else {
+                    "identity"
+                },
+                imported_name,
+                bundled_name
+            );
         }
 
         // Insert assignments at the beginning of the module
@@ -1471,6 +1455,43 @@ impl AstRewriter {
             .get(&module_key)
             .cloned()
             .unwrap_or_else(|| Self::generate_fallback_bundled_name(module_name, imported_name))
+    }
+
+    /// Process relative import with module name (e.g., "from .greeting import message")
+    fn process_relative_module_import(
+        &self,
+        names: &[Alias],
+        context: (&str, &str), // (relative_module_name, module_name)
+        imported_modules: &mut IndexMap<String, String>,
+    ) {
+        let (relative_module_name, module_name) = context;
+        for alias in names {
+            let imported_name = alias.name.as_str();
+            // For "from .greeting import message", assume the variable exists directly in global scope
+            // since bundled modules emit their variables to global scope
+            log::debug!(
+                "Transforming relative import '{}' from module '{}.{}' to global reference",
+                imported_name,
+                module_name,
+                relative_module_name
+            );
+            imported_modules.insert(imported_name.to_string(), imported_name.to_string());
+        }
+    }
+
+    /// Process relative dot import (e.g., "from . import module")
+    fn process_relative_dot_import(
+        &self,
+        names: &[Alias],
+        context: (&str, &IndexMap<String, String>), // (module_name, bundled_modules)
+        imported_modules: &mut IndexMap<String, String>,
+    ) {
+        let (module_name, bundled_modules) = context;
+        for alias in names {
+            let imported_name = alias.name.as_str();
+            let bundled_name = Self::get_bundled_name(module_name, imported_name, bundled_modules);
+            imported_modules.insert(imported_name.to_string(), bundled_name);
+        }
     }
 }
 
