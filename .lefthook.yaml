@@ -28,7 +28,7 @@ pre-commit:
       run: git update-index --again
     codecov:
       glob: '.codecov.yml'
-      run: cat .codecov.yml | curl --data-binary @- https://codecov.io/validate
+      run: curl --fail --data-binary @.codecov.yml https://codecov.io/validate
     renovate:
       glob: 'renovate.json'
       run: npx -y --package renovate -c 'renovate-config-validator' renovate.json
