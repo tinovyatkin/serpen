@@ -40,7 +40,7 @@ impl Default for Config {
             known_third_party: IndexSet::new(),
             preserve_comments: true,
             preserve_type_hints: true,
-            target_version: "py310".to_string(),
+            target_version: "py310".to_owned(),
         }
     }
 }
@@ -108,7 +108,7 @@ impl EnvConfig {
                 .split(',')
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
+                .map(|s| s.to_owned())
                 .collect();
             if !modules.is_empty() {
                 config.known_first_party = Some(modules);
@@ -121,7 +121,7 @@ impl EnvConfig {
                 .split(',')
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
+                .map(|s| s.to_owned())
                 .collect();
             if !modules.is_empty() {
                 config.known_third_party = Some(modules);
