@@ -31,7 +31,7 @@ pre-commit:
       run: cat .codecov.yml | curl --data-binary @- https://codecov.io/validate
     renovate:
       glob: 'renovate.json'
-      run: npx -y --package renovate -c 'renovate-config-validator'
+      run: npx -y --package renovate -c 'renovate-config-validator' renovate.json
 
 commit-msg:
   commands:
