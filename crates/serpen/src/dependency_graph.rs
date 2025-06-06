@@ -69,6 +69,16 @@ pub enum ImportType {
     AliasedImport,  // import module as alias
 }
 
+/// State for Tarjan's strongly connected components algorithm
+struct TarjanState {
+    index_counter: usize,
+    stack: Vec<NodeIndex>,
+    indices: IndexMap<NodeIndex, usize>,
+    lowlinks: IndexMap<NodeIndex, usize>,
+    on_stack: IndexMap<NodeIndex, bool>,
+    components: Vec<Vec<NodeIndex>>,
+}
+
 #[derive(Debug)]
 pub struct DependencyGraph {
     graph: DiGraph<ModuleNode, ()>,
@@ -361,28 +371,22 @@ impl DependencyGraph {
 
     /// Find all strongly connected components using Tarjan's algorithm
     pub fn find_strongly_connected_components(&self) -> Vec<Vec<NodeIndex>> {
-        let mut index_counter = 0;
-        let mut stack = Vec::new();
-        let mut indices = IndexMap::new();
-        let mut lowlinks = IndexMap::new();
-        let mut on_stack = IndexMap::new();
-        let mut components = Vec::new();
+        let mut state = TarjanState {
+            index_counter: 0,
+            stack: Vec::new(),
+            indices: IndexMap::new(),
+            lowlinks: IndexMap::new(),
+            on_stack: IndexMap::new(),
+            components: Vec::new(),
+        };
 
         for node_index in self.graph.node_indices() {
-            if !indices.contains_key(&node_index) {
-                self.tarjan_strongconnect(
-                    node_index,
-                    &mut index_counter,
-                    &mut stack,
-                    &mut indices,
-                    &mut lowlinks,
-                    &mut on_stack,
-                    &mut components,
-                );
+            if !state.indices.contains_key(&node_index) {
+                self.tarjan_strongconnect(node_index, &mut state);
             }
         }
 
-        components
+        state.components
     }
 
     fn pop_scc_component(
@@ -402,50 +406,33 @@ impl DependencyGraph {
         component
     }
 
-    fn tarjan_strongconnect(
-        &self,
-        v: NodeIndex,
-        index_counter: &mut usize,
-        stack: &mut Vec<NodeIndex>,
-        indices: &mut IndexMap<NodeIndex, usize>,
-        lowlinks: &mut IndexMap<NodeIndex, usize>,
-        on_stack: &mut IndexMap<NodeIndex, bool>,
-        components: &mut Vec<Vec<NodeIndex>>,
-    ) {
-        indices.insert(v, *index_counter);
-        lowlinks.insert(v, *index_counter);
-        *index_counter += 1;
-        stack.push(v);
-        on_stack.insert(v, true);
+    fn tarjan_strongconnect(&self, v: NodeIndex, state: &mut TarjanState) {
+        state.indices.insert(v, state.index_counter);
+        state.lowlinks.insert(v, state.index_counter);
+        state.index_counter += 1;
+        state.stack.push(v);
+        state.on_stack.insert(v, true);
 
         for w in self
             .graph
             .neighbors_directed(v, petgraph::Direction::Outgoing)
         {
-            if !indices.contains_key(&w) {
-                self.tarjan_strongconnect(
-                    w,
-                    index_counter,
-                    stack,
-                    indices,
-                    lowlinks,
-                    on_stack,
-                    components,
-                );
-                let w_lowlink = *lowlinks.get(&w).unwrap();
-                let v_lowlink = *lowlinks.get(&v).unwrap();
-                lowlinks.insert(v, v_lowlink.min(w_lowlink));
-            } else if *on_stack.get(&w).unwrap_or(&false) {
-                let w_index = *indices.get(&w).unwrap();
-                let v_lowlink = *lowlinks.get(&v).unwrap();
-                lowlinks.insert(v, v_lowlink.min(w_index));
+            if !state.indices.contains_key(&w) {
+                self.tarjan_strongconnect(w, state);
+                let w_lowlink = *state.lowlinks.get(&w).unwrap();
+                let v_lowlink = *state.lowlinks.get(&v).unwrap();
+                state.lowlinks.insert(v, v_lowlink.min(w_lowlink));
+            } else if *state.on_stack.get(&w).unwrap_or(&false) {
+                let w_index = *state.indices.get(&w).unwrap();
+                let v_lowlink = *state.lowlinks.get(&v).unwrap();
+                state.lowlinks.insert(v, v_lowlink.min(w_index));
             }
         }
 
-        if lowlinks[&v] == indices[&v] {
-            let component = self.pop_scc_component(stack, on_stack, v);
+        if state.lowlinks[&v] == state.indices[&v] {
+            let component = self.pop_scc_component(&mut state.stack, &mut state.on_stack, v);
             if component.len() > 1 {
-                components.push(component);
+                state.components.push(component);
             }
         }
     }
@@ -557,21 +544,20 @@ impl DependencyGraph {
         for &node_idx in scc {
             let from_module = &self.graph[node_idx].name;
 
-            // Find outgoing edges to other nodes in the same SCC
-            for neighbor in self
+            let scc_neighbors: Vec<_> = self
                 .graph
                 .neighbors_directed(node_idx, petgraph::Direction::Outgoing)
-            {
-                if scc.contains(&neighbor) {
-                    let to_module = &self.graph[neighbor].name;
+                .filter(|neighbor| scc.contains(neighbor))
+                .collect();
 
-                    import_chain.push(ImportEdge {
-                        from_module: from_module.clone(),
-                        to_module: to_module.clone(),
-                        import_type: ImportType::Direct, // Simplified - could be enhanced
-                        line_number: None,               // Would need AST analysis to determine
-                    });
-                }
+            for neighbor in scc_neighbors {
+                let to_module = &self.graph[neighbor].name;
+                import_chain.push(ImportEdge {
+                    from_module: from_module.clone(),
+                    to_module: to_module.clone(),
+                    import_type: ImportType::Direct, // Simplified - could be enhanced
+                    line_number: None,               // Would need AST analysis to determine
+                });
             }
         }
 
