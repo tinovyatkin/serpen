@@ -11,6 +11,7 @@ name: Clippy check
 # Make sure CI fails on all warnings, including Clippy lints
 env:
   RUSTFLAGS: '-Dwarnings'
+  CLICOLOR: 1
 
 jobs:
   clippy_check:
@@ -37,3 +38,6 @@ jobs:
 
       - run: rustup component add rustfmt
       - run: cargo fmt --all --check
+
+      - name: Spell Check Repo
+        uses: crate-ci/typos@v1.33.1
