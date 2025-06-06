@@ -112,8 +112,14 @@ fn test_single_bundling_fixture(fixtures_dir: &Path, fixture_name: &str) -> Resu
 
         let execution_results = ExecutionResults {
             status: execution_status,
-            stdout: String::from_utf8_lossy(&python_output.stdout).trim().to_string(),
-            stderr: String::from_utf8_lossy(&python_output.stderr).trim().to_string(),
+            stdout: String::from_utf8_lossy(&python_output.stdout)
+                .trim()
+                .replace("\r\n", "\n")
+                .to_string(),
+            stderr: String::from_utf8_lossy(&python_output.stderr)
+                .trim()
+                .replace("\r\n", "\n")
+                .to_string(),
         };
 
         insta::assert_debug_snapshot!("execution_results", execution_results);
