@@ -1093,8 +1093,6 @@ impl AstRewriter {
         // Add assignment statements for imported variables
         let mut assignments_to_add = Vec::new();
         for (imported_name, bundled_name) in &imported_modules {
-            // Add assignment for all cases. If names are different, create a direct assignment (e.g., "greeting = bundled_greeting").
-            // If names are identical (e.g., "greeting = greeting"), create an identity assignment to bring the variable into the module namespace.
             let assignment = self.create_variable_assignment(imported_name, bundled_name);
             assignments_to_add.push(assignment);
             log::debug!(
