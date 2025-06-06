@@ -72,7 +72,10 @@ fn test_single_bundling_fixture(fixtures_dir: &Path, fixture_name: &str) -> Resu
 
     // Skip if main.py doesn't exist
     if !main_py_path.exists() {
-        eprintln!("Skipping {}: no main.py found", fixture_name);
+        // Skip silently or use conditional verbose logging
+        if std::env::var("RUST_TEST_VERBOSE").is_ok() {
+            eprintln!("Skipping {}: no main.py found", fixture_name);
+        }
         return Ok(());
     }
 
@@ -87,15 +90,45 @@ fn test_single_bundling_fixture(fixtures_dir: &Path, fixture_name: &str) -> Resu
     // Bundle the fixture
     bundler.bundle(&main_py_path, &bundle_path, false)?;
 
+    // Optionally validate Python syntax before execution
+    let python_cmd = std::env::var("PYTHON_EXECUTABLE").unwrap_or_else(|_| "python3".to_string());
+    let syntax_check = Command::new(&python_cmd)
+        .args(["-m", "py_compile"])
+        .arg(&bundle_path)
+        .output();
+    if let Ok(output) = syntax_check {
+        if !output.status.success() && std::env::var("RUST_TEST_VERBOSE").is_ok() {
+            eprintln!(
+                "Warning: Bundled code has syntax errors for fixture {}",
+                fixture_name
+            );
+            eprintln!("Stderr: {}", String::from_utf8_lossy(&output.stderr));
+        }
+    }
+
     // Read the bundled code and normalize line endings for cross-platform compatibility
     let bundled_code = fs::read_to_string(&bundle_path)?;
     let normalized_bundled_code = bundled_code.trim().replace("\r\n", "\n");
 
     // Execute the bundled code with Python and capture output
-    let python_output = Command::new("python3")
+    // Use configurable Python executable for different environments
+    let python_cmd = std::env::var("PYTHON_EXECUTABLE").unwrap_or_else(|_| "python3".to_string());
+
+    let python_output = Command::new(&python_cmd)
         .arg(&bundle_path)
+        .current_dir(temp_dir.path()) // Set working directory for consistent execution
         .output()
-        .map_err(|e| anyhow::anyhow!("Failed to execute Python: {}", e))?;
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to execute Python: {} (command: {} {:?})",
+                e,
+                python_cmd,
+                bundle_path
+            )
+        })?;
+
+    // Note: For timeout support, we'd need a more complex solution or external crate
+    // The standard library doesn't provide built-in timeout for process execution
 
     // Create separate snapshots using insta's named snapshot feature
     insta::with_settings!({

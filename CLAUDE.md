@@ -567,7 +567,7 @@ cargo insta accept
 
 **Example Fixture Structure**:
 
-```
+```text
 crates/serpen/tests/fixtures/bundling/
 ├── future_imports_basic/          # Complex nested packages + future imports
 │   ├── main.py
