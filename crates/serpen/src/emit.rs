@@ -1461,4 +1461,71 @@ mod tests {
             assert_eq!(filtered.len(), 2);
         }
     }
+
+    #[test]
+    fn test_filter_aliased_imports_logic() {
+        use crate::ast_rewriter::AstRewriter;
+        use indexmap::IndexSet;
+
+        let emitter = create_test_emitter();
+
+        // Create a real AstRewriter and populate it with import aliases using actual Python code
+        let mut ast_rewriter = AstRewriter::new(10); // Python 3.10
+
+        // Create a simulated Python module with import aliases
+        let python_source = r#"
+import numpy as np
+import matplotlib.pyplot as plt
+from pandas import DataFrame as pd
+import os
+"#;
+
+        // Parse the Python source and collect import aliases
+        let parsed =
+            ruff_python_parser::parse_module(python_source).expect("Should parse test Python code");
+        ast_rewriter.collect_import_aliases(parsed.syntax(), "test_module");
+
+        // Set up import sets that contain our test modules
+        let mut third_party_imports = IndexSet::from([
+            "numpy".to_string(),
+            "matplotlib.pyplot".to_string(),
+            "pandas".to_string(),
+        ]);
+        let mut stdlib_imports = IndexSet::from(["os".to_string()]);
+
+        // Store original state for comparison (currently unused but kept for future debugging)
+        let _original_third_party = third_party_imports.clone();
+        let _original_stdlib = stdlib_imports.clone();
+
+        // Call the actual method we're testing
+        let (aliased_third_party, aliased_stdlib) = emitter.filter_aliased_imports(
+            &mut third_party_imports,
+            &mut stdlib_imports,
+            &ast_rewriter,
+        );
+
+        // Verify the correct behavior:
+        // - numpy (has explicit alias "np", not from import) should be filtered to aliased_third_party
+        // - matplotlib.pyplot (has explicit alias "plt", not from import) should be filtered to aliased_third_party
+        // - pandas (has from import, should be skipped even though it has explicit alias)
+        // - os (no explicit alias, should be skipped)
+
+        // Should include numpy and matplotlib.pyplot (both have explicit aliases and are not from imports)
+        assert_eq!(aliased_third_party.len(), 2);
+        assert!(aliased_third_party.contains("numpy"));
+        assert!(aliased_third_party.contains("matplotlib.pyplot"));
+
+        // Should not include any stdlib imports (os doesn't have explicit alias)
+        assert_eq!(aliased_stdlib.len(), 0);
+
+        // pandas should remain in third_party_imports (is_from_import = true, so skipped)
+        assert!(third_party_imports.contains("pandas"));
+
+        // numpy and matplotlib.pyplot should be removed from third_party_imports
+        assert!(!third_party_imports.contains("numpy"));
+        assert!(!third_party_imports.contains("matplotlib.pyplot"));
+
+        // os should remain in stdlib_imports (has_explicit_alias = false, so skipped)
+        assert!(stdlib_imports.contains("os"));
+    }
 }
