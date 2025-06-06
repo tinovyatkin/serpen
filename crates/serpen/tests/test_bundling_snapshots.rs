@@ -180,10 +180,9 @@ fn test_single_bundling_fixture(fixtures_dir: &Path, fixture_name: &str) -> Resu
 
     // Read the bundled code and normalize line endings for cross-platform compatibility
     let bundled_code = fs::read_to_string(&bundle_path)?;
-    let normalized_bundled_code = bundled_code.trim().replace("\r\n", "\n");
 
     // Run ruff linting for cross-validation of unused imports elimination
-    let ruff_results = run_ruff_lint_on_bundle(&normalized_bundled_code);
+    let ruff_results = run_ruff_lint_on_bundle(&bundled_code);
 
     // Execute the bundled code with Python and capture output
     // Use configurable Python executable for different environments
@@ -211,7 +210,7 @@ fn test_single_bundling_fixture(fixtures_dir: &Path, fixture_name: &str) -> Resu
         omit_expression => true
     }, {
         // Snapshot the bundled code
-        insta::assert_snapshot!("bundled_code", normalized_bundled_code);
+        insta::assert_snapshot!("bundled_code", bundled_code);
 
         // Create structured execution results snapshot
         let execution_status = if python_output.status.success() {
