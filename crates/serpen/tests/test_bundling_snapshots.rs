@@ -87,17 +87,15 @@ fn test_single_bundling_fixture(fixtures_dir: &Path, fixture_name: &str) -> Resu
     // Bundle the fixture
     bundler.bundle(&main_py_path, &bundle_path, false)?;
 
-    // Read the bundled code
+    // Read the bundled code and normalize line endings for cross-platform compatibility
     let bundled_code = fs::read_to_string(&bundle_path)?;
+    let normalized_bundled_code = bundled_code.trim().replace("\r\n", "\n");
 
     // Execute the bundled code with Python and capture output
     let python_output = Command::new("python3")
         .arg(&bundle_path)
         .output()
         .map_err(|e| anyhow::anyhow!("Failed to execute Python: {}", e))?;
-
-    // Normalize line endings for cross-platform compatibility
-    let normalized_bundled_code = bundled_code.trim().replace("\r\n", "\n");
 
     // Create separate snapshots using insta's named snapshot feature
     insta::with_settings!({
