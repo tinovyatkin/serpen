@@ -1,0 +1,8 @@
+---
+source: crates/serpen/tests/test_bundling_snapshots.rs
+---
+RuffLintResults {
+    f401_violations: [],
+    other_violations: [],
+    total_violations: 0,
+}
