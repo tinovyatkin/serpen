@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use cow_utils::CowUtils;
 use indexmap::{IndexMap, IndexSet};
 use std::fs;
 
@@ -264,6 +263,7 @@ impl CodeEmitter {
 
             let source = fs::read_to_string(&module.path)
                 .with_context(|| format!("Failed to read module file: {:?}", module.path))?;
+            let source = crate::util::normalize_line_endings(source);
 
             // Parse into AST
             let ast = ruff_python_parser::parse_module(&source)
@@ -488,7 +488,7 @@ impl CodeEmitter {
 
         // Normalize line endings for cross-platform consistency
         let bundled_code = code_parts.join("\n");
-        Ok(self.normalize_line_endings(bundled_code))
+        Ok(crate::util::normalize_line_endings(bundled_code))
     }
 
     /// Process a single module's AST to produce a transformed AST for bundling
@@ -584,7 +584,7 @@ impl CodeEmitter {
                 code_parts.push(stmt_code);
             }
 
-            self.normalize_line_endings(code_parts.join("\n"))
+            crate::util::normalize_line_endings(code_parts.join("\n"))
         };
 
         // Add the exec call that will execute the module code in its namespace
@@ -1484,16 +1484,6 @@ impl CodeEmitter {
         } else {
             log::debug!("No renames found for module {}", module_name);
         }
-    }
-
-    /// Normalize line endings to LF (\n) for cross-platform consistency
-    /// This ensures reproducible builds regardless of the platform where bundling occurs
-    fn normalize_line_endings(&self, content: String) -> String {
-        // Replace Windows CRLF (\r\n) and Mac CR (\r) with Unix LF (\n)
-        content
-            .cow_replace("\r\n", "\n")
-            .cow_replace('\r', "\n")
-            .into_owned()
     }
 
     /// Helper to build a nested dotted name expression for assignment target
