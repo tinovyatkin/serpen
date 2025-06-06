@@ -80,7 +80,7 @@ impl AstRewriter {
 
         // Add all Python built-ins for the specified version
         for builtin in builtins::python_builtins(python_version, false) {
-            reserved_names.insert(builtin.to_string());
+            reserved_names.insert(builtin.to_owned());
         }
 
         // Note: Python keywords are checked dynamically using ruff_python_stdlib::keyword::is_keyword
@@ -153,8 +153,11 @@ impl AstRewriter {
             let import_alias = if let Some(asname) = &alias.asname {
                 // Import with explicit alias: from module import name as alias
                 ImportAlias {
+                    #[allow(clippy::disallowed_methods)]
                     original_name: alias.name.to_string(),
+                    #[allow(clippy::disallowed_methods)]
                     alias_name: asname.to_string(),
+                    #[allow(clippy::disallowed_methods)]
                     module_name: module.to_string(),
                     is_from_import: true,
                     has_explicit_alias: true,
@@ -163,8 +166,11 @@ impl AstRewriter {
             } else {
                 // Import without alias: from module import name
                 ImportAlias {
+                    #[allow(clippy::disallowed_methods)]
                     original_name: alias.name.to_string(),
+                    #[allow(clippy::disallowed_methods)]
                     alias_name: alias.name.to_string(), // Same as original name
+                    #[allow(clippy::disallowed_methods)]
                     module_name: module.to_string(),
                     is_from_import: true,
                     has_explicit_alias: false,
@@ -175,6 +181,7 @@ impl AstRewriter {
             let key = if alias.asname.is_some() {
                 import_alias.alias_name.clone()
             } else {
+                #[allow(clippy::disallowed_methods)]
                 alias.name.to_string()
             };
             self.import_aliases.insert(key, import_alias);
@@ -186,13 +193,17 @@ impl AstRewriter {
         for alias in &import.names {
             if let Some(asname) = &alias.asname {
                 let import_alias = ImportAlias {
+                    #[allow(clippy::disallowed_methods)]
                     original_name: alias.name.to_string(),
+                    #[allow(clippy::disallowed_methods)]
                     alias_name: asname.to_string(),
+                    #[allow(clippy::disallowed_methods)]
                     module_name: alias.name.to_string(),
                     is_from_import: false,
                     has_explicit_alias: true,
                     is_module_import: true, // Regular imports are always module imports
                 };
+                #[allow(clippy::disallowed_methods)]
                 self.import_aliases.insert(asname.to_string(), import_alias);
             }
         }
@@ -223,13 +234,14 @@ impl AstRewriter {
             Stmt::FunctionDef(func_def) => {
                 let symbol_key = format!("{}::{}", module_name, func_def.name);
                 let symbol = Symbol {
+                    #[allow(clippy::disallowed_methods)]
                     name: func_def.name.to_string(),
                     scope_type: scope_type.clone(),
                     is_parameter: false,
                     is_global: matches!(scope_type, ScopeType::Module),
                     is_nonlocal: false,
                     is_imported: false,
-                    definitions: vec![module_name.to_string()],
+                    definitions: vec![module_name.to_owned()],
                     usages: vec![],
                 };
                 self.symbols.insert(symbol_key, symbol);
@@ -242,13 +254,14 @@ impl AstRewriter {
             Stmt::ClassDef(class_def) => {
                 let symbol_key = format!("{}::{}", module_name, class_def.name);
                 let symbol = Symbol {
+                    #[allow(clippy::disallowed_methods)]
                     name: class_def.name.to_string(),
                     scope_type: scope_type.clone(),
                     is_parameter: false,
                     is_global: matches!(scope_type, ScopeType::Module),
                     is_nonlocal: false,
                     is_imported: false,
-                    definitions: vec![module_name.to_string()],
+                    definitions: vec![module_name.to_owned()],
                     usages: vec![],
                 };
                 self.symbols.insert(symbol_key, symbol);
@@ -291,13 +304,14 @@ impl AstRewriter {
                 if is_assignment && matches!(scope_type, ScopeType::Module) {
                     // This is a module-level assignment
                     let symbol = Symbol {
+                        #[allow(clippy::disallowed_methods)]
                         name: name.id.to_string(),
                         scope_type: scope_type.clone(),
                         is_parameter: false,
                         is_global: true,
                         is_nonlocal: false,
                         is_imported: false,
-                        definitions: vec![module_name.to_string()],
+                        definitions: vec![module_name.to_owned()],
                         usages: vec![],
                     };
                     self.symbols.insert(symbol_key, symbol);
@@ -350,7 +364,7 @@ impl AstRewriter {
                 name_to_modules
                     .entry(symbol.name.clone())
                     .or_default()
-                    .push(module_name.to_string());
+                    .push(module_name.to_owned());
             }
         }
     }
@@ -412,15 +426,15 @@ impl AstRewriter {
             self.module_renames
                 .entry(module.clone())
                 .or_default()
-                .insert(name.to_string(), renamed);
+                .insert(name.to_owned(), renamed);
         }
 
         let conflict = NameConflict {
-            name: name.to_string(),
+            name: name.to_owned(),
             modules: submodules.to_vec(),
             renamed_versions,
         };
-        self.name_conflicts.insert(name.to_string(), conflict);
+        self.name_conflicts.insert(name.to_owned(), conflict);
     }
 
     /// Resolve a specific name conflict
@@ -443,7 +457,7 @@ impl AstRewriter {
             modules: modules.to_vec(),
             renamed_versions,
         };
-        self.name_conflicts.insert(name.to_string(), conflict);
+        self.name_conflicts.insert(name.to_owned(), conflict);
     }
 
     /// Generate a unique name for a conflicting identifier
@@ -623,8 +637,8 @@ impl AstRewriter {
         self.apply_renames_to_ast(&mut if_stmt.body, renames)?;
 
         for clause in &mut if_stmt.elif_else_clauses {
-            if let Some(test) = &mut clause.test {
-                self.apply_renames_to_expr(test, renames)?;
+            if let Some(condition) = &mut clause.test {
+                self.apply_renames_to_expr(condition, renames)?;
             }
             self.apply_renames_to_ast(&mut clause.body, renames)?;
         }
