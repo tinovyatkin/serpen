@@ -1177,7 +1177,10 @@ impl CodeEmitter {
             }
             return;
         }
-        let module = import_from_stmt.module.as_ref().unwrap();
+        let module = import_from_stmt
+            .module
+            .as_ref()
+            .expect("module should be present for non-relative imports");
 
         let module_name = module.as_str();
         if matches!(

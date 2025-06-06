@@ -341,8 +341,8 @@ impl UnusedImportAnalyzer {
         }
         // Track usage in elif/else clauses
         for clause in &if_stmt.elif_else_clauses {
-            if let Some(test) = &clause.test {
-                self.track_usage_in_expression(test);
+            if let Some(condition) = &clause.test {
+                self.track_usage_in_expression(condition);
             }
             for stmt in &clause.body {
                 self.track_usage_in_statement(stmt);
