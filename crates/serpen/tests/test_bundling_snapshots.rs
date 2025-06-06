@@ -36,14 +36,22 @@ enum ExecutionStatus {
 #[derive(Debug)]
 #[allow(dead_code)] // Fields are used via Debug trait for snapshots
 struct RuffLintResults {
-    f401_violations: Vec<String>,
+    f401_violations: Vec<String>, // Unused imports
+    f404_violations: Vec<String>, // Late future imports
     other_violations: Vec<String>,
     total_violations: usize,
 }
 
-/// Run ruff linting on bundled code to cross-validate unused imports elimination
+/// Run ruff linting on bundled code to cross-validate import handling
 fn run_ruff_lint_on_bundle(bundled_code: &str) -> RuffLintResults {
-    let settings = LinterSettings::for_rule(Rule::UnusedImport);
+    // Create settings for multiple import-related rules with both F401 and F404 enabled
+    let settings = LinterSettings {
+        rules: [Rule::UnusedImport, Rule::LateFutureImport]
+            .into_iter()
+            .collect(),
+        ..LinterSettings::default()
+    };
+
     let path = Path::new("<bundled>.py");
     let source_kind = SourceKind::Python(bundled_code.to_string());
 
@@ -58,6 +66,7 @@ fn run_ruff_lint_on_bundle(bundled_code: &str) -> RuffLintResults {
     );
 
     let mut f401_violations = Vec::new();
+    let mut f404_violations = Vec::new();
     let mut other_violations = Vec::new();
 
     for message in &result.messages {
@@ -70,16 +79,17 @@ fn run_ruff_lint_on_bundle(bundled_code: &str) -> RuffLintResults {
                 message.body()
             );
 
-            if rule == Rule::UnusedImport {
-                f401_violations.push(violation_info);
-            } else {
-                other_violations.push(violation_info);
+            match rule {
+                Rule::UnusedImport => f401_violations.push(violation_info),
+                Rule::LateFutureImport => f404_violations.push(violation_info),
+                _ => other_violations.push(violation_info),
             }
         }
     }
 
     RuffLintResults {
         f401_violations,
+        f404_violations,
         other_violations,
         total_violations: result.messages.len(),
     }
