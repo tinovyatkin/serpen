@@ -118,7 +118,10 @@ impl DependencyGraph {
             }
         }) {
             // Remove old entry and insert new name
-            let existing_index = self.node_indices.shift_remove(&old_key).unwrap();
+            let existing_index = self
+                .node_indices
+                .shift_remove(&old_key)
+                .expect("old key should exist in node_indices");
             self.node_indices
                 .insert(module_name.clone(), existing_index);
             self.graph[existing_index] = module;
@@ -419,12 +422,12 @@ impl DependencyGraph {
         {
             if !state.indices.contains_key(&w) {
                 self.tarjan_strongconnect(w, state);
-                let w_lowlink = *state.lowlinks.get(&w).unwrap();
-                let v_lowlink = *state.lowlinks.get(&v).unwrap();
+                let w_lowlink = *state.lowlinks.get(&w).expect("w should exist in lowlinks");
+                let v_lowlink = *state.lowlinks.get(&v).expect("v should exist in lowlinks");
                 state.lowlinks.insert(v, v_lowlink.min(w_lowlink));
             } else if *state.on_stack.get(&w).unwrap_or(&false) {
-                let w_index = *state.indices.get(&w).unwrap();
-                let v_lowlink = *state.lowlinks.get(&v).unwrap();
+                let w_index = *state.indices.get(&w).expect("w should exist in indices");
+                let v_lowlink = *state.lowlinks.get(&v).expect("v should exist in lowlinks");
                 state.lowlinks.insert(v, v_lowlink.min(w_index));
             }
         }
@@ -613,14 +616,14 @@ impl DependencyGraph {
             CircularDependencyType::ImportTime => {
                 ResolutionStrategy::ModuleSplit {
                     suggestions: vec![
-                        "Consider extracting common dependencies to a separate module".to_string(),
-                        "Use dependency injection to break circular references".to_string(),
+                        "Consider extracting common dependencies to a separate module".to_owned(),
+                        "Use dependency injection to break circular references".to_owned(),
                     ],
                 }
             }
             CircularDependencyType::ModuleConstants => {
                 ResolutionStrategy::Unresolvable {
-                    reason: "Module-level constant dependencies create temporal paradox - cannot be resolved through bundling".to_string(),
+                    reason: "Module-level constant dependencies create temporal paradox - cannot be resolved through bundling".to_owned(),
                 }
             }
         }
