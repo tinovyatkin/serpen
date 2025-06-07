@@ -6,6 +6,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
+    inputs:
+      debug_enabled:
+        description: 'Run with debug logging'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
