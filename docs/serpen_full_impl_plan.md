@@ -1,8 +1,8 @@
-# Serpen: Python Source Bundler Implementation & Testing Plan
+# Cribo: Python Source Bundler Implementation & Testing Plan
 
 ## Overview
 
-**Serpen** is a CLI and Python library that produces a single `.py` file from a multi-module Python project by inlining all *first-party* source files. This approach is inspired by JavaScript bundlers and aims to simplify deployment, especially in constrained environments like PySpark jobs, AWS Lambdas, and notebooks.
+**Cribo** is a CLI and Python library that produces a single `.py` file from a multi-module Python project by inlining all *first-party* source files. This approach is inspired by JavaScript bundlers and aims to simplify deployment, especially in constrained environments like PySpark jobs, AWS Lambdas, and notebooks.
 
 ### Key Features
 - Rust-based CLI using the RustPython parser (same as Ruff and Pyrefly).
@@ -26,7 +26,7 @@ Use `clap` to build a CLI interface with the following arguments:
 ### 2. Project Structure
 
 ```
-serpen/
+cribo/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs         # CLI
@@ -39,7 +39,7 @@ serpen/
 
 ## 3. Module Resolution & Import Classification
 
-Serpen will use **Ruff's import resolution logic** as a foundation. Ruff implements efficient import categorization into standard library, first-party, and third-party, relying on:
+Cribo will use **Ruff's import resolution logic** as a foundation. Ruff implements efficient import categorization into standard library, first-party, and third-party, relying on:
 - Module name matching
 - Project root scanning
 - Configurable known-first-party lists
@@ -53,7 +53,7 @@ Serpen will use **Ruff's import resolution logic** as a foundation. Ruff impleme
 ### Adaptations
 - Extend Ruff’s logic to resolve actual source file paths.
 - Implement a cache for resolved modules to avoid redundant disk I/O.
-- Allow users to define `known-first-party`, `known-third-party`, and `src` in `serpen.toml`.
+- Allow users to define `known-first-party`, `known-third-party`, and `src` in `cribo.toml`.
 
 ---
 
@@ -92,7 +92,7 @@ Serpen will use **Ruff's import resolution logic** as a foundation. Ruff impleme
 ## 8. Build & Distribution
 
 - Build with `maturin` for Python packaging.
-- Package will be installable via `pip install serpen`.
+- Package will be installable via `pip install cribo`.
 - Binary will also be published to GitHub Releases.
 
 ---
@@ -126,7 +126,7 @@ Serpen will use **Ruff's import resolution logic** as a foundation. Ruff impleme
 
 ## 11. Related Analysis
 
-See [Import Resolution Analysis](serpen_import_resolution_analysis.md) for a deep comparison of Pyrefly vs Ruff logic.
+See [Import Resolution Analysis](cribo_import_resolution_analysis.md) for a deep comparison of Pyrefly vs Ruff logic.
 
 ---
 

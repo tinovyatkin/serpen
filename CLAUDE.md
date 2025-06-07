@@ -264,14 +264,14 @@ cargo bench-compare
 
 ```bash
 # PRIMARY: Use MCP for comprehensive status
-mcp__github__get_pull_request_status --owner=tinovyatkin --repo=serpen --pullNumber=<NUM>
+mcp__github__get_pull_request_status --owner=ophidiarium --repo=cribo --pullNumber=<NUM>
 
 # SECONDARY: Use gh CLI for detailed breakdown
 gh pr checks <PR-number>
 gh pr view <PR-number> --json state,mergeable,statusCheckRollup,reviewDecision
 
 # VERIFICATION: Get individual check details
-gh run list --repo=tinovyatkin/serpen --branch=<branch-name>
+gh run list --repo=ophidiarium/cribo --branch=<branch-name>
 ```
 
 #### Status Interpretation Guide
@@ -335,7 +335,7 @@ gh run list --repo=tinovyatkin/serpen --branch=<branch-name>
 
 ```bash
 # Check latest CI run status
-gh run list --repo=tinovyatkin/serpen --limit=5
+gh run list --repo=ophidiarium/cribo --limit=5
 
 # Get details of failed run
 gh run view <run-id>

@@ -1,6 +1,6 @@
 # Analysis of Import Resolution Logic in Pyrefly and Ruff
 
-This document analyzes the value of reusing import resolution logic from [Pyrefly](https://github.com/facebook/pyrefly) and [Ruff](https://github.com/astral-sh/ruff) for the Serpen Python bundler project.
+This document analyzes the value of reusing import resolution logic from [Pyrefly](https://github.com/facebook/pyrefly) and [Ruff](https://github.com/astral-sh/ruff) for the Cribo Python bundler project.
 
 ## Summary
 
@@ -9,18 +9,18 @@ This document analyzes the value of reusing import resolution logic from [Pyrefl
 
 ## Recommendation
 
-For **Serpen**, Ruff’s logic is more beneficial and easier to adapt:
+For **Cribo**, Ruff’s logic is more beneficial and easier to adapt:
 - Uses the same parser ecosystem (RustPython).
 - Implements fast, pragmatic first-party detection.
 - Easy to integrate or replicate for bundling purposes.
 
 If precise module resolution is needed (e.g., to trace symlinks or follow stub logic), Pyrefly’s design may serve as a conceptual reference, but its codebase is not directly pluggable.
 
-## Integration Ideas for Serpen
+## Integration Ideas for Cribo
 
 - Reuse Ruff-style logic to identify which imports are from first-party modules.
 - Extend Ruff’s logic slightly to map import names to filesystem paths for bundling.
-- Optionally allow users to configure `known-first-party`, `src` roots, etc., in a `serpen.toml`.
+- Optionally allow users to configure `known-first-party`, `src` roots, etc., in a `cribo.toml`.
 
 ## Sources
 

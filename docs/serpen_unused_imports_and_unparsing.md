@@ -1,8 +1,8 @@
-# Implementing Unused Import Detection (Ruff F401) and AST Unparsing in Serpen
+# Implementing Unused Import Detection (Ruff F401) and AST Unparsing in Cribo
 
 ## Introduction
 
-This guide outlines how to detect and fix unused imports in a single Python file, using an AST-based approach inspired by Ruff’s **F401** rule (unused imports). Ruff’s implementation of F401 is derived from the Pyflakes linter, which means it uses Python’s AST and a scope-based model to determine if an imported name is ever used. We will cover how to parse Python code into an AST (using RustPython or CPython’s AST), how to track scopes and bindings to find unused imports, and how to handle special cases such as `__all__` exports, redundant aliases, shadowed imports, side-effect imports, `__future__` imports, and wildcard imports. We also explain how to construct minimal edits (or use AST unparsing) to safely remove or mark unused imports. By following this guide, another AI agent or tool should be able to implement similar logic in **Serpen** without having to consult Ruff’s source code directly.
+This guide outlines how to detect and fix unused imports in a single Python file, using an AST-based approach inspired by Ruff’s **F401** rule (unused imports). Ruff’s implementation of F401 is derived from the Pyflakes linter, which means it uses Python’s AST and a scope-based model to determine if an imported name is ever used. We will cover how to parse Python code into an AST (using RustPython or CPython’s AST), how to track scopes and bindings to find unused imports, and how to handle special cases such as `__all__` exports, redundant aliases, shadowed imports, side-effect imports, `__future__` imports, and wildcard imports. We also explain how to construct minimal edits (or use AST unparsing) to safely remove or mark unused imports. By following this guide, another AI agent or tool should be able to implement similar logic in **Cribo** without having to consult Ruff’s source code directly.
 
 _(Why detect unused imports?)_ Unused imports slow down imports at runtime and can introduce unwanted dependencies or import cycles. They clutter the code and add cognitive load. Automating their detection and removal helps keep code clean and efficient.
 
@@ -139,7 +139,7 @@ To handle imports intended for side effects, provide a configuration allowlist o
 Example allowlist usage:
 
 ```toml
-[tool.serpen]
+[tool.cribo]
 allowed_unused_imports = ["hvplot.pandas", "some_plugin"]
 ```
 
@@ -324,9 +324,9 @@ from . import utils as utils  # redundant alias re-export
 
 This preserves the import (so that `package.utils` is available) while satisfying the linter by using a redundant alias pattern.
 
-## Putting It All Together: Workflow for Serpen
+## Putting It All Together: Workflow for Cribo
 
-Below is a step-by-step outline for an AI agent implementing unused import detection and removal in Serpen:
+Below is a step-by-step outline for an AI agent implementing unused import detection and removal in Cribo:
 
 1. **Parse Source**: Use RustPython’s parser (or CPython’s `ast`) to generate an AST for the file.
    ```python
@@ -493,9 +493,9 @@ Skip in unused detection. Optionally warn about star import (F403).
 
 ## Conclusion
 
-By parsing the code into an AST and tracking symbol definitions and uses by scope, Serpen can effectively detect unused imports in the same way Ruff (and Pyflakes) do. Key aspects include treating certain imports as used due to conventions (`__all__`, redundant alias) and identifying scenarios where an import is unused because it’s overshadowed by other code. Once identified, constructing minimal edits (either via AST unparse or careful text slicing) will remove the unused imports while leaving the rest of the code intact.
+By parsing the code into an AST and tracking symbol definitions and uses by scope, Cribo can effectively detect unused imports in the same way Ruff (and Pyflakes) do. Key aspects include treating certain imports as used due to conventions (`__all__`, redundant alias) and identifying scenarios where an import is unused because it’s overshadowed by other code. Once identified, constructing minimal edits (either via AST unparse or careful text slicing) will remove the unused imports while leaving the rest of the code intact.
 
-In summary, to implement F401 in Serpen:
+In summary, to implement F401 in Cribo:
 
 - **Parse** the source.
 - **Traverse** AST to collect import bindings and mark uses.
@@ -505,7 +505,7 @@ In summary, to implement F401 in Serpen:
 - **Special-case** `__init__.py` to preserve package interfaces.
 - **Test** thoroughly.
 
-Following this guide allows an AI agent or developer to implement unused import detection and autofix in Serpen directly, without referencing Ruff’s codebase.
+Following this guide allows an AI agent or developer to implement unused import detection and autofix in Cribo directly, without referencing Ruff’s codebase.
 
 ## References
 

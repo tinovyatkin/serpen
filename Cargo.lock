@@ -297,6 +297,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "cribo"
+version = "0.4.9"
+dependencies = [
+ "anyhow",
+ "clap",
+ "cow-utils",
+ "criterion",
+ "env_logger",
+ "etcetera",
+ "indexmap",
+ "insta",
+ "log",
+ "once_cell",
+ "petgraph",
+ "regex",
+ "ruff_linter",
+ "ruff_python_ast",
+ "ruff_python_codegen",
+ "ruff_python_parser",
+ "ruff_python_stdlib",
+ "ruff_python_trivia",
+ "ruff_text_size",
+ "serde",
+ "serial_test",
+ "tempfile",
+ "toml",
+ "walkdir",
+]
+
+[[package]]
 name = "criterion"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2049,36 +2079,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "serpen"
-version = "0.4.10"
-dependencies = [
- "anyhow",
- "clap",
- "cow-utils",
- "criterion",
- "env_logger",
- "etcetera",
- "indexmap",
- "insta",
- "log",
- "once_cell",
- "petgraph",
- "regex",
- "ruff_linter",
- "ruff_python_ast",
- "ruff_python_codegen",
- "ruff_python_parser",
- "ruff_python_stdlib",
- "ruff_python_trivia",
- "ruff_text_size",
- "serde",
- "serial_test",
- "tempfile",
- "toml",
- "walkdir",
 ]
 
 [[package]]
