@@ -721,7 +721,7 @@ This approach provides **comprehensive validation with minimal effort** and crea
 #### Git Operations
 
 **MANDATORY**: Always use MCP Git tools instead of direct bash git commands for all git operations.
-Add commentMore actions
+
 - **Use MCP Git tools**: Prefer `mcp__git__*` tools (e.g., `mcp__git__status`, `mcp__git__add`, `mcp__git__commit`) over bash `git` commands
 - **Better integration**: MCP Git tools provide better integration with the development environment and error handling
 - **Consistent workflow**: This ensures consistent git operations across all development workflows
