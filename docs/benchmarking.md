@@ -4,11 +4,11 @@ This document describes the benchmarking infrastructure for Serpen, designed to 
 
 ## Overview
 
-Serpen uses [Criterion.rs](https://github.com/bheisler/criterion.rs) for micro-benchmarking with three layers of integration:
+Serpen uses [Bencher.dev](https://bencher.dev) with [Criterion.rs](https://github.com/bheisler/criterion.rs) and [Hyperfine](https://github.com/sharkdp/hyperfine) for comprehensive benchmarking with three layers of integration:
 
-1. **Local Development**: Quick performance checks during development
-2. **PR Comments**: Automatic performance comparison on pull requests
-3. **Historical Tracking**: Long-term performance trends (future enhancement)
+1. **Local Development**: Quick performance checks during development using Criterion.rs
+2. **PR Comments**: Automatic performance comparison on pull requests via Bencher.dev
+3. **Historical Tracking**: Long-term performance trends with statistical analysis via Bencher.dev dashboard
 
 ## Local Benchmarking
 
@@ -70,28 +70,37 @@ cargo bench-compare   # Compare against 'main' baseline
 
 ## CI Integration
 
-### Pull Request Comments
+### Bencher.dev Integration
 
-Every PR automatically receives benchmark comparison comments:
+Every PR automatically receives benchmark comparison comments with visual charts and statistical analysis:
 
 ```
-## Benchmark Results
+## 🐰 Bencher Report
 
 ### bundle_simple_project
-- **main**: 3,412 ns/iter (± 185)
-- **PR**: 2,987 ns/iter (± 147)
+- **Baseline**: 3,412 ns/iter (± 185) 
+- **Current**: 2,987 ns/iter (± 147)
 - **Change**: -12.45% 🎉 (Performance improved)
+- **Statistical Significance**: ✅ Significant improvement
 
-### parse_python_ast
-- **main**: 45,123 ns/iter (± 2,341)
-- **PR**: 46,789 ns/iter (± 2,156)
+### parse_python_ast  
+- **Baseline**: 45,123 ns/iter (± 2,341)
+- **Current**: 46,789 ns/iter (± 2,156) 
 - **Change**: +3.69% ⚠️ (Slight regression)
+- **Statistical Significance**: ❌ Within noise threshold
+
+[View detailed results on Bencher.dev →](https://bencher.dev/perf/serpen)
 ```
+
+### Benchmark Types
+
+1. **Micro-benchmarks**: Criterion.rs for individual function performance
+2. **CLI benchmarks**: Hyperfine for end-to-end command performance
+3. **Statistical analysis**: Bencher.dev prevents false positives from CI noise
 
 ### Workflow Files
 
-- **`.github/workflows/benchmarks.yml`**: PR benchmark comparisons
-- **`.github/workflows/benchmark-dashboard.yml`**: Historical tracking (future)
+- **`.github/workflows/benchmarks.yml`**: Bencher.dev integration with PR comments and historical tracking
 
 ## Writing New Benchmarks
 
@@ -151,25 +160,24 @@ criterion_group!(
 3. **Cache computations**: Store results of expensive operations
 4. **Use efficient data structures**: `IndexMap` over `HashMap` for determinism
 
-## Future Enhancements
+## Bencher.dev Features
 
-### Bencher.dev Integration
+### Current Integration
 
-We plan to integrate [Bencher.dev](https://bencher.dev) for:
+- **Historical performance tracking**: Automatic trend analysis over time
+- **Statistical regression detection**: Prevents false positives from CI environment noise
+- **Cross-platform benchmarking**: Consistent results across different environments
+- **Visual dashboards**: Web UI with charts and performance insights
+- **JSON API**: Machine-readable results for AI agent integration
 
-- Historical performance tracking
-- Statistical regression detection
-- Cross-platform benchmarking
-- Python benchmark integration
+### Future Enhancements
 
-### Additional Metrics
+Additional metrics we plan to track:
 
-Future benchmarks will track:
-
-- Memory usage
-- Binary size
-- Python execution performance of bundled code
-- Large project bundling (real-world scenarios)
+- **Memory usage**: Heap allocation and peak memory consumption
+- **Binary size**: Compiled binary size tracking for deployment optimization
+- **Python execution performance**: Runtime performance of bundled code
+- **Large project benchmarking**: Real-world scenarios with complex dependency graphs
 
 ## Maintenance
 

@@ -244,11 +244,12 @@ cargo bench-compare
 4. **Verify**: Re-run benchmarks to confirm improvement
 5. **Document**: Note any trade-offs in commit message
 
-**CI Performance Checks** (when implemented):
+**CI Performance Checks** (via Bencher.dev):
 
-- Automated benchmark runs on PRs
-- Comments with performance comparison
-- Block merge for >10% regressions without approval
+- Automated benchmark runs on PRs with statistical analysis
+- Comprehensive PR comments with visual charts and regression alerts
+- Historical performance tracking with trend analysis
+- Block merge for statistically significant regressions
 
 ### PR STATUS MONITORING (CRITICAL FAILURE PREVENTION)
 

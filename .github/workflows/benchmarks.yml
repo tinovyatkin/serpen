@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   benchmark:
-    name: Run Benchmarks
+    name: Run Benchmarks with Bencher
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -45,40 +45,52 @@ jobs:
             ${{ runner.os }}-cargo-target-bench-
             ${{ runner.os }}-cargo-target-
 
-      # For PR benchmarks - use criterion-compare-action for simple PR comments
-      - name: Run benchmarks (PR)
-        if: github.event_name == 'pull_request'
-        uses: boa-dev/criterion-compare-action@v3
+      # Main Bencher.dev integration for comprehensive benchmarking
+      - name: Run Benchmarks with Bencher
+        uses: bencherdev/bencher@main
+        env:
+          BENCHER_PROJECT: serpen
+          BENCHER_API_TOKEN: ${{ secrets.BENCHER_API_TOKEN }}
+          BENCHER_TESTBED: ubuntu-latest
+          BENCHER_ADAPTER: json
+          GITHUB_ACTIONS: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # Compare against the base branch
-          branchName: ${{ github.base_ref }}
-          # Token for commenting on PRs
-          token: ${{ secrets.GITHUB_TOKEN }}
-          # Which benchmarks to run
-          benchmarks: 'bundling'
-          # Optional: Features to enable
-          features: ''
+          # Run benchmarks and track with Bencher
+          cmd: |
+            # Run Criterion benchmarks with JSON output
+            cargo bench --bench bundling -- --output-format json | tee benchmark_results.json
 
-      # For main branch - save baseline for future comparisons
-      - name: Run benchmarks (main)
-        if: github.ref == 'refs/heads/main'
+            # Also run a simple hyperfine test for CLI performance
+            hyperfine --export-json hyperfine_results.json --runs 3 \
+              'target/release/serpen --help' \
+              'echo "CLI performance test"'
+
+            # Combine results for Bencher (if multiple adapters needed)
+            cat benchmark_results.json
+
+      # Fallback: Save baseline for local comparisons (if Bencher.dev unavailable)
+      - name: Save baseline (fallback)
+        if: github.ref == 'refs/heads/main' && failure()
         run: |
+          echo "Bencher.dev unavailable, saving local baseline"
           cargo bench --bench bundling -- --save-baseline main
 
-      # Optional: Upload benchmark results as artifacts
+      # Upload benchmark results as artifacts for debugging
       - name: Upload benchmark results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results-${{ github.sha }}
-          path: target/criterion/
+          path: |
+            target/criterion/
+            benchmark_results.json
+            hyperfine_results.json
           retention-days: 30
 
-  # Future: Bencher.dev integration for historical tracking
-  benchmark-bencher:
-    name: Bencher.dev Tracking
+  # Hyperfine CLI benchmarks for macro-level performance
+  cli-benchmarks:
+    name: CLI Performance Benchmarks
     runs-on: ubuntu-latest
-    if: false # Disabled until Bencher.dev is configured
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -86,17 +98,35 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cargo-criterion
-        run: cargo install cargo-criterion
+      - name: Build release binary
+        run: cargo build --release
 
-      - name: Run Bencher
+      - name: Install hyperfine
+        run: |
+          wget https://github.com/sharkdp/hyperfine/releases/download/v1.18.0/hyperfine_1.18.0_amd64.deb
+          sudo dpkg -i hyperfine_1.18.0_amd64.deb
+
+      - name: Run CLI benchmarks
         uses: bencherdev/bencher@main
+        env:
+          BENCHER_PROJECT: serpen
+          BENCHER_API_TOKEN: ${{ secrets.BENCHER_API_TOKEN }}
+          BENCHER_TESTBED: ubuntu-latest
+          BENCHER_ADAPTER: json
+          GITHUB_ACTIONS: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # These would be configured after Bencher.dev setup
-          project: serpen
-          token: ${{ secrets.BENCHER_API_TOKEN }}
-          testbed: ubuntu-latest
-          adapter: json
           cmd: |
-            cargo criterion --message-format=json > results.json
-            cat results.json
+            # Create test project for CLI benchmarking
+            mkdir -p test_project/utils test_project/models
+            echo "from utils.helpers import helper" > test_project/main.py
+            echo "def helper(): return 'test'" > test_project/utils/helpers.py
+            echo "from models.user import User" >> test_project/main.py
+            echo "class User: pass" > test_project/models/user.py
+
+            # Benchmark CLI operations
+            hyperfine --export-json cli_results.json --runs 5 \
+              --setup 'rm -f test_project/bundle.py' \
+              'target/release/serpen --entry test_project/main.py --output test_project/bundle.py' \
+              --cleanup 'rm -f test_project/bundle.py'
+
+            cat cli_results.json

@@ -348,7 +348,7 @@ cargo test
 
 ### Performance Benchmarking
 
-Serpen includes comprehensive performance benchmarks to track and prevent regressions:
+Serpen uses [Bencher.dev](https://bencher.dev) for comprehensive performance tracking with statistical analysis and regression detection:
 
 ```bash
 # Run all benchmarks
@@ -364,12 +364,19 @@ cargo bench
 ./scripts/bench.sh --open
 ```
 
-Key benchmarks:
+**Key benchmarks:**
 
-- **End-to-end bundling**: Full project bundling performance
-- **AST parsing**: Python code parsing speed
-- **Module resolution**: Import resolution efficiency
-- **Dependency graph**: Graph construction performance
+- **End-to-end bundling**: Full project bundling performance (Criterion.rs)
+- **AST parsing**: Python code parsing speed (Criterion.rs)
+- **Module resolution**: Import resolution efficiency (Criterion.rs)
+- **CLI performance**: Command-line interface speed (Hyperfine)
+
+**CI Integration:**
+
+- Automated PR comments with performance comparisons and visual charts
+- Historical performance tracking with trend analysis
+- Statistical significance testing to prevent false positives
+- Dashboard available at [bencher.dev/perf/serpen](https://bencher.dev/perf/serpen)
 
 See [docs/benchmarking.md](docs/benchmarking.md) for detailed benchmarking guide.
 
