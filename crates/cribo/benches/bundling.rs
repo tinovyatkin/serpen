@@ -1,6 +1,6 @@
-use criterion::{Criterion, criterion_group, criterion_main};
 use cribo::bundler::Bundler;
 use cribo::config::Config;
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::fs;
 use std::hint::black_box;
 use std::path::Path;

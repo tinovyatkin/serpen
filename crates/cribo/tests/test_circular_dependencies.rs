@@ -1,9 +1,9 @@
 #![allow(clippy::disallowed_methods)]
 
 use anyhow::Result;
-use insta::assert_snapshot;
 use cribo::bundler::Bundler;
 use cribo::config::Config;
+use insta::assert_snapshot;
 use std::path::PathBuf;
 use tempfile::TempDir;
 

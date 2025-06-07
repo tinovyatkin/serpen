@@ -139,10 +139,7 @@ mod test {
         let context = TempDir::new()?;
         let program_data = context.path().join("ProgramData").join(CONFIG_DIR);
         fs::create_dir_all(&program_data)?;
-        fs::write(
-            program_data.join(CONFIG_FILE),
-            "[bundler]\nsrc = [\"src\"]",
-        )?;
+        fs::write(program_data.join(CONFIG_FILE), "[bundler]\nsrc = [\"src\"]")?;
 
         assert_eq!(
             locate_system_config_windows(context.path()).unwrap(),
