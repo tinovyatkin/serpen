@@ -69,8 +69,6 @@ pub struct AstRewriter {
     symbols: IndexMap<String, Symbol>,
     /// Set of modules that are from __init__.py files
     init_modules: IndexSet<String>,
-    /// Map of relative imports (module name -> list of modules it imports via relative imports)
-    relative_imports: IndexMap<String, Vec<String>>,
     /// Python version for builtin checks
     python_version: u8,
 }
@@ -95,7 +93,6 @@ impl AstRewriter {
             reserved_names,
             symbols: IndexMap::new(),
             init_modules: IndexSet::new(),
-            relative_imports: IndexMap::new(),
             python_version,
         }
     }
@@ -384,104 +381,6 @@ impl AstRewriter {
             && !symbol.is_imported
     }
 
-    /// Check if a symbol is accessed through relative imports by checking if:
-    /// 1. Other modules import the symbol's module via relative imports
-    /// 2. Those modules define variables with the same name that might reference this symbol
-    fn is_symbol_accessed_through_relative_imports(
-        &self,
-        symbol_key: &str,
-        symbol_name: &str,
-    ) -> bool {
-        // Extract the module name from the symbol key (format: "module::symbol")
-        let module_name = if let Some(pos) = symbol_key.find("::") {
-            &symbol_key[..pos]
-        } else {
-            return false;
-        };
-
-        // Check if any other module imports this module and has a symbol with the same name
-        for (other_module, dependencies) in &self.relative_imports {
-            if other_module == module_name {
-                continue; // Skip the same module
-            }
-
-            // Check if this other module imports from our module
-            let imports_from_our_module = dependencies.contains(&module_name.to_string());
-
-            if imports_from_our_module {
-                // Check if the other module also has a symbol with the same name
-                let other_symbol_key = format!("{}::{}", other_module, symbol_name);
-                if self.symbols.contains_key(&other_symbol_key) {
-                    // Additional check: Only exclude if this looks like a relative import pattern
-                    // (modules are in the same package hierarchy)
-                    if self.are_modules_in_same_package_hierarchy(module_name, other_module) {
-                        log::debug!(
-                            "Excluding symbol {} from conflict resolution: {} imports from {} and both define {}",
-                            symbol_key,
-                            other_module,
-                            module_name,
-                            symbol_name
-                        );
-                        return true;
-                    }
-                }
-            }
-        }
-
-        false
-    }
-
-    /// Check if two modules are in the same package hierarchy (suggesting relative imports)
-    fn are_modules_in_same_package_hierarchy(&self, module1: &str, module2: &str) -> bool {
-        // Simple heuristic: if modules share a common prefix with dots, they're likely in the same package
-        let parts1: Vec<&str> = module1.split('.').collect();
-        let parts2: Vec<&str> = module2.split('.').collect();
-
-        // If both modules have multiple parts and share a common prefix, they're in the same package
-        if parts1.len() > 1 && parts2.len() > 1 {
-            // Check if they share at least one level of package hierarchy
-            for i in 0..(parts1.len().min(parts2.len()) - 1) {
-                if parts1[i] == parts2[i] {
-                    return true;
-                }
-            }
-        }
-
-        false
-    }
-
-    /// Check if a dependency represents a relative import to a specific target module
-    fn is_relative_import_to_module(
-        &self,
-        dependency: &str,
-        source_module: &str,
-        target_module: &str,
-    ) -> bool {
-        // Only consider relative imports (those starting with '.')
-        if !dependency.starts_with('.') {
-            return false;
-        }
-
-        // Get the parent package of the source module
-        if let Some(parent_pos) = source_module.rfind('.') {
-            let parent_package = &source_module[..parent_pos];
-
-            if dependency == "." {
-                // "from . import ..." means importing from the parent package
-                return target_module == parent_package;
-            } else if let Some(relative_part) = dependency.strip_prefix('.') {
-                if !relative_part.is_empty() {
-                    // "from .submodule import ..." means importing from parent.submodule
-                    let expected_target = format!("{}.{}", parent_package, relative_part);
-                    return target_module == expected_target;
-                }
-            }
-        }
-
-        // Don't consider absolute imports for this specific pattern
-        false
-    }
-
     /// Generate conflict resolutions for conflicting names
     fn generate_conflict_resolutions(&mut self, name_to_modules: IndexMap<String, Vec<String>>) {
         for (name, modules) in name_to_modules {
@@ -721,16 +620,10 @@ impl AstRewriter {
         // existing variables and should be renamed.
         // Exception: Simple variable names that are part of conflict-based renames should be renamed.
         for target in &mut assign.targets {
-            if !self.is_simple_variable_binding(target) {
+            if !self.is_simple_variable_binding(target)
+                || self.should_rename_simple_binding(target, renames)
+            {
                 self.apply_renames_to_expr(target, renames)?;
-            } else if let Expr::Name(name_expr) = target {
-                // Check if this simple variable binding is part of a conflict-based rename
-                if let Some(renamed_to) = renames.get(&name_expr.id.to_string()) {
-                    if self.is_conflict_based_rename_mapping(&name_expr.id, renamed_to) {
-                        // This is a conflict-based rename, apply it even though it's a simple binding
-                        self.apply_renames_to_expr(target, renames)?;
-                    }
-                }
             }
         }
         // Always rename the value (right-hand side) as it references existing variables
@@ -741,6 +634,20 @@ impl AstRewriter {
     /// Returns true for simple names like 'x', false for complex expressions like 'obj.attr' or 'arr[i]'
     fn is_simple_variable_binding(&self, expr: &Expr) -> bool {
         matches!(expr, Expr::Name(_))
+    }
+
+    /// Check if a simple variable binding should be renamed due to conflict-based rename
+    fn should_rename_simple_binding(
+        &self,
+        target: &Expr,
+        renames: &IndexMap<String, String>,
+    ) -> bool {
+        if let Expr::Name(name_expr) = target {
+            if let Some(renamed_to) = renames.get(&name_expr.id.to_string()) {
+                return self.is_conflict_based_rename_mapping(&name_expr.id, renamed_to);
+            }
+        }
+        false
     }
 
     /// Check if a rename mapping represents a conflict-based rename
@@ -1249,26 +1156,8 @@ impl AstRewriter {
         // Add assignment statements for imported variables ONLY if we found relative imports
         // Skip module imports (those ending with "_imported") as they are only used for attribute access transformation
         if !imported_modules.is_empty() {
-            let mut assignments_to_add = Vec::new();
-            for (imported_name, bundled_name) in &imported_modules {
-                // Skip module imports - they are placeholders for attribute access transformation
-                if bundled_name.ends_with("_imported") {
-                    log::debug!(
-                        "Skipping assignment for module import: {} = {} (module import placeholder)",
-                        imported_name,
-                        bundled_name
-                    );
-                    continue;
-                }
-
-                let assignment = self.create_variable_assignment(imported_name, bundled_name);
-                assignments_to_add.push(assignment);
-                log::debug!(
-                    "Added assignment for relative import: {} = {}",
-                    imported_name,
-                    bundled_name
-                );
-            }
+            let assignments_to_add =
+                self.create_variable_assignments_for_imports(&imported_modules);
 
             log::debug!("Total imported_modules: {:?}", imported_modules);
 
@@ -1290,6 +1179,34 @@ impl AstRewriter {
         Ok(())
     }
 
+    /// Create variable assignments for imported modules, skipping module imports
+    fn create_variable_assignments_for_imports(
+        &self,
+        imported_modules: &IndexMap<String, String>,
+    ) -> Vec<Stmt> {
+        let mut assignments_to_add = Vec::new();
+        for (imported_name, bundled_name) in imported_modules {
+            // Skip module imports - they are placeholders for attribute access transformation
+            if bundled_name.ends_with("_imported") {
+                log::debug!(
+                    "Skipping assignment for module import: {} = {} (module import placeholder)",
+                    imported_name,
+                    bundled_name
+                );
+                continue;
+            }
+
+            let assignment = self.create_variable_assignment(imported_name, bundled_name);
+            assignments_to_add.push(assignment);
+            log::debug!(
+                "Added assignment for relative import: {} = {}",
+                imported_name,
+                bundled_name
+            );
+        }
+        assignments_to_add
+    }
+
     /// Transform attribute access expressions in statements
     fn transform_attribute_access_in_statements(
         &self,
@@ -1299,6 +1216,21 @@ impl AstRewriter {
     ) -> Result<()> {
         for stmt in statements {
             self.transform_attribute_access_in_stmt(stmt, imported_modules, bundled_modules)?;
+        }
+        Ok(())
+    }
+
+    /// Process assignment targets for transformation, reducing nesting in transform_attribute_access_in_stmt
+    fn process_assignment_targets(
+        &self,
+        targets: &mut Vec<Expr>,
+        imported_modules: &IndexMap<String, String>,
+        bundled_modules: &IndexMap<String, String>,
+    ) -> Result<()> {
+        for target in targets {
+            if self.should_transform_assignment_target(target, imported_modules) {
+                self.transform_attribute_access_in_expr(target, imported_modules, bundled_modules)?;
+            }
         }
         Ok(())
     }
@@ -1329,20 +1261,11 @@ impl AstRewriter {
     ) -> Result<()> {
         match stmt {
             Stmt::Assign(assign) => {
-                // For relative imports, we should NOT transform assignment targets
-                // Only transform targets if they're not simple names (i.e., they're attribute access)
-                // and if the import is not a relative import (no "_imported" suffix)
-                for target in &mut assign.targets {
-                    // Check if this assignment target should be transformed
-                    if self.should_transform_assignment_target(target, imported_modules) {
-                        self.transform_attribute_access_in_expr(
-                            target,
-                            imported_modules,
-                            bundled_modules,
-                        )?;
-                    }
-                }
-                // Always transform the assignment value (right-hand side)
+                self.process_assignment_targets(
+                    &mut assign.targets,
+                    imported_modules,
+                    bundled_modules,
+                )?;
                 self.transform_attribute_access_in_expr(
                     &mut assign.value,
                     imported_modules,
@@ -1375,25 +1298,32 @@ impl AstRewriter {
                 // This preserves the original variable name in assignments like "message = messages.message"
                 false
             }
-            Expr::Attribute(attr) => {
-                // For attribute access targets, check if it's a relative import
-                if let Expr::Name(name) = attr.value.as_ref() {
-                    if let Some(module_prefix) = imported_modules.get(name.id.as_str()) {
-                        // Don't transform targets for relative imports (indicated by "_imported" suffix)
-                        !module_prefix.ends_with("_imported")
-                    } else {
-                        // Not an imported module, safe to transform
-                        true
-                    }
-                } else {
-                    // Complex attribute access, transform it
-                    true
-                }
-            }
+            Expr::Attribute(attr) => self.should_transform_attribute_target(attr, imported_modules),
             _ => {
                 // Other expression types, transform them
                 true
             }
+        }
+    }
+
+    /// Helper method to check if an attribute target should be transformed
+    fn should_transform_attribute_target(
+        &self,
+        attr: &ast::ExprAttribute,
+        imported_modules: &IndexMap<String, String>,
+    ) -> bool {
+        // For attribute access targets, check if it's a relative import
+        if let Expr::Name(name) = attr.value.as_ref() {
+            if let Some(module_prefix) = imported_modules.get(name.id.as_str()) {
+                // Don't transform targets for relative imports (indicated by "_imported" suffix)
+                !module_prefix.ends_with("_imported")
+            } else {
+                // Not an imported module, safe to transform
+                true
+            }
+        } else {
+            // Complex attribute access, transform it
+            true
         }
     }
 
@@ -1416,43 +1346,7 @@ impl AstRewriter {
 
                 // Check if this is a relative import (indicated by the "_imported" suffix)
                 let bundled_var_name = if module_prefix.ends_with("_imported") {
-                    // This is a relative import - resolve to the actual bundled variable
-                    // For "messages.message" where messages is from "from . import messages",
-                    // we need to look up the actual bundled variable name
-                    let target_module_path =
-                        &module_prefix[..module_prefix.len() - "_imported".len()];
-
-                    log::debug!(
-                        "Relative import transformation: module_prefix='{}', target_module_path='{}', attr='{}'",
-                        module_prefix,
-                        target_module_path,
-                        attr.attr
-                    );
-
-                    // Look up the actual bundled variable name in the bundled_modules mapping
-                    let lookup_key = format!("{}.{}", target_module_path, attr.attr);
-                    let actual_bundled_name = bundled_modules.get(&lookup_key)
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            // If no bundled name exists, use the original variable name
-                            // This happens when the variable wasn't renamed due to no conflicts
-                            log::debug!(
-                                "No bundled mapping found for '{}', using original variable name '{}'",
-                                lookup_key,
-                                attr.attr
-                            );
-                            attr.attr.to_string()
-                        });
-
-                    log::debug!(
-                        "Resolved {}.{} -> {} (lookup_key: {})",
-                        name.id,
-                        attr.attr,
-                        actual_bundled_name,
-                        lookup_key
-                    );
-
-                    actual_bundled_name
+                    self.resolve_relative_import_variable(module_prefix, attr, bundled_modules)
                 } else {
                     // Regular module import transformation
                     format!("__{}_{}", module_prefix, attr.attr)
@@ -1601,6 +1495,52 @@ impl AstRewriter {
             bundled_modules,
         )?;
         Ok(())
+    }
+
+    /// Resolve relative import variable to actual bundled name
+    fn resolve_relative_import_variable(
+        &self,
+        module_prefix: &str,
+        attr: &ast::ExprAttribute,
+        bundled_modules: &IndexMap<String, String>,
+    ) -> String {
+        // This is a relative import - resolve to the actual bundled variable
+        // For "messages.message" where messages is from "from . import messages",
+        // we need to look up the actual bundled variable name
+        let target_module_path = &module_prefix[..module_prefix.len() - "_imported".len()];
+
+        log::debug!(
+            "Relative import transformation: module_prefix='{}', target_module_path='{}', attr='{}'",
+            module_prefix,
+            target_module_path,
+            attr.attr
+        );
+
+        // Look up the actual bundled variable name in the bundled_modules mapping
+        let lookup_key = format!("{}.{}", target_module_path, attr.attr);
+        let actual_bundled_name = bundled_modules
+            .get(&lookup_key)
+            .cloned()
+            .unwrap_or_else(|| {
+                // If no bundled name exists, use the original variable name
+                // This happens when the variable wasn't renamed due to no conflicts
+                log::debug!(
+                    "No bundled mapping found for '{}', using original variable name '{}'",
+                    lookup_key,
+                    attr.attr
+                );
+                attr.attr.to_string()
+            });
+
+        log::debug!(
+            "Resolved {}.{} -> {} (lookup_key: {})",
+            "name.id", // We don't have access to name.id here, so just use placeholder
+            attr.attr,
+            actual_bundled_name,
+            lookup_key
+        );
+
+        actual_bundled_name
     }
 
     /// Transform module AST to remove import statements that have alias assignments
@@ -1765,28 +1705,6 @@ impl AstRewriter {
             return true;
         }
         false
-    }
-
-    /// Generate fallback bundled name when not found in mapping
-    fn generate_fallback_bundled_name(module_name: &str, imported_name: &str) -> String {
-        format!(
-            "{}_{}",
-            module_name.cow_replace('.', "_"),
-            imported_name.cow_replace('.', "_")
-        )
-    }
-
-    /// Get the bundled name for a module, falling back to a generated name if not found
-    fn get_bundled_name(
-        module_name: &str,
-        imported_name: &str,
-        bundled_modules: &IndexMap<String, String>,
-    ) -> String {
-        let module_key = format!("{}.{}", module_name, imported_name);
-        bundled_modules
-            .get(&module_key)
-            .cloned()
-            .unwrap_or_else(|| Self::generate_fallback_bundled_name(module_name, imported_name))
     }
 
     /// Process relative import with module name (e.g., "from .greeting import message" or "from ..messages import message")

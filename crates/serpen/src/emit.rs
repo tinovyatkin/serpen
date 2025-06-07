@@ -814,13 +814,71 @@ impl CodeEmitter {
         bundled_var_pattern.is_match(module_code)
     }
 
-    /// Create statements to expose renamed variables with their original names
-    ///
-    /// This creates assignment statements like `__module_name_var = __module_name_var`
-    /// to make renamed variables accessible for import resolution in other modules.
-    ///
-    /// However, for conflict-based renames (where original names were renamed due to conflicts),
-    /// we skip creating exposure statements since the original names no longer exist.
+    /// Process a single rename entry and create exposure statement if appropriate
+    fn process_rename_entry(
+        &self,
+        rename_entry: (&str, &str), // (original_name, renamed_name)
+        module_name: &str,
+        ast_rewriter: &crate::ast_rewriter::AstRewriter,
+    ) -> Option<Stmt> {
+        let (original_name, renamed_name) = rename_entry;
+        // Check if this rename was due to a name conflict
+        // If it was, skip creating exposure statements since the original name no longer exists
+        if ast_rewriter.is_conflict_based_rename(original_name, module_name) {
+            log::debug!(
+                "Skipping exposure statement for '{}' -> '{}' in module '{}' (conflict-based rename)",
+                original_name,
+                renamed_name,
+                module_name
+            );
+            return None;
+        }
+
+        // Create assignment: renamed_name = original_name
+        // This assigns the original variable's value to the renamed variable for conflict resolution
+        let assignment = Stmt::Assign(StmtAssign {
+            targets: vec![Expr::Name(ExprName {
+                id: renamed_name.into(),
+                ctx: ExprContext::Store,
+                range: TextRange::default(),
+            })],
+            value: Box::new(Expr::Name(ExprName {
+                id: original_name.into(),
+                ctx: ExprContext::Load,
+                range: TextRange::default(),
+            })),
+            range: TextRange::default(),
+        });
+
+        log::debug!(
+            "Creating exposure statement: {} = {} (in module '{}')",
+            renamed_name,
+            original_name,
+            module_name
+        );
+
+        Some(assignment)
+    }
+
+    /// Process all renames for a module and collect statements
+    fn process_module_renames(
+        &self,
+        renames: &IndexMap<String, String>,
+        module_name: &str,
+        ast_rewriter: &crate::ast_rewriter::AstRewriter,
+    ) -> Vec<Stmt> {
+        let mut statements = Vec::new();
+        for (original_name, renamed_name) in renames {
+            if let Some(statement) =
+                self.process_rename_entry((original_name, renamed_name), module_name, ast_rewriter)
+            {
+                statements.push(statement);
+            }
+        }
+        statements
+    }
+
+    /// Create exposure statements for renamed variables in a module
     fn create_variable_exposure_statements(
         &self,
         module_name: &str,
@@ -836,36 +894,7 @@ impl CodeEmitter {
                 renames.len()
             );
 
-            for (original_name, renamed_name) in renames {
-                // Check if this rename was due to a name conflict
-                // If it was, skip creating exposure statements since the original name no longer exists
-                if ast_rewriter.is_conflict_based_rename(original_name, module_name) {
-                    log::debug!(
-                        "Skipping exposure statement for '{}' -> '{}' in module '{}' (conflict-based rename)",
-                        original_name,
-                        renamed_name,
-                        module_name
-                    );
-                    continue;
-                }
-
-                // Create assignment: renamed_name = original_name
-                // This assigns the original variable's value to the renamed variable for conflict resolution
-                let assignment = Stmt::Assign(StmtAssign {
-                    targets: vec![Expr::Name(ExprName {
-                        id: renamed_name.clone().into(),
-                        ctx: ExprContext::Store,
-                        range: TextRange::default(),
-                    })],
-                    value: Box::new(Expr::Name(ExprName {
-                        id: original_name.clone().into(),
-                        ctx: ExprContext::Load,
-                        range: TextRange::default(),
-                    })),
-                    range: TextRange::default(),
-                });
-                statements.push(assignment);
-            }
+            statements.extend(self.process_module_renames(renames, module_name, ast_rewriter));
         } else {
             log::debug!("No renamed variables found for module '{}'", module_name);
         }
