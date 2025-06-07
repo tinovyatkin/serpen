@@ -55,7 +55,7 @@ jobs:
       - name: Run Benchmarks with Bencher
         uses: bencherdev/bencher@main
         env:
-          BENCHER_PROJECT: serpen
+          BENCHER_PROJECT: cribo
           BENCHER_API_TOKEN: ${{ secrets.BENCHER_API_TOKEN }}
           BENCHER_TESTBED: ubuntu-latest
           BENCHER_ADAPTER: json
@@ -115,7 +115,7 @@ jobs:
       - name: Run CLI benchmarks
         uses: bencherdev/bencher@main
         env:
-          BENCHER_PROJECT: serpen
+          BENCHER_PROJECT: cribo
           BENCHER_API_TOKEN: ${{ secrets.BENCHER_API_TOKEN }}
           BENCHER_TESTBED: ubuntu-latest
           BENCHER_ADAPTER: json
