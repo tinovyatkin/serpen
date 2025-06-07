@@ -107,6 +107,26 @@ This pattern is used by similar projects. For instance, Orhun’s guide on packa
   #!/usr/bin/env node
   const { execFileSync } = require('child_process');
   const path = require('path');
+  const fs = require('fs');
+
+  // Helper function to detect musl libc on Linux
+  function detectMusl() {
+    try {
+      // Check for musl-specific files/patterns
+      if (fs.existsSync('/lib/ld-musl-x86_64.so.1') || 
+          fs.existsSync('/lib/ld-musl-aarch64.so.1')) {
+        return true;
+      }
+      // Check ldd output for musl signature
+      const { execSync } = require('child_process');
+      const lddOutput = execSync('ldd --version 2>&1', { encoding: 'utf8' });
+      return lddOutput.includes('musl');
+    } catch {
+      // Default to glibc if detection fails
+      return false;
+    }
+  }
+
   // Determine platform identifier
   const platform = process.platform === 'win32' ? 'win32' : process.platform; 
   const arch = process.arch;
