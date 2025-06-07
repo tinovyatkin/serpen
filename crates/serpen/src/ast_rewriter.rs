@@ -1351,8 +1351,7 @@ impl AstRewriter {
                 let bundled_var_name = if module_prefix.ends_with(REL_IMPORT_SUFFIX) {
                     self.resolve_relative_import_variable(
                         &name.id,
-                        module_prefix,
-                        attr,
+                        (module_prefix, &attr.attr),
                         bundled_modules,
                     )
                 } else {
@@ -1509,31 +1508,29 @@ impl AstRewriter {
     fn resolve_relative_import_variable(
         &self,
         identifier_name: &str,
-        module_prefix: &str,
-        attr: &ast::ExprAttribute,
+        module_attr_pair: (&str, &str), // (module_prefix, attr_name)
         bundled_modules: &IndexMap<String, String>,
     ) -> String {
+        let (module_prefix, attr_name) = module_attr_pair;
+
         // This is a relative import - resolve to the actual bundled variable
         // For "messages.message" where messages is from "from . import messages",
         // we need to look up the actual bundled variable name
 
-        // Safely remove the REL_IMPORT_SUFFIX
-        let target_module_path = if module_prefix.ends_with(REL_IMPORT_SUFFIX) {
-            &module_prefix[..module_prefix.len() - REL_IMPORT_SUFFIX.len()]
-        } else {
-            // Fallback: if suffix is not present, use the entire module_prefix
-            module_prefix
-        };
+        // Safely remove the REL_IMPORT_SUFFIX using strip_suffix
+        let target_module_path = module_prefix
+            .strip_suffix(REL_IMPORT_SUFFIX)
+            .unwrap_or(module_prefix);
 
         log::debug!(
             "Relative import transformation: module_prefix='{}', target_module_path='{}', attr='{}'",
             module_prefix,
             target_module_path,
-            attr.attr
+            attr_name
         );
 
         // Look up the actual bundled variable name in the bundled_modules mapping
-        let lookup_key = format!("{}.{}", target_module_path, attr.attr);
+        let lookup_key = format!("{}.{}", target_module_path, attr_name);
         let actual_bundled_name = bundled_modules
             .get(&lookup_key)
             .cloned()
@@ -1543,15 +1540,15 @@ impl AstRewriter {
                 log::debug!(
                     "No bundled mapping found for '{}', using original variable name '{}'",
                     lookup_key,
-                    attr.attr
+                    attr_name
                 );
-                attr.attr.to_string()
+                attr_name.to_string()
             });
 
         log::debug!(
             "Resolved {}.{} -> {} (lookup_key: {})",
             identifier_name,
-            attr.attr,
+            attr_name,
             actual_bundled_name,
             lookup_key
         );
