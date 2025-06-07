@@ -5,6 +5,9 @@ use ruff_python_ast::{self as ast, Alias, Expr, ExprContext, Identifier, Stmt};
 use ruff_python_stdlib::{builtins, keyword};
 use ruff_text_size::TextRange;
 
+/// Suffix used to identify relative import modules
+const REL_IMPORT_SUFFIX: &str = "_imported";
+
 /// Scope type for tracking different kinds of scopes in Python
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScopeType {
@@ -1154,7 +1157,7 @@ impl AstRewriter {
         }
 
         // Add assignment statements for imported variables ONLY if we found relative imports
-        // Skip module imports (those ending with "_imported") as they are only used for attribute access transformation
+        // Skip module imports (those ending with REL_IMPORT_SUFFIX) as they are only used for attribute access transformation
         if !imported_modules.is_empty() {
             let assignments_to_add =
                 self.create_variable_assignments_for_imports(&imported_modules);
@@ -1187,7 +1190,7 @@ impl AstRewriter {
         let mut assignments_to_add = Vec::new();
         for (imported_name, bundled_name) in imported_modules {
             // Skip module imports - they are placeholders for attribute access transformation
-            if bundled_name.ends_with("_imported") {
+            if bundled_name.ends_with(REL_IMPORT_SUFFIX) {
                 log::debug!(
                     "Skipping assignment for module import: {} = {} (module import placeholder)",
                     imported_name,
@@ -1315,8 +1318,8 @@ impl AstRewriter {
         // For attribute access targets, check if it's a relative import
         if let Expr::Name(name) = attr.value.as_ref() {
             if let Some(module_prefix) = imported_modules.get(name.id.as_str()) {
-                // Don't transform targets for relative imports (indicated by "_imported" suffix)
-                !module_prefix.ends_with("_imported")
+                // Don't transform targets for relative imports (indicated by REL_IMPORT_SUFFIX)
+                !module_prefix.ends_with(REL_IMPORT_SUFFIX)
             } else {
                 // Not an imported module, safe to transform
                 true
@@ -1344,9 +1347,14 @@ impl AstRewriter {
                     return Ok(());
                 };
 
-                // Check if this is a relative import (indicated by the "_imported" suffix)
-                let bundled_var_name = if module_prefix.ends_with("_imported") {
-                    self.resolve_relative_import_variable(module_prefix, attr, bundled_modules)
+                // Check if this is a relative import (indicated by the REL_IMPORT_SUFFIX)
+                let bundled_var_name = if module_prefix.ends_with(REL_IMPORT_SUFFIX) {
+                    self.resolve_relative_import_variable(
+                        &name.id,
+                        module_prefix,
+                        attr,
+                        bundled_modules,
+                    )
                 } else {
                     // Regular module import transformation
                     format!("__{}_{}", module_prefix, attr.attr)
@@ -1500,6 +1508,7 @@ impl AstRewriter {
     /// Resolve relative import variable to actual bundled name
     fn resolve_relative_import_variable(
         &self,
+        identifier_name: &str,
         module_prefix: &str,
         attr: &ast::ExprAttribute,
         bundled_modules: &IndexMap<String, String>,
@@ -1507,7 +1516,14 @@ impl AstRewriter {
         // This is a relative import - resolve to the actual bundled variable
         // For "messages.message" where messages is from "from . import messages",
         // we need to look up the actual bundled variable name
-        let target_module_path = &module_prefix[..module_prefix.len() - "_imported".len()];
+
+        // Safely remove the REL_IMPORT_SUFFIX
+        let target_module_path = if module_prefix.ends_with(REL_IMPORT_SUFFIX) {
+            &module_prefix[..module_prefix.len() - REL_IMPORT_SUFFIX.len()]
+        } else {
+            // Fallback: if suffix is not present, use the entire module_prefix
+            module_prefix
+        };
 
         log::debug!(
             "Relative import transformation: module_prefix='{}', target_module_path='{}', attr='{}'",
@@ -1534,7 +1550,7 @@ impl AstRewriter {
 
         log::debug!(
             "Resolved {}.{} -> {} (lookup_key: {})",
-            "name.id", // We don't have access to name.id here, so just use placeholder
+            identifier_name,
             attr.attr,
             actual_bundled_name,
             lookup_key
@@ -1846,7 +1862,11 @@ impl AstRewriter {
                 bundled_name.clone()
             } else {
                 // Fallback to the old behavior if not found in bundled_modules
-                format!("{}_imported", target_module_path.cow_replace('.', "_"))
+                format!(
+                    "{}{}",
+                    target_module_path.cow_replace('.', "_"),
+                    REL_IMPORT_SUFFIX
+                )
             };
 
             log::debug!(
