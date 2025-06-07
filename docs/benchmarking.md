@@ -48,15 +48,15 @@ cargo install bencher_cli
 
 # Or manually with Bencher CLI
 bencher run \
-    --project serpen \
+    --project cribo \
     --token $BENCHER_API_TOKEN \
     --testbed local \
-    --adapter json \
-    "cargo bench --bench bundling -- --output-format bencher"
+    --adapter rust_criterion \
+    "cargo bench --bench bundling"
 ```
 
 The results will be automatically uploaded to your Bencher.dev dashboard at:
-https://bencher.dev/console/projects/serpen/perf
+https://bencher.dev/console/projects/cribo/perf
 
 ### Cargo Aliases
 
@@ -116,7 +116,7 @@ Every PR automatically receives benchmark comparison comments with visual charts
 - **Change**: +3.69% ⚠️ (Slight regression)
 - **Statistical Significance**: ❌ Within noise threshold
 
-[View detailed results on Bencher.dev →](https://bencher.dev/perf/serpen)
+[View detailed results on Bencher.dev →](https://bencher.dev/perf/cribo)
 ```
 
 ### Benchmark Types
@@ -127,7 +127,9 @@ Every PR automatically receives benchmark comparison comments with visual charts
 
 ### Workflow Files
 
-- **`.github/workflows/benchmarks.yml`**: Bencher.dev integration with PR comments and historical tracking
+- **`.github/workflows/base_benchmarks.yml`**: Baseline benchmarking for main branch with thresholds
+- **`.github/workflows/pr_benchmarks.yml`**: PR benchmarking with comparison comments
+- **`.github/workflows/pr_cleanup.yml`**: Archive closed PR branches for data hygiene
 
 ## Writing New Benchmarks
 
@@ -247,6 +249,7 @@ cargo bench-save
 Check the workflow logs:
 
 ```bash
-gh run list --workflow=benchmarks.yml
+gh run list --workflow=base_benchmarks.yml
+gh run list --workflow=pr_benchmarks.yml
 gh run view <run-id>
 ```
