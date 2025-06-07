@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 use indexmap::{IndexMap, IndexSet};
+use once_cell::sync::Lazy;
+use regex::Regex;
 use std::fs;
 
 use crate::ast_rewriter::AstRewriter;
@@ -16,6 +18,12 @@ use ruff_text_size::TextRange;
 
 /// Type alias for import sets to reduce complexity
 type ImportSets = (IndexSet<String>, IndexSet<String>);
+
+/// Cached regex for detecting bundled variable references like "__module_name_variable"
+static BUNDLED_VAR_PATTERN: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"__[a-zA-Z_][a-zA-Z0-9_]*_[a-zA-Z_][a-zA-Z0-9_]*")
+        .expect("Invalid regex pattern for bundled variable detection")
+});
 
 /// Pre-parsed module data with AST for efficient processing
 struct ParsedModuleData {
@@ -808,10 +816,7 @@ impl CodeEmitter {
     fn module_has_bundled_variable_references(&self, module_code: &str) -> bool {
         // Look for bundled variable patterns like "__module_name_variable"
         // These indicate that the module references variables from other modules
-        use regex::Regex;
-        let bundled_var_pattern = Regex::new(r"__[a-zA-Z_][a-zA-Z0-9_]*_[a-zA-Z_][a-zA-Z0-9_]*")
-            .expect("Invalid regex pattern for bundled variable detection");
-        bundled_var_pattern.is_match(module_code)
+        BUNDLED_VAR_PATTERN.is_match(module_code)
     }
 
     /// Process a single rename entry and create exposure statement if appropriate
