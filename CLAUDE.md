@@ -469,6 +469,10 @@ cargo bench-compare
 
 # Open HTML report
 ./scripts/bench.sh --open
+
+# Run with Bencher.dev cloud tracking
+./scripts/bench-bencher.sh
+# Results viewable at: https://bencher.dev/console/projects/serpen/perf
 ```
 
 ### Coverage Commands

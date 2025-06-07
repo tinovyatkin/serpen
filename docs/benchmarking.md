@@ -31,6 +31,33 @@ cargo bench
 ./scripts/bench.sh --open
 ```
 
+### Bencher.dev CLI Integration
+
+For continuous performance tracking with Bencher.dev:
+
+```bash
+# Setup (one-time)
+cp .env.example .env
+# Edit .env and add your BENCHER_API_TOKEN
+
+# Install Bencher CLI
+cargo install bencher_cli
+
+# Run benchmarks with cloud tracking
+./scripts/bench-bencher.sh
+
+# Or manually with Bencher CLI
+bencher run \
+    --project serpen \
+    --token $BENCHER_API_TOKEN \
+    --testbed local \
+    --adapter json \
+    "cargo bench --bench bundling -- --output-format bencher"
+```
+
+The results will be automatically uploaded to your Bencher.dev dashboard at:
+https://bencher.dev/console/projects/serpen/perf
+
 ### Cargo Aliases
 
 We provide convenient aliases for common operations:

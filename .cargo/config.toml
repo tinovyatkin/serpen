@@ -17,6 +17,8 @@ dev = "run --package serpen --bin serpen"
 bench-local = "bench --bench bundling"
 bench-save = "bench --bench bundling -- --save-baseline main"
 bench-compare = "bench --bench bundling -- --baseline main"
+# Note: bench-bencher requires the bench-bencher.sh script
+# Run: ./scripts/bench-bencher.sh
 
 # Coverage commands using cargo-llvm-cov
 coverage = "llvm-cov --html --open"
