@@ -17,6 +17,7 @@
 - 📦 **Requirements generation** with optional `requirements.txt` output
 - 🔧 **Configurable** import classification and source directories
 - 🚀 **Fast** and memory-efficient
+- 📊 **Performance tracking** with built-in benchmarking
 
 ## Installation
 
@@ -344,6 +345,33 @@ maturin develop
 # Run tests
 cargo test
 ```
+
+### Performance Benchmarking
+
+Serpen includes comprehensive performance benchmarks to track and prevent regressions:
+
+```bash
+# Run all benchmarks
+cargo bench
+
+# Save a performance baseline
+./scripts/bench.sh --save-baseline main
+
+# Compare against baseline
+./scripts/bench.sh --baseline main
+
+# View detailed HTML report
+./scripts/bench.sh --open
+```
+
+Key benchmarks:
+
+- **End-to-end bundling**: Full project bundling performance
+- **AST parsing**: Python code parsing speed
+- **Module resolution**: Import resolution efficiency
+- **Dependency graph**: Graph construction performance
+
+See [docs/benchmarking.md](docs/benchmarking.md) for detailed benchmarking guide.
 
 ### Project Structure
 

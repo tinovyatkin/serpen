@@ -1,0 +1,102 @@
+name: Continuous Benchmarking
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write # Needed for PR comments
+
+jobs:
+  benchmark:
+    name: Run Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full history for accurate comparisons
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo target
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-target-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-bench-
+            ${{ runner.os }}-cargo-target-
+
+      # For PR benchmarks - use criterion-compare-action for simple PR comments
+      - name: Run benchmarks (PR)
+        if: github.event_name == 'pull_request'
+        uses: boa-dev/criterion-compare-action@v3
+        with:
+          # Compare against the base branch
+          branchName: ${{ github.base_ref }}
+          # Token for commenting on PRs
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Which benchmarks to run
+          benchmarks: 'bundling'
+          # Optional: Features to enable
+          features: ''
+
+      # For main branch - save baseline for future comparisons
+      - name: Run benchmarks (main)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          cargo bench --bench bundling -- --save-baseline main
+
+      # Optional: Upload benchmark results as artifacts
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-${{ github.sha }}
+          path: target/criterion/
+          retention-days: 30
+
+  # Future: Bencher.dev integration for historical tracking
+  benchmark-bencher:
+    name: Bencher.dev Tracking
+    runs-on: ubuntu-latest
+    if: false # Disabled until Bencher.dev is configured
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-criterion
+        run: cargo install cargo-criterion
+
+      - name: Run Bencher
+        uses: bencherdev/bencher@main
+        with:
+          # These would be configured after Bencher.dev setup
+          project: serpen
+          token: ${{ secrets.BENCHER_API_TOKEN }}
+          testbed: ubuntu-latest
+          adapter: json
+          cmd: |
+            cargo criterion --message-format=json > results.json
+            cat results.json
