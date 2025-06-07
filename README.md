@@ -43,12 +43,12 @@ npx cribo --help
 
 Download pre-built binaries for your platform from the [latest release](https://github.com/ophidiarium/cribo/releases/latest):
 
-- **Linux x86_64**: `cribo_*_linux_x86_64.tar.gz`
-- **Linux ARM64**: `cribo_*_linux_arm64.tar.gz`
-- **macOS x86_64**: `cribo_*_darwin_x86_64.tar.gz`
-- **macOS ARM64**: `cribo_*_darwin_arm64.tar.gz`
-- **Windows x86_64**: `cribo_*_windows_x86_64.zip`
-- **Windows ARM64**: `cribo_*_windows_arm64.zip`
+- **Linux x86_64**: `cribo_<version>_linux_x86_64.tar.gz`
+- **Linux ARM64**: `cribo_<version>_linux_arm64.tar.gz`
+- **macOS x86_64**: `cribo_<version>_darwin_x86_64.tar.gz`
+- **macOS ARM64**: `cribo_<version>_darwin_arm64.tar.gz`
+- **Windows x86_64**: `cribo_<version>_windows_x86_64.zip`
+- **Windows ARM64**: `cribo_<version>_windows_arm64.zip`
 
 Each binary includes a SHA256 checksum file for verification.
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document provides a comprehensive analysis of the architectural differences between **stickytape** (the original Python bundler) and **cribo** (our Rust-based implementation). It documents the findings from implementing a complete test suite based on stickytape's functionality and identifies the core incompatibilities that need to be addressed.
+This document provides a comprehensive analysis of the architectural differences between **stickytape** (the original Python bundler) and **Cribo** (our Rust-based implementation). It documents the findings from implementing a complete test suite based on stickytape's functionality and identifies the core incompatibilities that need to be addressed.
 
 ## Table of Contents
 
@@ -24,7 +24,7 @@ After implementing a comprehensive test suite mirroring stickytape's functionali
 - **Stickytape**: Preserves Python's import system by creating temporary files and manipulating `sys.path`
 - **Cribo**: Attempts to inline module content directly, breaking import references
 
-This incompatibility prevents cribo from correctly handling most Python import scenarios that work with stickytape. The test suite reveals that while simple scripts work, any script with local imports fails due to this architectural mismatch.
+This incompatibility prevents Cribo from correctly handling most Python import scenarios that work with stickytape. The test suite reveals that while simple scripts work, any script with local imports fails due to this architectural mismatch.
 
 ## Architectural Comparison
 
@@ -388,7 +388,7 @@ let output = run_bundled_script(&script_path)?;
 // FAILS with: ModuleNotFoundError: No module named 'single_local_import.local'
 ```
 
-The test suite conclusively demonstrates that cribo's current inlining approach is fundamentally incompatible with Python's import system.
+The test suite conclusively demonstrates that Cribo's current inlining approach is fundamentally incompatible with Python's import system.
 
 ## References
 

@@ -64,7 +64,7 @@ This guide provides step-by-step instructions for setting up Bencher.dev API tok
 ## Step 4: Configure Bencher.dev Project Settings
 
 1. **Access Project Settings**
-   - In Bencher.dev dashboard, navigate to your `cribo` project
+   - In the Bencher.dev dashboard, navigate to your `cribo` project
    - Click on "Settings" or the gear icon
 
 2. **Configure Testbeds**
@@ -122,7 +122,7 @@ This guide provides step-by-step instructions for setting up Bencher.dev API tok
    - Try re-creating the secret
 
 2. **"Project not found" Error**
-   - Ensure project name in Bencher.dev exactly matches `cribo`
+   - Ensure the project name in Bencher.dev exactly matches `cribo`
    - Check the project slug is also `cribo`
    - Verify the API token has permissions for this project
 

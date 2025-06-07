@@ -2,7 +2,7 @@
 
 ## Cribo project status and rustpython-parser integration
 
-The Cribo Python bundler project at the specified GitHub URL (https://github.com/ophidiarium/cribo) **could not be located** during our research. The repository appears to be either private, deleted, or not yet created. This prevented direct analysis of its current implementation. However, based on typical Python bundler architectures using rustpython-parser, we can infer expected patterns and provide comprehensive implementation guidance based on JavaScript bundler approaches.
+The Cribo Python bundler project at the [specified GitHub URL](https://github.com/ophidiarium/cribo) **could not be located** during our research. The repository appears to be either private, deleted, or not yet created. This prevented direct analysis of its current implementation. However, based on typical Python bundler architectures using rustpython-parser, we can infer expected patterns and provide comprehensive implementation guidance based on JavaScript bundler approaches.
 
 ## How Rspack implements AST rewriting in Rust
 
