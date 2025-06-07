@@ -97,6 +97,7 @@ mod test {
     use crate::dirs::locate_system_config_windows;
     #[cfg(not(windows))]
     use crate::dirs::locate_system_config_xdg;
+    use crate::dirs::{CONFIG_DIR, CONFIG_FILE};
 
     use std::fs;
     use tempfile::TempDir;
