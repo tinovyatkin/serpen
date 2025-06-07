@@ -5,6 +5,12 @@ use std::{
 
 use etcetera::BaseStrategy;
 
+/// Configuration directory name
+const CONFIG_DIR: &str = "cribo";
+
+/// Configuration file name
+const CONFIG_FILE: &str = "cribo.toml";
+
 /// Returns the path to the user configuration directory.
 ///
 /// On Windows, use, e.g., C:\Users\Alice\AppData\Roaming
@@ -18,7 +24,7 @@ pub fn user_config_dir() -> Option<PathBuf> {
 
 pub fn user_cribo_config_dir() -> Option<PathBuf> {
     user_config_dir().map(|mut path| {
-        path.push("cribo");
+        path.push(CONFIG_DIR);
         path
     })
 }
@@ -30,7 +36,7 @@ fn locate_system_config_xdg(value: Option<&str>) -> Option<PathBuf> {
     let config_dirs = value.filter(|s| !s.is_empty()).unwrap_or(default);
 
     for dir in config_dirs.split(':').take_while(|s| !s.is_empty()) {
-        let cribo_toml_path = Path::new(dir).join("cribo").join("cribo.toml");
+        let cribo_toml_path = Path::new(dir).join(CONFIG_DIR).join(CONFIG_FILE);
         if cribo_toml_path.is_file() {
             return Some(cribo_toml_path);
         }
@@ -44,8 +50,8 @@ fn locate_system_config_windows(system_drive: impl AsRef<Path>) -> Option<PathBu
     let candidate = system_drive
         .as_ref()
         .join("ProgramData")
-        .join("cribo")
-        .join("cribo.toml");
+        .join(CONFIG_DIR)
+        .join(CONFIG_FILE);
     candidate.as_path().is_file().then_some(candidate)
 }
 
@@ -73,7 +79,7 @@ pub fn system_config_file() -> Option<PathBuf> {
 
         // Fallback to `/etc/cribo/cribo.toml` if `XDG_CONFIG_DIRS` is not set or no valid
         // path is found.
-        let candidate = Path::new("/etc/cribo/cribo.toml");
+        let candidate = Path::new("/etc").join(CONFIG_DIR).join(CONFIG_FILE);
         match candidate.try_exists() {
             Ok(true) => Some(candidate.to_path_buf()),
             Ok(false) => None,
@@ -100,9 +106,9 @@ mod test {
     fn test_locate_system_config_xdg() -> anyhow::Result<()> {
         // Write a `cribo.toml` to a temporary directory.
         let context = TempDir::new()?;
-        let config_dir = context.path().join("cribo");
+        let config_dir = context.path().join(CONFIG_DIR);
         fs::create_dir_all(&config_dir)?;
-        fs::write(config_dir.join("cribo.toml"), "[bundler]\nsrc = [\"src\"]")?;
+        fs::write(config_dir.join(CONFIG_FILE), "[bundler]\nsrc = [\"src\"]")?;
 
         // None
         assert_eq!(locate_system_config_xdg(None), None);
@@ -119,7 +125,7 @@ mod test {
                 context.path().to_str().expect("path should be valid UTF-8")
             ))
             .expect("config should be found"),
-            config_dir.join("cribo.toml")
+            config_dir.join(CONFIG_FILE)
         );
 
         Ok(())
@@ -130,16 +136,16 @@ mod test {
     fn test_windows_config() -> anyhow::Result<()> {
         // Write a `cribo.toml` to a temporary directory.
         let context = TempDir::new()?;
-        let program_data = context.path().join("ProgramData").join("cribo");
+        let program_data = context.path().join("ProgramData").join(CONFIG_DIR);
         fs::create_dir_all(&program_data)?;
         fs::write(
-            program_data.join("cribo.toml"),
+            program_data.join(CONFIG_FILE),
             "[bundler]\nsrc = [\"src\"]",
         )?;
 
         assert_eq!(
             locate_system_config_windows(context.path()).unwrap(),
-            program_data.join("cribo.toml")
+            program_data.join(CONFIG_FILE)
         );
 
         // This does not have a `ProgramData` child, so contains no config.
