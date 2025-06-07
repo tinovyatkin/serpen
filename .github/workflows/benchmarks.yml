@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
     inputs:
       debug_enabled:
@@ -15,7 +15,8 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write # Needed for PR comments
+  pull-requests: write
+  actions: read
 
 jobs:
   benchmark:
@@ -58,30 +59,17 @@ jobs:
           BENCHER_PROJECT: cribo
           BENCHER_API_TOKEN: ${{ secrets.BENCHER_API_TOKEN }}
           BENCHER_TESTBED: ubuntu-latest
-          BENCHER_ADAPTER: json
+          BENCHER_ADAPTER: rust_criterion
+          BENCHER_START_POINT: ${{ github.base_ref }}
+          BENCHER_START_POINT_CLONE_THRESHOLDS: true
+          BENCHER_BRANCH: ${{ github.head_ref || github.ref_name }}
+          BENCHER_ERR: true
           GITHUB_ACTIONS: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # Run benchmarks and track with Bencher
           cmd: |
-            # Run Criterion benchmarks with JSON output
-            cargo bench --bench bundling -- --output-format json | tee benchmark_results.json
+            cargo bench --bench bundling -- --output-format criterion
 
-            # Also run a simple hyperfine test for CLI performance
-            hyperfine --export-json hyperfine_results.json --runs 3 \
-              'target/release/serpen --help' \
-              'echo "CLI performance test"'
-
-            # Combine results for Bencher (if multiple adapters needed)
-            cat benchmark_results.json
-
-      # Fallback: Save baseline for local comparisons (if Bencher.dev unavailable)
-      - name: Save baseline (fallback)
-        if: github.ref == 'refs/heads/main' && failure()
-        run: |
-          echo "Bencher.dev unavailable, saving local baseline"
-          cargo bench --bench bundling -- --save-baseline main
-
-      # Upload benchmark results as artifacts for debugging
+      # Upload benchmark artifacts for debugging
       - name: Upload benchmark results
         if: always()
         uses: actions/upload-artifact@v4
@@ -89,50 +77,4 @@ jobs:
           name: benchmark-results-${{ github.sha }}
           path: |
             target/criterion/
-            benchmark_results.json
-            hyperfine_results.json
-          retention-days: 30
-
-  # Hyperfine CLI benchmarks for macro-level performance
-  cli-benchmarks:
-    name: CLI Performance Benchmarks
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build release binary
-        run: cargo build --release
-
-      - name: Install hyperfine
-        run: |
-          wget https://github.com/sharkdp/hyperfine/releases/download/v1.18.0/hyperfine_1.18.0_amd64.deb
-          sudo dpkg -i hyperfine_1.18.0_amd64.deb
-
-      - name: Run CLI benchmarks
-        uses: bencherdev/bencher@main
-        env:
-          BENCHER_PROJECT: cribo
-          BENCHER_API_TOKEN: ${{ secrets.BENCHER_API_TOKEN }}
-          BENCHER_TESTBED: ubuntu-latest
-          BENCHER_ADAPTER: json
-          GITHUB_ACTIONS: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          cmd: |
-            # Create test project for CLI benchmarking
-            mkdir -p test_project/utils test_project/models
-            echo "from utils.helpers import helper" > test_project/main.py
-            echo "def helper(): return 'test'" > test_project/utils/helpers.py
-            echo "from models.user import User" >> test_project/main.py
-            echo "class User: pass" > test_project/models/user.py
-
-            # Benchmark CLI operations
-            hyperfine --export-json cli_results.json --runs 5 \
-              --setup 'rm -f test_project/bundle.py' \
-              'target/release/serpen --entry test_project/main.py --output test_project/bundle.py' \
-              --cleanup 'rm -f test_project/bundle.py'
-
-            cat cli_results.json
+          retention-days: 7

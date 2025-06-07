@@ -19,7 +19,7 @@ NC='\033[0m' # No Color
 # Default values
 BENCHER_PROJECT="${BENCHER_PROJECT:-cribo}"
 BENCHER_TESTBED="${BENCHER_TESTBED:-local}"
-BENCHER_ADAPTER="${BENCHER_ADAPTER:-json}"
+BENCHER_ADAPTER="${BENCHER_ADAPTER:-rust_criterion}"
 
 echo -e "${PURPLE}🐰 Serpen Benchmarks with Bencher.dev${NC}"
 echo "========================================"
@@ -36,10 +36,17 @@ if ! command -v bencher &> /dev/null; then
     curl --proto '=https' --tlsv1.2 -sSfL https://bencher.dev/download/install-cli.sh | sh
     echo ""
     echo -e "${GREEN}Bencher CLI installed! You may need to add it to your PATH.${NC}"
-    echo "Add to your shell config: export PATH=\"\$HOME/.bencher/bin:\$PATH\""
+    echo "Add to your shell config: export PATH=\"\$HOME/.cargo/bin:\$PATH\""
     echo ""
-    # Try to use it from the local installation
-    export PATH="$HOME/.bencher/bin:$PATH"
+    # Try to use it from the cargo installation
+    export PATH="$HOME/.cargo/bin:$PATH"
+    
+    # Verify installation
+    if ! command -v bencher &> /dev/null; then
+        echo -e "${RED}Error: Bencher CLI still not found after installation${NC}"
+        echo "Please install manually: cargo install bencher_cli"
+        exit 1
+    fi
 fi
 
 # Check for API token
@@ -65,9 +72,9 @@ bencher run \
     --project "$BENCHER_PROJECT" \
     --token "$BENCHER_API_TOKEN" \
     --testbed "$BENCHER_TESTBED" \
-    --adapter "$BENCHER_ADAPTER" \
+    --adapter rust_criterion \
     --iter 1 \
-    "cargo bench --bench bundling -- --output-format bencher"
+    "cargo bench --bench bundling -- --output-format criterion"
 
 # Run CLI benchmarks with hyperfine
 if command -v hyperfine &> /dev/null; then
