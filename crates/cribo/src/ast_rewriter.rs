@@ -75,7 +75,7 @@ pub struct AstRewriter {
     /// Python version for builtin checks
     python_version: u8,
     /// Import strategies for each module (to know which are ModuleImport)
-    import_strategies: IndexMap<String, String>, // module_name -> strategy_type
+    import_strategies: IndexMap<String, crate::emit::ImportStrategy>, // module_name -> strategy_type
 }
 
 impl AstRewriter {
@@ -111,12 +111,7 @@ impl AstRewriter {
     /// Set import strategies for modules
     pub fn set_import_strategies(&mut self, strategies: &IndexMap<String, crate::emit::ImportStrategy>) {
         for (module, strategy) in strategies {
-            let strategy_str = match strategy {
-                crate::emit::ImportStrategy::ModuleImport => "ModuleImport",
-                crate::emit::ImportStrategy::FromImport => "FromImport", 
-                crate::emit::ImportStrategy::Dependency => "Dependency",
-            };
-            self.import_strategies.insert(module.clone(), strategy_str.to_string());
+            self.import_strategies.insert(module.clone(), strategy.clone());
         }
     }
 
@@ -1029,17 +1024,20 @@ impl AstRewriter {
 
     /// Resolve the reference for a from import considering import strategies
     fn resolve_from_import_reference(&self, import_alias: &ImportAlias) -> String {
-        // Check if the source module was bundled with ModuleImport strategy
+        // Check if the source module was bundled with a specific import strategy
         if let Some(strategy) = self.import_strategies.get(&import_alias.module_name) {
-            if strategy == "ModuleImport" {
-                // The module was bundled with namespace, so reference it as module.item
-                format!(
-                    "{}.{}",
-                    import_alias.module_name, import_alias.original_name
-                )
-            } else {
-                // Module was inlined directly, use the original name
-                import_alias.original_name.clone()
+            match strategy {
+                crate::emit::ImportStrategy::ModuleImport => {
+                    // The module was bundled with namespace, so reference it as module.item
+                    format!(
+                        "{}.{}",
+                        import_alias.module_name, import_alias.original_name
+                    )
+                }
+                crate::emit::ImportStrategy::FromImport | crate::emit::ImportStrategy::Dependency => {
+                    // Module was inlined directly, use the original name
+                    import_alias.original_name.clone()
+                }
             }
         } else {
             // No strategy info available, use the original name as fallback
@@ -1811,7 +1809,7 @@ impl AstRewriter {
     ) -> String {
         // Check if the target module was bundled with ModuleImport strategy
         if let Some(strategy) = self.import_strategies.get(target_module_path) {
-            if strategy == "ModuleImport" {
+            if *strategy == crate::emit::ImportStrategy::ModuleImport {
                 // Module was bundled with namespace, so reference as module.variable
                 let namespace_reference = format!("{}.{}", target_module_path, imported_name);
                 log::debug!(
