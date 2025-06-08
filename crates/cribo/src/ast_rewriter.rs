@@ -393,6 +393,12 @@ impl AstRewriter {
 
     /// Check if a symbol can potentially conflict
     fn is_conflictable_symbol(&self, symbol_key: &str, symbol: &Symbol, module_name: &str) -> bool {
+        // Special case: __all__ should not be treated as conflictable
+        // It's metadata that guides exports, not a regular variable
+        if symbol.name == "__all__" {
+            return false;
+        }
+
         symbol_key.starts_with(&format!("{}::", module_name))
             && symbol.is_global
             && !symbol.is_imported
@@ -978,8 +984,19 @@ impl AstRewriter {
             .name_conflicts
             .contains_key(&import_alias.original_name);
 
-        // Only generate assignment if there's an explicit alias or a name conflict
-        if import_alias.has_explicit_alias || has_conflict {
+        // Check if the source module uses ModuleImport strategy
+        let needs_namespace_reference =
+            if let Some(strategy) = self.import_strategies.get(&import_alias.module_name) {
+                matches!(strategy, crate::emit::ImportStrategy::ModuleImport)
+            } else {
+                false
+            };
+
+        // Generate assignment if:
+        // 1. There's an explicit alias, OR
+        // 2. There's a name conflict, OR
+        // 3. The source module uses ModuleImport strategy (needs namespace reference)
+        if import_alias.has_explicit_alias || has_conflict || needs_namespace_reference {
             let actual_name = self.resolve_actual_name_for_conflict(import_alias);
             let assignment = self.create_from_import_assignment(alias_name, &actual_name);
             assignments.push(Stmt::Assign(assignment));

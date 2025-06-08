@@ -8,7 +8,6 @@ description: Bundled content for imports_in_imported_modules
 
 # ─ Module: greetings.english ─
 message = "Hello"
-message = message
 
 # ─ Module: greetings ─
 

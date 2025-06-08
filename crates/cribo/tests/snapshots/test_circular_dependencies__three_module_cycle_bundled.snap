@@ -17,6 +17,8 @@ def process_b():
     return process_c() + "->B"
 def get_value_b():
     return "value_from_B"
+process_b = process_b
+get_value_b = get_value_b
 
 # ─ Module: module_c ─
 def process_c():
@@ -25,6 +27,8 @@ def process_c():
     return f"C(using_{value})"
 def get_value_c():
     return "value_from_C"
+process_c = process_c
+get_value_c = get_value_c
 
 # ─ Entry Module: main ─
 def main():
@@ -32,3 +36,4 @@ def main():
     print(f"Result: {result}")
 if __name__ == "__main__":
     main()
+main = main

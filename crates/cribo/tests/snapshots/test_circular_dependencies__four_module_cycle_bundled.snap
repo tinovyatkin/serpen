@@ -17,6 +17,8 @@ def process_in_b():
     return f"B({process_in_c()})"
 def step_b():
     return "B_step"
+process_in_b = process_in_b
+step_b = step_b
 
 # ─ Module: module_c ─
 def process_in_c():
@@ -24,6 +26,8 @@ def process_in_c():
     return f"C({process_in_d()})"
 def step_c():
     return "C_step"
+process_in_c = process_in_c
+step_c = step_c
 
 # ─ Module: module_d ─
 def process_in_d():
@@ -31,6 +35,8 @@ def process_in_d():
     return f"D({final_step()})"
 def step_d():
     return "D_step"
+process_in_d = process_in_d
+step_d = step_d
 
 # ─ Entry Module: main ─
 def main():
@@ -38,3 +44,4 @@ def main():
     print(f"Four module cycle result: {result}")
 if __name__ == "__main__":
     main()
+main = main

@@ -28,18 +28,19 @@ UserSchema = schemas.user.UserSchema
 CreateUserRequest = schemas.user.CreateUserRequest
 UserResponse = schemas.user.UserResponse
 """Schemas package initialization."""
-__schemas___all__ = ["UserSchema", "CreateUserRequest", "UserResponse"]
-__schemas___all__ = __all__
+__all__ = ["UserSchema", "CreateUserRequest", "UserResponse"]
 
 # ─ Module: utils ─
 validate_email = utils.validation.validate_email
 sanitize_input = utils.validation.sanitize_input
 validate_age = utils.validation.validate_age
 """Utils package initialization."""
-__utils___all__ = ["validate_email", "sanitize_input", "validate_age"]
-__utils___all__ = __all__
+__all__ = ["validate_email", "sanitize_input", "validate_age"]
 
 # ─ Entry Module: main ─
+UserSchema = schemas.user.UserSchema
+CreateUserRequest = schemas.user.CreateUserRequest
+validate_email = utils.validation.validate_email
 """Pydantic test project entry point."""
 def main():
     """Main function demonstrating Pydantic usage."""
@@ -57,7 +58,6 @@ def main():
         print(f"Validation error: {e}")
 if __name__ == "__main__":
     main()
-main = main
 === END BUNDLE CONTENT ===
 
 === REQUIREMENTS.TXT ===

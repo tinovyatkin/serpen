@@ -28,16 +28,17 @@ greet = utils.helpers.greet
 calculate = utils.helpers.calculate
 get_system_info = utils.helpers.get_system_info
 """Utils package initialization."""
-__utils___all__ = ["greet", "calculate", "get_system_info"]
-__utils___all__ = __all__
+__all__ = ["greet", "calculate", "get_system_info"]
 
 # ─ Module: models ─
 User = models.user.User
 """Models package initialization."""
-__models___all__ = ["User"]
-__models___all__ = __all__
+__all__ = ["User"]
 
 # ─ Entry Module: main ─
+greet = utils.helpers.greet
+calculate = utils.helpers.calculate
+User = models.user.User
 """Simple test project entry point."""
 def main():
     """Main function."""
@@ -48,4 +49,3 @@ def main():
     print(f"User: {user.name}, Age: {user.age}")
 if __name__ == "__main__":
     main()
-main = main

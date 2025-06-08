@@ -846,6 +846,13 @@ impl CodeEmitter {
         BUNDLED_VAR_PATTERN.is_match(module_code)
     }
 
+    /// Check if a variable name follows the bundled variable pattern
+    fn is_bundled_variable_name(&self, name: &str) -> bool {
+        // Bundled variables follow the pattern: __module_name_variable
+        // This matches the regex used in BUNDLED_VAR_PATTERN
+        BUNDLED_VAR_PATTERN.is_match(name)
+    }
+
     /// Process a single rename entry and create exposure statement if appropriate
     fn process_rename_entry(
         &self,
@@ -855,26 +862,38 @@ impl CodeEmitter {
     ) -> Option<Stmt> {
         let (original_name, renamed_name) = rename_entry;
 
-        // If the original name and renamed name are the same, only create exposure if it's needed
-        // for modules with FromImport or Dependency strategy (not ModuleImport)
+        log::debug!(
+            "process_rename_entry: module='{}', original='{}', renamed='{}', is_conflict={}",
+            module_name,
+            original_name,
+            renamed_name,
+            ast_rewriter.is_conflict_based_rename(original_name, module_name)
+        );
+
+        // If the original name and renamed name are the same, only create exposure if there's a conflict
         if original_name == renamed_name {
-            // For now, always create exposure statements to maintain compatibility
-            // TODO: In the future, we could optimize this by only creating exposures when needed
+            // Don't create exposure statements for variables that weren't actually renamed
+            // This avoids creating statements like "message = message" or references to non-existent variables
+            if !ast_rewriter.is_conflict_based_rename(original_name, module_name) {
+                log::debug!(
+                    "Skipping exposure for non-conflicted variable: {} in {}",
+                    original_name,
+                    module_name
+                );
+                return None;
+            }
         }
 
-        // Only create exposure statements if the original name != renamed name
-        // This means there was actually a conflict-based rename that requires exposure
-        if original_name == renamed_name {
-            log::debug!(
-                "Skipping exposure statement for non-renamed variable: {} (no conflict)",
-                original_name
-            );
-            return None;
-        }
-
-        // Create the exposure statement: original_name = renamed_name
-        // This allows references to the original name to work after renaming
-        let (target, source) = (original_name, renamed_name);
+        // Determine the correct direction for the exposure statement
+        // For bundled variables (with module prefixes), use: renamed_name = original_name
+        // For special variables like __all__, use: original_name = renamed_name
+        let (target, source) = if self.is_bundled_variable_name(renamed_name) {
+            // Bundled variable: __module_name_var = var
+            (renamed_name, original_name)
+        } else {
+            // Special variable or simple rename: var = __module_name_var
+            (original_name, renamed_name)
+        };
 
         let assignment = Stmt::Assign(StmtAssign {
             targets: vec![Expr::Name(ExprName {

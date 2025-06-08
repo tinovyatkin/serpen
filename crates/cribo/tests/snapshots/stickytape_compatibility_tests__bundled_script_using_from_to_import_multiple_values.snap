@@ -10,8 +10,6 @@ description: Bundled content for script_using_from_to_import_multiple_values
 message = "Hello"
 def print_stdout(value):
     print(value)
-message = message
-print_stdout = print_stdout
 
 # ─ Entry Module: hello ─
 print_stdout(message)
