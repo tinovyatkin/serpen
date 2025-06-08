@@ -219,8 +219,7 @@ impl Bundler {
         // Get all modules
         let modules = graph.get_modules();
 
-        // For now, use a simple approach: put all modules from cycles at the end
-        // and sort the rest topologically
+        // Collect all modules that are part of circular dependencies
         let mut cycle_modules = IndexSet::new();
         for cycle in &analysis.resolvable_cycles {
             for module_name in &cycle.modules {
@@ -229,7 +228,7 @@ impl Bundler {
         }
 
         // Split modules into non-cycle and cycle modules
-        let (cycle_mods, non_cycle_mods): (Vec<_>, Vec<_>) = modules
+        let (mut cycle_mods, non_cycle_mods): (Vec<_>, Vec<_>) = modules
             .into_iter()
             .partition(|module| cycle_modules.contains(module.name.as_str()));
 
@@ -239,7 +238,29 @@ impl Bundler {
         // Add non-cycle modules first (they should sort topologically)
         result.extend(non_cycle_mods);
 
-        // Add cycle modules at the end - the order doesn't matter much for function-level cycles
+        // For cycle modules, try to maintain dependency order where possible
+        // Sort cycle modules by name to get deterministic output, but also
+        // try to respect dependency relationships within the cycle
+        cycle_mods.sort_by(|a, b| {
+            // For package hierarchies like mypackage.utils vs mypackage,
+            // put the deeper/more specific modules first (dependencies before dependents)
+            let a_depth = a.name.matches('.').count();
+            let b_depth = b.name.matches('.').count();
+
+            // If one is a submodule of the other, put the submodule first
+            if a.name.starts_with(&format!("{}.", b.name)) {
+                std::cmp::Ordering::Less // a (submodule) before b (parent)
+            } else if b.name.starts_with(&format!("{}.", a.name)) {
+                std::cmp::Ordering::Greater // b (submodule) before a (parent)
+            } else {
+                // Otherwise sort by depth (deeper modules first), then by name
+                match a_depth.cmp(&b_depth) {
+                    std::cmp::Ordering::Equal => a.name.cmp(&b.name),
+                    other => other.reverse(), // Deeper modules first
+                }
+            }
+        });
+
         result.extend(cycle_mods);
 
         Ok(result)

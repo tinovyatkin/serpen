@@ -13,8 +13,6 @@ def main_function():
 def utility_function():
     """Utility that pkg2 will import"""
     return "pkg1_utility"
-main_function = main_function
-utility_function = utility_function
 
 # ─ Module: pkg2 ─
 def helper_function():
@@ -24,8 +22,6 @@ def helper_function():
 def another_helper():
     """Another function in pkg2"""
     return "pkg2_helper"
-helper_function = helper_function
-another_helper = another_helper
 
 # ─ Entry Module: main ─
 def main():
@@ -33,4 +29,3 @@ def main():
     print(f"Package cycle result: {result}")
 if __name__ == "__main__":
     main()
-main = main

@@ -579,7 +579,11 @@ impl CodeEmitter {
             ImportStrategy::ModuleImport => {
                 // For modules imported as "import module", create a module namespace using AST nodes
                 let module_ast = ModModule {
-                    body: self.create_module_namespace_ast(module_name, &transformed_ast)?,
+                    body: self.create_module_namespace_ast(
+                        module_name,
+                        &transformed_ast,
+                        ast_rewriter,
+                    )?,
                     range: Default::default(),
                 };
                 Ok(module_ast)
@@ -608,6 +612,7 @@ impl CodeEmitter {
         &mut self,
         module_name: &str,
         module_ast: &ModModule,
+        ast_rewriter: &AstRewriter,
     ) -> Result<Vec<Stmt>> {
         // Start with the types import and namespace creation
         let mut namespace_stmts = self.create_module_namespace_structure(module_name)?;
@@ -636,6 +641,11 @@ impl CodeEmitter {
         let exec_stmt =
             self.create_module_exec_statement(module_name, &module_code, needs_globals)?;
         namespace_stmts.push(exec_stmt);
+
+        // Add exposure statements for conflict-renamed variables that need to be accessible on the module object
+        let module_exposure_stmts =
+            self.create_module_exposure_statements(module_name, ast_rewriter)?;
+        namespace_stmts.extend(module_exposure_stmts);
 
         Ok(namespace_stmts)
     }
@@ -870,21 +880,30 @@ impl CodeEmitter {
             ast_rewriter.is_conflict_based_rename(original_name, module_name)
         );
 
-        // If the original name and renamed name are the same, only create exposure if there's a conflict
+        // If the original name and renamed name are the same, no exposure needed
         if original_name == renamed_name {
-            // Don't create exposure statements for variables that weren't actually renamed
-            // This avoids creating statements like "message = message" or references to non-existent variables
-            if !ast_rewriter.is_conflict_based_rename(original_name, module_name) {
-                log::debug!(
-                    "Skipping exposure for non-conflicted variable: {} in {}",
-                    original_name,
-                    module_name
-                );
-                return None;
-            }
+            log::debug!(
+                "Skipping exposure for non-renamed variable: {} in {}",
+                original_name,
+                module_name
+            );
+            return None;
         }
 
-        // Determine the correct direction for the exposure statement
+        // For conflict-based renames, skip exposure statements to avoid invalid references
+        // When variables are renamed due to conflicts, the original names no longer exist
+        // in the module's namespace, so we can't create backward-compatible aliases
+        if ast_rewriter.is_conflict_based_rename(original_name, module_name) {
+            log::debug!(
+                "Skipping exposure for conflict-based rename: {} -> {} in {}",
+                original_name,
+                renamed_name,
+                module_name
+            );
+            return None;
+        }
+
+        // For non-conflict renames, determine the correct direction
         // For bundled variables (with module prefixes), use: renamed_name = original_name
         // For special variables like __all__, use: original_name = renamed_name
         let (target, source) = if self.is_bundled_variable_name(renamed_name) {
@@ -910,11 +929,10 @@ impl CodeEmitter {
         });
 
         log::debug!(
-            "Creating exposure statement: {} = {} (in module '{}', conflict-based: {})",
+            "Creating exposure statement: {} = {} (in module '{}')",
             target,
             source,
-            module_name,
-            ast_rewriter.is_conflict_based_rename(original_name, module_name)
+            module_name
         );
 
         Some(assignment)
@@ -960,6 +978,204 @@ impl CodeEmitter {
         }
 
         Ok(statements)
+    }
+
+    /// Create exposure statements for conflict-renamed variables that need to be accessible on module objects
+    /// This handles cases where variables with conflict-based renames inside exec namespaces need to be exposed
+    /// as attributes on the module object (e.g., greetings.greeting.message = __greetings_greeting_message)
+    fn create_module_exposure_statements(
+        &self,
+        module_name: &str,
+        ast_rewriter: &AstRewriter,
+    ) -> Result<Vec<Stmt>> {
+        let mut statements = Vec::new();
+
+        // Get renamed variables for this module
+        if let Some(renames) = self.bundled_variables.get(module_name) {
+            log::debug!(
+                "Creating module exposure statements for '{}' with {} renames",
+                module_name,
+                renames.len()
+            );
+
+            statements.extend(self.create_conflict_exposure_statements(
+                module_name,
+                renames,
+                ast_rewriter,
+            )?);
+        }
+
+        Ok(statements)
+    }
+
+    /// Create exposure statements for conflict-based renames in a module
+    fn create_conflict_exposure_statements(
+        &self,
+        module_name: &str,
+        renames: &IndexMap<String, String>,
+        ast_rewriter: &AstRewriter,
+    ) -> Result<Vec<Stmt>> {
+        let mut statements = Vec::new();
+
+        for (original_name, renamed_name) in renames {
+            // Only create exposure statements for conflict-based renames
+            if ast_rewriter.is_conflict_based_rename(original_name, module_name) {
+                let exposure_stmt = self.create_module_attribute_assignment(
+                    module_name,
+                    original_name,
+                    renamed_name,
+                )?;
+
+                log::debug!(
+                    "Created module exposure: {}.{} = {}",
+                    module_name,
+                    original_name,
+                    renamed_name
+                );
+
+                statements.push(exposure_stmt);
+            }
+        }
+
+        Ok(statements)
+    }
+
+    /// Create a module attribute assignment statement (e.g., greetings.greeting.message = __greetings_greeting_message)
+    fn create_module_attribute_assignment(
+        &self,
+        module_name: &str,
+        original_name: &str,
+        renamed_name: &str,
+    ) -> Result<Stmt> {
+        // Create the target expression: module_name.original_name = renamed_name
+        let target_expr = if module_name.contains('.') {
+            // Handle dotted module names like "greetings.greeting"
+            let parts: Vec<&str> = module_name.split('.').collect();
+            let mut current_expr = Expr::Name(ExprName {
+                id: Identifier::new(parts[0], TextRange::default()).into(),
+                ctx: ExprContext::Load,
+                range: TextRange::default(),
+            });
+
+            // Build the attribute chain
+            for &part in &parts[1..] {
+                current_expr = Expr::Attribute(ExprAttribute {
+                    value: Box::new(current_expr),
+                    attr: Identifier::new(part, TextRange::default()),
+                    ctx: ExprContext::Load,
+                    range: TextRange::default(),
+                });
+            }
+
+            // Add the final attribute (original_name) with Store context
+            Expr::Attribute(ExprAttribute {
+                value: Box::new(current_expr),
+                attr: Identifier::new(original_name, TextRange::default()),
+                ctx: ExprContext::Store,
+                range: TextRange::default(),
+            })
+        } else {
+            // Simple module name: module.original_name
+            Expr::Attribute(ExprAttribute {
+                value: Box::new(Expr::Name(ExprName {
+                    id: Identifier::new(module_name, TextRange::default()).into(),
+                    ctx: ExprContext::Load,
+                    range: TextRange::default(),
+                })),
+                attr: Identifier::new(original_name, TextRange::default()),
+                ctx: ExprContext::Store,
+                range: TextRange::default(),
+            })
+        };
+
+        // Create the source expression: getattr(module_name, renamed_name)
+        // This is necessary because the renamed variable exists in the module's namespace, not globally
+        let source_expr = if module_name.contains('.') {
+            // For dotted module names, access from the module namespace
+            let parts: Vec<&str> = module_name.split('.').collect();
+            let mut module_expr = Expr::Name(ExprName {
+                id: Identifier::new(parts[0], TextRange::default()).into(),
+                ctx: ExprContext::Load,
+                range: TextRange::default(),
+            });
+
+            // Build the module reference
+            for &part in &parts[1..] {
+                module_expr = Expr::Attribute(ExprAttribute {
+                    value: Box::new(module_expr),
+                    attr: Identifier::new(part, TextRange::default()),
+                    ctx: ExprContext::Load,
+                    range: TextRange::default(),
+                });
+            }
+
+            // Access the renamed variable from the module namespace using getattr
+            Expr::Call(ExprCall {
+                func: Box::new(Expr::Name(ExprName {
+                    id: Identifier::new("getattr", TextRange::default()).into(),
+                    ctx: ExprContext::Load,
+                    range: TextRange::default(),
+                })),
+                arguments: Arguments {
+                    args: vec![
+                        module_expr,
+                        Expr::StringLiteral(ruff_python_ast::ExprStringLiteral {
+                            value: ruff_python_ast::StringLiteralValue::single(
+                                ruff_python_ast::StringLiteral {
+                                    range: TextRange::default(),
+                                    value: renamed_name.to_string().into_boxed_str(),
+                                    flags: ruff_python_ast::StringLiteralFlags::empty(),
+                                },
+                            ),
+                            range: TextRange::default(),
+                        }),
+                    ]
+                    .into(),
+                    keywords: vec![].into(),
+                    range: TextRange::default(),
+                },
+                range: TextRange::default(),
+            })
+        } else {
+            // Simple module name
+            Expr::Call(ExprCall {
+                func: Box::new(Expr::Name(ExprName {
+                    id: Identifier::new("getattr", TextRange::default()).into(),
+                    ctx: ExprContext::Load,
+                    range: TextRange::default(),
+                })),
+                arguments: Arguments {
+                    args: vec![
+                        Expr::Name(ExprName {
+                            id: Identifier::new(module_name, TextRange::default()).into(),
+                            ctx: ExprContext::Load,
+                            range: TextRange::default(),
+                        }),
+                        Expr::StringLiteral(ruff_python_ast::ExprStringLiteral {
+                            value: ruff_python_ast::StringLiteralValue::single(
+                                ruff_python_ast::StringLiteral {
+                                    range: TextRange::default(),
+                                    value: renamed_name.to_string().into_boxed_str(),
+                                    flags: ruff_python_ast::StringLiteralFlags::empty(),
+                                },
+                            ),
+                            range: TextRange::default(),
+                        }),
+                    ]
+                    .into(),
+                    keywords: vec![].into(),
+                    range: TextRange::default(),
+                },
+                range: TextRange::default(),
+            })
+        };
+
+        // Create the assignment statement
+        Ok(Stmt::Assign(StmtAssign {
+            targets: vec![target_expr],
+            value: Box::new(source_expr),
+            range: TextRange::default(),
+        }))
     }
 
     /// Create an AST for the exec statement that executes module code in its namespace

@@ -547,8 +547,21 @@ impl AstRewriter {
         module_name: &str,
         module_ast: &mut ast::ModModule,
     ) -> Result<()> {
+        log::debug!(
+            "rewrite_module_ast called for module '{}', has renames: {}",
+            module_name,
+            self.module_renames.contains_key(module_name)
+        );
         if let Some(renames) = self.module_renames.get(module_name) {
+            log::debug!(
+                "Applying {} renames to module '{}': {:?}",
+                renames.len(),
+                module_name,
+                renames
+            );
             self.apply_renames_to_ast(&mut module_ast.body, renames)?;
+        } else {
+            log::debug!("No renames found for module '{}'", module_name);
         }
         Ok(())
     }
@@ -643,9 +656,19 @@ impl AstRewriter {
         // existing variables and should be renamed.
         // Exception: Simple variable names that are part of conflict-based renames should be renamed.
         for target in &mut assign.targets {
-            if !self.is_simple_variable_binding(target)
-                || self.should_rename_simple_binding(target, renames)
-            {
+            let is_simple = self.is_simple_variable_binding(target);
+            let should_rename_simple = self.should_rename_simple_binding(target, renames);
+
+            if let Expr::Name(name_expr) = target {
+                log::debug!(
+                    "apply_renames_to_assign: target='{}', is_simple={}, should_rename_simple={}",
+                    name_expr.id,
+                    is_simple,
+                    should_rename_simple
+                );
+            }
+
+            if !is_simple || should_rename_simple {
                 self.apply_renames_to_expr(target, renames)?;
             }
         }
@@ -667,7 +690,15 @@ impl AstRewriter {
     ) -> bool {
         if let Expr::Name(name_expr) = target {
             if let Some(renamed_to) = renames.get(&name_expr.id.to_string()) {
-                return self.is_conflict_based_rename_mapping(&name_expr.id, renamed_to);
+                let is_conflict_based =
+                    self.is_conflict_based_rename_mapping(&name_expr.id, renamed_to);
+                log::debug!(
+                    "should_rename_simple_binding: '{}' -> '{}', is_conflict_based: {}",
+                    name_expr.id,
+                    renamed_to,
+                    is_conflict_based
+                );
+                return is_conflict_based;
             }
         }
         false
@@ -677,14 +708,44 @@ impl AstRewriter {
     /// Conflict-based renames follow the pattern: original_name -> __module_original_name
     fn is_conflict_based_rename_mapping(&self, original_name: &str, renamed_name: &str) -> bool {
         // Check if the renamed name follows the conflict resolution pattern
-        if let Some(suffix_start) = renamed_name.strip_prefix("__") {
-            // Find the first underscore after the prefix, which separates module from original name
-            if let Some(underscore_pos) = suffix_start.find('_') {
-                let extracted_original = &suffix_start[underscore_pos + 1..];
-                return extracted_original == original_name;
-            }
+        let Some(suffix_start) = renamed_name.strip_prefix("__") else {
+            return false;
+        };
+
+        // Check if the suffix ends with the original name
+        // This handles variable names that contain underscores correctly
+        if !suffix_start.ends_with(original_name) {
+            log::debug!(
+                "is_conflict_based_rename_mapping: '{}' -> '{}', suffix_start='{}', ends_with_original=false, is_match=false",
+                original_name,
+                renamed_name,
+                suffix_start
+            );
+            return false;
         }
-        false
+
+        // Verify there's a separator (underscore) before the original name
+        let expected_prefix_len = suffix_start.len() - original_name.len();
+        let has_separator = expected_prefix_len > 0
+            && suffix_start.chars().nth(expected_prefix_len - 1) == Some('_');
+
+        if has_separator {
+            log::debug!(
+                "is_conflict_based_rename_mapping: '{}' -> '{}', suffix_start='{}', ends_with_original=true, has_separator=true, is_match=true",
+                original_name,
+                renamed_name,
+                suffix_start
+            );
+            true
+        } else {
+            log::debug!(
+                "is_conflict_based_rename_mapping: '{}' -> '{}', suffix_start='{}', ends_with_original=true, has_separator=false, is_match=false",
+                original_name,
+                renamed_name,
+                suffix_start
+            );
+            false
+        }
     }
 
     /// Apply renames to return statement

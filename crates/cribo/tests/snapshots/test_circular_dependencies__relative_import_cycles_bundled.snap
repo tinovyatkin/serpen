@@ -21,8 +21,6 @@ def get_connection():
 def execute_query(query):
     """Execute a database query"""
     return f"query_result({query})"
-get_connection = get_connection
-execute_query = execute_query
 
 # ─ Module: services ─
 
@@ -32,4 +30,3 @@ def main():
     print(f"Relative import cycle result: {result}")
 if __name__ == "__main__":
     main()
-main = main

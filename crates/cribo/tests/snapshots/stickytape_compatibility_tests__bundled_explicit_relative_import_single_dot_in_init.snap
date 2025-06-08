@@ -10,7 +10,8 @@ description: Bundled content for explicit_relative_import_single_dot_in_init
 import types
 greetings = types.ModuleType('greetings')
 greetings.greeting = types.ModuleType('greetings.greeting')
-exec('message = "Hello"', greetings.greeting.__dict__)
+exec('__greetings_greeting_message = "Hello"', globals(), greetings.greeting.__dict__)
+greetings.greeting.message = getattr(greetings.greeting, '__greetings_greeting_message')
 
 # ─ Module: greetings ─
 exec('__all__ = ["message"]\nmessage = greetings.greeting.message', globals(), greetings.__dict__)
