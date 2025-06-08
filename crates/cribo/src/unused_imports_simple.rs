@@ -43,7 +43,11 @@ impl UnusedImportAnalyzer {
     }
 
     /// Analyze a Python source file for unused imports with __init__.py awareness
-    pub fn analyze_file_with_init_check(&mut self, source: &str, is_init_py: bool) -> Result<Vec<UnusedImport>> {
+    pub fn analyze_file_with_init_check(
+        &mut self,
+        source: &str,
+        is_init_py: bool,
+    ) -> Result<Vec<UnusedImport>> {
         // Clear state from any previous analysis to ensure independence
         self.imported_names.clear();
         self.used_names.clear();

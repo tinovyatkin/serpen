@@ -643,10 +643,10 @@ impl Bundler {
     }
 
     /// Add parent packages to discovery queue to ensure __init__.py files are included
-    /// For example, if importing "greetings.irrelevant", also add "greetings" 
+    /// For example, if importing "greetings.irrelevant", also add "greetings"
     fn add_parent_packages_to_discovery(&self, import: &str, params: &mut DiscoveryParams) {
         let parts: Vec<&str> = import.split('.').collect();
-        
+
         // For each parent package level, try to add it to discovery
         for i in 1..parts.len() {
             let parent_module = parts[..i].join(".");
@@ -664,7 +664,10 @@ impl Bundler {
         match params.resolver.classify_import(parent_module) {
             ImportType::FirstParty => {
                 if let Ok(Some(parent_path)) = params.resolver.resolve_module_path(parent_module) {
-                    debug!("Adding parent package '{}' to discovery queue for import '{}'", parent_module, import);
+                    debug!(
+                        "Adding parent package '{}' to discovery queue for import '{}'",
+                        parent_module, import
+                    );
                     self.add_to_discovery_queue_if_new(parent_module, parent_path, params);
                 }
             }
@@ -682,7 +685,7 @@ impl Bundler {
                 if let Ok(Some(import_path)) = params.resolver.resolve_module_path(import) {
                     debug!("Resolved '{}' to path: {:?}", import, import_path);
                     self.add_to_discovery_queue_if_new(import, import_path, params);
-                    
+
                     // Also add parent packages for submodules to ensure __init__.py files are included
                     // For example, if importing "greetings.irrelevant", also add "greetings"
                     self.add_parent_packages_to_discovery(import, params);
@@ -718,7 +721,7 @@ impl Bundler {
                         import, module_name
                     );
                 }
-                
+
                 // Also add dependency edges for parent packages
                 // For example, if importing "greetings.irrelevant", also add dependency on "greetings"
                 self.add_parent_package_dependencies(import, module_name, (resolver, graph));
@@ -738,7 +741,7 @@ impl Bundler {
     ) {
         let (resolver, graph) = resolver_and_graph;
         let parts: Vec<&str> = import.split('.').collect();
-        
+
         // For each parent package level, add a dependency edge
         for i in 1..parts.len() {
             let parent_module = parts[..i].join(".");
@@ -757,7 +760,10 @@ impl Bundler {
         if resolver.classify_import(parent_module) == ImportType::FirstParty
             && graph.get_module(parent_module).is_some()
         {
-            debug!("Adding parent package dependency edge: {} -> {}", parent_module, module_name);
+            debug!(
+                "Adding parent package dependency edge: {} -> {}",
+                parent_module, module_name
+            );
             if let Err(e) = graph.add_dependency(parent_module, module_name) {
                 debug!("Failed to add parent package dependency edge: {}", e);
             }

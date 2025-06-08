@@ -280,14 +280,16 @@ impl CodeEmitter {
             // Analyze unused imports with __init__.py awareness
             let is_init_py = module.path.file_name() == Some(std::ffi::OsStr::new("__init__.py"));
             let mut unused_analyzer = UnusedImportAnalyzer::new();
-            let unused_imports = unused_analyzer.analyze_file_with_init_check(&source, is_init_py).unwrap_or_else(|err| {
-                log::warn!(
-                    "Failed to analyze unused imports in {:?}: {}",
-                    module.path,
-                    err
-                );
-                Vec::new()
-            });
+            let unused_imports = unused_analyzer
+                .analyze_file_with_init_check(&source, is_init_py)
+                .unwrap_or_else(|err| {
+                    log::warn!(
+                        "Failed to analyze unused imports in {:?}: {}",
+                        module.path,
+                        err
+                    );
+                    Vec::new()
+                });
 
             let module_unused_names: IndexSet<String> = unused_imports
                 .iter()
@@ -1054,7 +1056,7 @@ impl CodeEmitter {
             let module_name = alias.name.as_str();
             if self.is_first_party_module(module_name) {
                 strategies.insert(module_name.to_string(), ImportStrategy::ModuleImport);
-                
+
                 // Also set parent packages as ModuleImport for submodule imports
                 // For example, if importing "greetings.irrelevant", also set "greetings" as ModuleImport
                 self.set_parent_packages_as_module_import(module_name, strategies);
@@ -1070,12 +1072,14 @@ impl CodeEmitter {
         strategies: &mut IndexMap<String, ImportStrategy>,
     ) {
         let parts: Vec<&str> = module_name.split('.').collect();
-        
+
         // For each parent package level, set it as ModuleImport if it's a first-party module
         for i in 1..parts.len() {
             let parent_module = parts[..i].join(".");
-            
-            if self.is_first_party_module(&parent_module) && !strategies.contains_key(&parent_module) {
+
+            if self.is_first_party_module(&parent_module)
+                && !strategies.contains_key(&parent_module)
+            {
                 strategies.insert(parent_module.clone(), ImportStrategy::ModuleImport);
             }
         }

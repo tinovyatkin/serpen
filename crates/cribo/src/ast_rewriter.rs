@@ -109,9 +109,13 @@ impl AstRewriter {
     }
 
     /// Set import strategies for modules
-    pub fn set_import_strategies(&mut self, strategies: &IndexMap<String, crate::emit::ImportStrategy>) {
+    pub fn set_import_strategies(
+        &mut self,
+        strategies: &IndexMap<String, crate::emit::ImportStrategy>,
+    ) {
         for (module, strategy) in strategies {
-            self.import_strategies.insert(module.clone(), strategy.clone());
+            self.import_strategies
+                .insert(module.clone(), strategy.clone());
         }
     }
 
@@ -1034,7 +1038,8 @@ impl AstRewriter {
                         import_alias.module_name, import_alias.original_name
                     )
                 }
-                crate::emit::ImportStrategy::FromImport | crate::emit::ImportStrategy::Dependency => {
+                crate::emit::ImportStrategy::FromImport
+                | crate::emit::ImportStrategy::Dependency => {
                     // Module was inlined directly, use the original name
                     import_alias.original_name.clone()
                 }
@@ -1786,7 +1791,11 @@ impl AstRewriter {
                 .get(&lookup_key)
                 .cloned()
                 .unwrap_or_else(|| {
-                    self.resolve_relative_import_fallback(&target_module_path, imported_name, &lookup_key)
+                    self.resolve_relative_import_fallback(
+                        &target_module_path,
+                        imported_name,
+                        &lookup_key,
+                    )
                 });
 
             log::debug!(
@@ -1820,7 +1829,7 @@ impl AstRewriter {
                 return namespace_reference;
             }
         }
-        
+
         // For variables without explicit mapping, assume they become global variables
         // with their original name (this is the case for non-conflicted variables)
         log::debug!(
