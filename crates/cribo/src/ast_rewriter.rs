@@ -1001,12 +1001,23 @@ impl AstRewriter {
 
     /// Resolve the actual name for an import considering name conflicts and import strategies
     fn resolve_actual_name_for_conflict(&self, import_alias: &ImportAlias) -> String {
-        if let Some(conflict) = self.name_conflicts.get(&import_alias.original_name) {
-            conflict
-                .renamed_versions
-                .get(&import_alias.module_name)
-                .cloned()
-                .unwrap_or_else(|| import_alias.original_name.clone())
+        if let Some(_conflict) = self.name_conflicts.get(&import_alias.original_name) {
+            // Even when there's a conflict, we need to consider the import strategy
+            // The conflict resolution only affects the target variable name, not the source reference
+            if import_alias.is_from_import && import_alias.is_module_import {
+                // This is a module import (e.g., from greetings import greeting)
+                // Use the full module path (e.g., greetings.greeting)
+                format!(
+                    "{}.{}",
+                    import_alias.module_name, import_alias.original_name
+                )
+            } else if import_alias.is_from_import {
+                // This is a value import from a module - use import strategy logic
+                self.resolve_from_import_reference(import_alias)
+            } else {
+                // This is a regular import - the conflict doesn't affect the source
+                import_alias.original_name.clone()
+            }
         } else {
             // For from imports, check if this is a module import
             if import_alias.is_from_import && import_alias.is_module_import {
@@ -1040,8 +1051,8 @@ impl AstRewriter {
                 }
                 crate::emit::ImportStrategy::FromImport
                 | crate::emit::ImportStrategy::Dependency => {
-                    // Module was inlined directly, use the original name
-                    import_alias.original_name.clone()
+                    // Module was inlined directly, check for name conflicts
+                    self.resolve_alias_name_for_inlined_module(import_alias)
                 }
             }
         } else {
@@ -1387,6 +1398,12 @@ impl AstRewriter {
                     return Ok(());
                 };
 
+                // Skip transformation if this name has an import alias assignment
+                // If there's an import alias, the name becomes a local variable, not a module reference
+                if self.import_aliases.contains_key(name.id.as_str()) {
+                    return Ok(());
+                }
+
                 // Check if this is a relative import (indicated by the REL_IMPORT_SUFFIX)
                 let bundled_var_name = if module_prefix.ends_with(REL_IMPORT_SUFFIX) {
                     self.resolve_relative_import_variable(
@@ -1554,22 +1571,44 @@ impl AstRewriter {
         let (module_prefix, attr_name) = module_attr_pair;
 
         // This is a relative import - resolve to the actual bundled variable
-        // For "messages.message" where messages is from "from . import messages",
-        // we need to look up the actual bundled variable name
+        // For "greeting.message" where greeting is from "from . import greeting",
+        // we need to handle modules with different import strategies differently
 
         // Safely remove the REL_IMPORT_SUFFIX using strip_suffix
-        let target_module_path = module_prefix
+        let target_module_path_underscore = module_prefix
             .strip_suffix(REL_IMPORT_SUFFIX)
             .unwrap_or(module_prefix);
 
+        // Convert underscores back to dots for strategy lookup
+        let target_module_path = target_module_path_underscore
+            .cow_replace('_', ".")
+            .into_owned();
+
         log::debug!(
-            "Relative import transformation: module_prefix='{}', target_module_path='{}', attr='{}'",
+            "Relative import transformation: module_prefix='{}', target_module_path_underscore='{}', target_module_path='{}', attr='{}'",
             module_prefix,
+            target_module_path_underscore,
             target_module_path,
             attr_name
         );
 
-        // Look up the actual bundled variable name in the bundled_modules mapping
+        // Check if the target module uses ModuleImport strategy
+        // If so, we should access the attribute through the module namespace
+        if let Some(import_strategy) = self.import_strategies.get(&target_module_path) {
+            if matches!(import_strategy, crate::emit::ImportStrategy::ModuleImport) {
+                // For ModuleImport strategy, access the attribute through the module namespace
+                let module_attr_access = format!("{}.{}", target_module_path, attr_name);
+                log::debug!(
+                    "Resolved {}.{} -> {} (ModuleImport strategy)",
+                    identifier_name,
+                    attr_name,
+                    module_attr_access
+                );
+                return module_attr_access;
+            }
+        }
+
+        // For FromImport or Dependency strategy, look up the bundled variable name
         let lookup_key = format!("{}.{}", target_module_path, attr_name);
         let actual_bundled_name = bundled_modules
             .get(&lookup_key)
@@ -1785,19 +1824,14 @@ impl AstRewriter {
         for alias in names {
             let imported_name = alias.name.as_str();
 
-            // Look for the bundled variable name for this import
-            let lookup_key = format!("{}.{}", target_module_path, imported_name);
-            let bundled_name = bundled_modules
-                .get(&lookup_key)
-                .cloned()
-                .unwrap_or_else(|| {
-                    self.resolve_relative_import_fallback(
-                        &target_module_path,
-                        imported_name,
-                        &lookup_key,
-                    )
-                });
+            // Resolve the bundled name using import strategy and bundled mappings
+            let bundled_name = self.resolve_relative_import_name(
+                &target_module_path,
+                imported_name,
+                bundled_modules,
+            );
 
+            let lookup_key = format!("{}.{}", target_module_path, imported_name);
             log::debug!(
                 "Transforming relative import '{}' from '{}' -> bundled variable '{}'",
                 imported_name,
@@ -1807,6 +1841,42 @@ impl AstRewriter {
 
             imported_modules.insert(imported_name.to_string(), bundled_name);
         }
+    }
+
+    /// Resolve the bundled name for a relative import considering import strategies
+    fn resolve_relative_import_name(
+        &self,
+        target_module_path: &str,
+        imported_name: &str,
+        bundled_modules: &IndexMap<String, String>,
+    ) -> String {
+        // Check if the target module uses ModuleImport strategy first
+        // This is important because even if there's a bundled mapping, we need to use
+        // the namespace reference for modules with ModuleImport strategy
+        if let Some(strategy) = self.import_strategies.get(target_module_path) {
+            if *strategy == crate::emit::ImportStrategy::ModuleImport {
+                let namespace_reference = format!("{}.{}", target_module_path, imported_name);
+                log::debug!(
+                    "Target module '{}' uses ModuleImport strategy, using namespace reference '{}'",
+                    target_module_path,
+                    namespace_reference
+                );
+                return namespace_reference;
+            }
+        }
+
+        // Look for the bundled variable name for this import
+        let lookup_key = format!("{}.{}", target_module_path, imported_name);
+        bundled_modules
+            .get(&lookup_key)
+            .cloned()
+            .unwrap_or_else(|| {
+                self.resolve_relative_import_fallback(
+                    target_module_path,
+                    imported_name,
+                    &lookup_key,
+                )
+            })
     }
 
     /// Resolve fallback for relative import when no explicit mapping is found
@@ -1951,6 +2021,54 @@ impl AstRewriter {
             conflict.modules.contains(&module_name.to_string())
         } else {
             false
+        }
+    }
+
+    /// Resolve alias name for inlined modules (FromImport/Dependency)
+    fn resolve_alias_name_for_inlined_module(&self, import_alias: &ImportAlias) -> String {
+        if let Some(conflict) = self.name_conflicts.get(&import_alias.original_name) {
+            // If there's a conflict, find the renamed version for the source module
+            if let Some(renamed) = conflict.renamed_versions.get(&import_alias.module_name) {
+                renamed.clone()
+            } else {
+                // Fallback to original name if not found in conflict mapping
+                import_alias.original_name.clone()
+            }
+        } else {
+            // No conflict, use the original name
+            import_alias.original_name.clone()
+        }
+    }
+
+    /// Get all module-level symbols for a given module
+    /// Returns a map of original_name -> final_name (renamed or original)
+    pub fn get_module_symbols(&self, module_name: &str) -> IndexMap<String, String> {
+        let mut symbols = IndexMap::new();
+
+        // Collect all module-level symbols from the symbol table
+        let module_prefix = format!("{}::", module_name);
+        for (symbol_key, symbol) in &self.symbols {
+            if symbol_key.starts_with(&module_prefix) && symbol.is_global && !symbol.is_imported {
+                let original_name = &symbol.name;
+
+                // Get the final name (renamed or original)
+                let final_name = self.get_final_symbol_name(module_name, original_name);
+                symbols.insert(original_name.clone(), final_name);
+            }
+        }
+
+        symbols
+    }
+
+    /// Get the final name for a symbol (renamed or original)
+    fn get_final_symbol_name(&self, module_name: &str, original_name: &str) -> String {
+        if let Some(renames) = self.module_renames.get(module_name) {
+            renames
+                .get(original_name)
+                .cloned()
+                .unwrap_or_else(|| original_name.to_string())
+        } else {
+            original_name.to_string()
         }
     }
 }

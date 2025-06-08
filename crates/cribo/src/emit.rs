@@ -390,6 +390,21 @@ impl CodeEmitter {
         // Pass import strategies to AST rewriter so it can resolve references correctly
         ast_rewriter.set_import_strategies(&import_strategies);
 
+        // Pre-collect bundled variables from all modules to ensure complete mapping
+        // This must be done before any transformations to ensure the bundled_modules mapping is complete
+        for module in modules {
+            let parsed_data = parsed_modules_data.get(&module.path).ok_or_else(|| {
+                anyhow::anyhow!("Missing parsed data for module: {:?}", module.path)
+            })?;
+
+            // Create a temporary AST for symbol collection
+            let mut temp_ast = parsed_data.ast.clone();
+            ast_rewriter.rewrite_module_ast(&module.name, &mut temp_ast)?;
+
+            // Collect bundled variables from the rewriter for this module
+            self.collect_bundled_variables_from_rewriter(&module.name, &ast_rewriter);
+        }
+
         // Collect and filter preserved imports
         let (mut third_party_imports, mut stdlib_imports) = self.collect_import_sets(modules);
         third_party_imports.retain(|import| !all_unused_imports.contains(import));
@@ -418,7 +433,14 @@ impl CodeEmitter {
         self.add_aliased_imports_to_bundle(&mut bundle_ast, aliased_imports);
 
         // Process each module in dependency order using AST transformations
-        for module in modules {
+        // First process non-init modules, then init modules to ensure dependencies are available
+        let (non_init_modules, init_modules): (Vec<&ModuleNode>, Vec<&ModuleNode>) = modules
+            .iter()
+            .filter(|m| m.name != entry_module)
+            .partition(|m| !self.init_modules.contains(&m.name));
+
+        // Process non-init modules first
+        for module in non_init_modules.into_iter().chain(init_modules.into_iter()) {
             if module.name == entry_module {
                 continue;
             }
@@ -528,8 +550,7 @@ impl CodeEmitter {
         // Apply AST rewriting for name conflict resolution FIRST
         ast_rewriter.rewrite_module_ast(module_name, &mut transformed_ast)?;
 
-        // Track bundled variables from the rewriter
-        self.collect_bundled_variables_from_rewriter(module_name, ast_rewriter);
+        // Note: Bundled variables are now collected upfront in emit_bundle, not here
 
         // Apply import alias transformations BEFORE removing imports
         // This ensures that alias information is available when transforming expressions
@@ -833,28 +854,35 @@ impl CodeEmitter {
         ast_rewriter: &crate::ast_rewriter::AstRewriter,
     ) -> Option<Stmt> {
         let (original_name, renamed_name) = rename_entry;
-        // Check if this rename was due to a name conflict
-        // If it was, skip creating exposure statements since the original name no longer exists
-        if ast_rewriter.is_conflict_based_rename(original_name, module_name) {
+
+        // If the original name and renamed name are the same, only create exposure if it's needed
+        // for modules with FromImport or Dependency strategy (not ModuleImport)
+        if original_name == renamed_name {
+            // For now, always create exposure statements to maintain compatibility
+            // TODO: In the future, we could optimize this by only creating exposures when needed
+        }
+
+        // Only create exposure statements if the original name != renamed name
+        // This means there was actually a conflict-based rename that requires exposure
+        if original_name == renamed_name {
             log::debug!(
-                "Skipping exposure statement for '{}' -> '{}' in module '{}' (conflict-based rename)",
-                original_name,
-                renamed_name,
-                module_name
+                "Skipping exposure statement for non-renamed variable: {} (no conflict)",
+                original_name
             );
             return None;
         }
 
-        // Create assignment: renamed_name = original_name
-        // This assigns the original variable's value to the renamed variable for conflict resolution
+        // Create the exposure statement: renamed_name = original_name
+        let (target, source) = (renamed_name, original_name);
+
         let assignment = Stmt::Assign(StmtAssign {
             targets: vec![Expr::Name(ExprName {
-                id: renamed_name.into(),
+                id: target.into(),
                 ctx: ExprContext::Store,
                 range: TextRange::default(),
             })],
             value: Box::new(Expr::Name(ExprName {
-                id: original_name.into(),
+                id: source.into(),
                 ctx: ExprContext::Load,
                 range: TextRange::default(),
             })),
@@ -862,10 +890,11 @@ impl CodeEmitter {
         });
 
         log::debug!(
-            "Creating exposure statement: {} = {} (in module '{}')",
-            renamed_name,
-            original_name,
-            module_name
+            "Creating exposure statement: {} = {} (in module '{}', conflict-based: {})",
+            target,
+            source,
+            module_name,
+            ast_rewriter.is_conflict_based_rename(original_name, module_name)
         );
 
         Some(assignment)
@@ -1042,7 +1071,56 @@ impl CodeEmitter {
             }
         }
 
+        // Also analyze imports in __init__.py files to determine if they need module namespaces
+        // This is important for relative imports like "from . import greeting" in __init__.py
+        for module in modules {
+            if self.init_modules.contains(&module.name) {
+                self.process_init_module_strategies(module, parsed_modules_data, &mut strategies);
+            }
+        }
+
         Ok(strategies)
+    }
+
+    /// Process import strategies for a single __init__.py module
+    fn process_init_module_strategies(
+        &self,
+        module: &crate::dependency_graph::ModuleNode,
+        parsed_modules_data: &IndexMap<std::path::PathBuf, ParsedModuleData>,
+        strategies: &mut IndexMap<String, ImportStrategy>,
+    ) {
+        if let Some(init_parsed_data) = parsed_modules_data.get(&module.path) {
+            log::debug!("Analyzing imports in __init__.py module: {}", module.name);
+            self.process_init_module_statements(
+                &init_parsed_data.ast.body,
+                &module.name,
+                strategies,
+            );
+        }
+    }
+
+    /// Process import statements within an __init__.py module
+    fn process_init_module_statements(
+        &self,
+        statements: &[Stmt],
+        module_name: &str,
+        strategies: &mut IndexMap<String, ImportStrategy>,
+    ) {
+        for stmt in statements {
+            match stmt {
+                Stmt::Import(import_stmt) => {
+                    self.process_import_strategies(import_stmt, strategies);
+                }
+                Stmt::ImportFrom(import_from_stmt) => {
+                    self.process_init_py_import_from_strategies(
+                        import_from_stmt,
+                        module_name,
+                        strategies,
+                    );
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Process import statements for strategy analysis
@@ -1103,6 +1181,75 @@ impl CodeEmitter {
                 let full_module_name = format!("{}.{}", module_name, imported_name);
                 self.insert_module_import_strategy(&full_module_name, strategies);
             }
+        }
+    }
+
+    /// Process import-from statements in __init__.py files for strategy analysis
+    /// This handles relative imports like "from . import greeting" in __init__.py
+    fn process_init_py_import_from_strategies(
+        &self,
+        import_from_stmt: &StmtImportFrom,
+        init_module_name: &str,
+        strategies: &mut IndexMap<String, ImportStrategy>,
+    ) {
+        // Handle relative imports in __init__.py files
+        if import_from_stmt.level > 0 {
+            // This is a relative import like "from . import greeting"
+            for alias in &import_from_stmt.names {
+                let imported_name = alias.name.as_str();
+
+                // Determine the target module path and set import strategy
+                let target_module = self.resolve_relative_import_target_module(
+                    import_from_stmt,
+                    init_module_name,
+                    imported_name,
+                );
+
+                self.set_target_module_strategy(&target_module, init_module_name, strategies);
+            }
+        } else {
+            // Non-relative imports in __init__.py - process normally
+            self.process_import_from_strategies(import_from_stmt, strategies);
+        }
+    }
+
+    /// Resolve the target module path for a relative import
+    fn resolve_relative_import_target_module(
+        &self,
+        import_from_stmt: &StmtImportFrom,
+        init_module_name: &str,
+        imported_name: &str,
+    ) -> String {
+        // For "from . import greeting" in greetings/__init__.py,
+        // the target module is "greetings.greeting"
+        // For "from .greeting import message" in greetings/__init__.py,
+        // the target module is also "greetings.greeting"
+        if let Some(module_ref) = &import_from_stmt.module {
+            // "from .subpkg import module" case - target is the subpackage
+            let module_name = module_ref.as_str();
+            format!("{}.{}", init_module_name, module_name)
+        } else {
+            // "from . import module" case - target is the sibling module
+            format!("{}.{}", init_module_name, imported_name)
+        }
+    }
+
+    /// Set the import strategy for a target module if it's first-party
+    fn set_target_module_strategy(
+        &self,
+        target_module: &str,
+        init_module_name: &str,
+        strategies: &mut IndexMap<String, ImportStrategy>,
+    ) {
+        if self.is_first_party_module(target_module) {
+            // Set the imported module as ModuleImport so it gets its own namespace
+            // This is necessary because the __init__.py will reference it as a module object
+            log::debug!(
+                "Setting {} as ModuleImport due to relative import in __init__.py {}",
+                target_module,
+                init_module_name
+            );
+            strategies.insert(target_module.to_string(), ImportStrategy::ModuleImport);
         }
     }
 
@@ -1550,7 +1697,6 @@ impl CodeEmitter {
                 mapping.insert(key, bundled_name.clone());
             }
         }
-
         mapping
     }
 
@@ -1573,18 +1719,18 @@ impl CodeEmitter {
         module_name: &str,
         ast_rewriter: &AstRewriter,
     ) {
-        if let Some(renames) = ast_rewriter.get_module_renames(module_name) {
-            log::debug!(
-                "Found {} renames for module {}: {:?}",
-                renames.len(),
-                module_name,
-                renames
-            );
-            for (original_name, renamed_name) in renames {
-                self.track_bundled_variable(module_name, original_name, renamed_name);
-            }
-        } else {
-            log::debug!("No renames found for module {}", module_name);
+        // Get all module-level symbols (both renamed and original)
+        let module_symbols = ast_rewriter.get_module_symbols(module_name);
+
+        log::debug!(
+            "Found {} symbols for module {}: {:?}",
+            module_symbols.len(),
+            module_name,
+            module_symbols
+        );
+
+        for (original_name, final_name) in module_symbols {
+            self.track_bundled_variable(module_name, &original_name, &final_name);
         }
     }
 

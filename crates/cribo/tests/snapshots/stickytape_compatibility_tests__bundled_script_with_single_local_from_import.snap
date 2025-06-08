@@ -8,6 +8,7 @@ description: Bundled content for script_with_single_local_from_import
 
 # ─ Module: greeting ─
 message = "Hello"
+message = message
 
 # ─ Entry Module: hello ─
 print(message)
