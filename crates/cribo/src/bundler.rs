@@ -67,10 +67,13 @@ impl Bundler {
     }
 
     /// Core bundling logic shared between file and string output modes
+    /// Returns the entry module name, with graph and resolver populated via mutable references
     fn bundle_core(
         &mut self,
         entry_path: &Path,
-    ) -> Result<(DependencyGraph, ModuleResolver, String)> {
+        graph: &mut DependencyGraph,
+        resolver_opt: &mut Option<ModuleResolver>,
+    ) -> Result<String> {
         debug!("Entry: {:?}", entry_path);
         debug!(
             "Using target Python version: {} (Python 3.{})",
@@ -94,7 +97,7 @@ impl Bundler {
             }
         }
 
-        // Initialize resolver
+        // Initialize resolver with the updated config
         let mut resolver = ModuleResolver::new(self.config.clone())?;
 
         // Find the entry module name
@@ -102,15 +105,14 @@ impl Bundler {
         info!("Entry module: {}", entry_module_name);
 
         // Build dependency graph
-        let mut graph =
-            self.build_dependency_graph(entry_path, &entry_module_name, &mut resolver)?;
+        *graph = self.build_dependency_graph(entry_path, &entry_module_name, &mut resolver)?;
 
         // Filter to only modules reachable from entry
         debug!(
             "Before filtering - graph has {} modules",
             graph.get_modules().len()
         );
-        graph = graph.filter_reachable_from(&entry_module_name)?;
+        *graph = graph.filter_reachable_from(&entry_module_name)?;
         debug!(
             "After filtering - graph has {} modules",
             graph.get_modules().len()
@@ -155,7 +157,10 @@ impl Bundler {
             }
         }
 
-        Ok((graph, resolver, entry_module_name))
+        // Set the resolver for the caller to use
+        *resolver_opt = Some(resolver);
+
+        Ok(entry_module_name)
     }
 
     /// Helper to get sorted modules from graph
@@ -196,7 +201,16 @@ impl Bundler {
         emit_requirements: bool,
     ) -> Result<String> {
         info!("Starting bundle process for stdout output");
-        let (graph, resolver, entry_module_name) = self.bundle_core(entry_path)?;
+
+        // Initialize empty graph - resolver will be created in bundle_core
+        let mut graph = DependencyGraph::new();
+        let mut resolver_opt = None;
+
+        // Perform core bundling logic
+        let entry_module_name = self.bundle_core(entry_path, &mut graph, &mut resolver_opt)?;
+
+        // Extract the resolver (it's guaranteed to be Some after bundle_core)
+        let resolver = resolver_opt.expect("Resolver should be initialized by bundle_core");
 
         let sorted_modules = self.get_sorted_modules_from_graph(&graph)?;
 
@@ -226,7 +240,16 @@ impl Bundler {
     ) -> Result<()> {
         info!("Starting bundle process");
         debug!("Output: {:?}", output_path);
-        let (graph, resolver, entry_module_name) = self.bundle_core(entry_path)?;
+
+        // Initialize empty graph - resolver will be created in bundle_core
+        let mut graph = DependencyGraph::new();
+        let mut resolver_opt = None;
+
+        // Perform core bundling logic
+        let entry_module_name = self.bundle_core(entry_path, &mut graph, &mut resolver_opt)?;
+
+        // Extract the resolver (it's guaranteed to be Some after bundle_core)
+        let resolver = resolver_opt.expect("Resolver should be initialized by bundle_core");
 
         let sorted_modules = self.get_sorted_modules_from_graph(&graph)?;
 
