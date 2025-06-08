@@ -544,8 +544,10 @@ impl CodeEmitter {
                 .get(&entry_module_node.path)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "Missing parsed data for entry module: {:?}",
-                        entry_module_node.path
+                        "Parsed data missing for entry module `{}` at path `{}`. \
+                    Ensure the module was parsed and included in parsed_modules_data",
+                        entry_module,
+                        entry_module_node.path.display()
                     )
                 })?;
 
@@ -1247,14 +1249,28 @@ impl CodeEmitter {
         let mut strategies = IndexMap::new();
 
         // Find the entry module data
-        let entry_module_node = modules
-            .iter()
-            .find(|m| m.name == entry_module)
-            .ok_or_else(|| anyhow::anyhow!("Entry module not found: {}", entry_module))?;
+        let entry_module_node =
+            modules
+                .iter()
+                .find(|m| m.name == entry_module)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Entry module `{}` not found. Available modules: {:?}",
+                        entry_module,
+                        modules.iter().map(|m| &m.name).collect::<Vec<_>>()
+                    )
+                })?;
 
         let entry_parsed_data = parsed_modules_data
             .get(&entry_module_node.path)
-            .ok_or_else(|| anyhow::anyhow!("Entry module data not found"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Parsed data missing for entry module `{}` at path `{}`. \
+                Ensure the module was parsed and included in parsed_modules_data",
+                    entry_module,
+                    entry_module_node.path.display()
+                )
+            })?;
 
         // Analyze import statements in the entry module
         for stmt in &entry_parsed_data.ast.body {
