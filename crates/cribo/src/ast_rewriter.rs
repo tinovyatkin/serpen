@@ -1854,7 +1854,7 @@ impl AstRewriter {
         // This is important because even if there's a bundled mapping, we need to use
         // the namespace reference for modules with ModuleImport strategy
         if let Some(strategy) = self.import_strategies.get(target_module_path) {
-            if *strategy == crate::emit::ImportStrategy::ModuleImport {
+            if matches!(strategy, crate::emit::ImportStrategy::ModuleImport) {
                 let namespace_reference = format!("{}.{}", target_module_path, imported_name);
                 log::debug!(
                     "Target module '{}' uses ModuleImport strategy, using namespace reference '{}'",
@@ -1888,7 +1888,7 @@ impl AstRewriter {
     ) -> String {
         // Check if the target module was bundled with ModuleImport strategy
         if let Some(strategy) = self.import_strategies.get(target_module_path) {
-            if *strategy == crate::emit::ImportStrategy::ModuleImport {
+            if matches!(strategy, crate::emit::ImportStrategy::ModuleImport) {
                 // Module was bundled with namespace, so reference as module.variable
                 let namespace_reference = format!("{}.{}", target_module_path, imported_name);
                 log::debug!(

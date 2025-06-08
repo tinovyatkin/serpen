@@ -872,8 +872,9 @@ impl CodeEmitter {
             return None;
         }
 
-        // Create the exposure statement: renamed_name = original_name
-        let (target, source) = (renamed_name, original_name);
+        // Create the exposure statement: original_name = renamed_name
+        // This allows references to the original name to work after renaming
+        let (target, source) = (original_name, renamed_name);
 
         let assignment = Stmt::Assign(StmtAssign {
             targets: vec![Expr::Name(ExprName {
