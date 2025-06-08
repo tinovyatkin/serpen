@@ -66,13 +66,11 @@ impl Bundler {
         error_msg
     }
 
-    /// Bundle to string for stdout output
-    pub fn bundle_to_string(
+    /// Core bundling logic shared between file and string output modes
+    fn bundle_core(
         &mut self,
         entry_path: &Path,
-        emit_requirements: bool,
-    ) -> Result<String> {
-        info!("Starting bundle process for stdout output");
+    ) -> Result<(DependencyGraph, ModuleResolver, String)> {
         debug!("Entry: {:?}", entry_path);
         debug!(
             "Using target Python version: {} (Python 3.{})",
@@ -157,8 +155,14 @@ impl Bundler {
             }
         }
 
-        // Get topologically sorted modules
-        // If we have cycles but they're all resolvable, we need a different approach
+        Ok((graph, resolver, entry_module_name))
+    }
+
+    /// Helper to get sorted modules from graph
+    fn get_sorted_modules_from_graph<'a>(
+        &self,
+        graph: &'a DependencyGraph,
+    ) -> Result<Vec<&'a ModuleNode>> {
         let sorted_modules = if graph.has_cycles() {
             let analysis = graph.classify_circular_dependencies();
             let all_resolvable = analysis.resolvable_cycles.iter().all(|cycle| {
@@ -170,7 +174,7 @@ impl Bundler {
 
             if all_resolvable {
                 // For resolvable cycles, use a custom ordering that breaks cycles
-                self.get_modules_with_cycle_resolution(&graph, &analysis)?
+                self.get_modules_with_cycle_resolution(graph, &analysis)?
             } else {
                 // This should have been caught earlier, but be safe
                 return Err(anyhow!("Unresolvable circular dependencies detected"));
@@ -182,6 +186,19 @@ impl Bundler {
         for (i, module) in sorted_modules.iter().enumerate() {
             debug!("Module {}: {} ({:?})", i, module.name, module.path);
         }
+        Ok(sorted_modules)
+    }
+
+    /// Bundle to string for stdout output
+    pub fn bundle_to_string(
+        &mut self,
+        entry_path: &Path,
+        emit_requirements: bool,
+    ) -> Result<String> {
+        info!("Starting bundle process for stdout output");
+        let (graph, resolver, entry_module_name) = self.bundle_core(entry_path)?;
+
+        let sorted_modules = self.get_sorted_modules_from_graph(&graph)?;
 
         // Generate bundled code
         let mut emitter = CodeEmitter::new(
@@ -208,115 +225,10 @@ impl Bundler {
         emit_requirements: bool,
     ) -> Result<()> {
         info!("Starting bundle process");
-        debug!("Entry: {:?}, Output: {:?}", entry_path, output_path);
-        debug!(
-            "Using target Python version: {} (Python 3.{})",
-            self.config.target_version,
-            self.config.python_version().unwrap_or(10)
-        );
+        debug!("Output: {:?}", output_path);
+        let (graph, resolver, entry_module_name) = self.bundle_core(entry_path)?;
 
-        // Auto-detect the entry point's directory as a source directory
-        if let Some(entry_dir) = entry_path.parent() {
-            // Canonicalize the path to avoid duplicates due to different lexical representations
-            let entry_dir = match entry_dir.canonicalize() {
-                Ok(canonical_path) => canonical_path,
-                Err(_) => {
-                    // Fall back to the original path if canonicalization fails (e.g., path doesn't exist)
-                    entry_dir.to_path_buf()
-                }
-            };
-            if !self.config.src.contains(&entry_dir) {
-                debug!("Adding entry directory to src paths: {:?}", entry_dir);
-                self.config.src.insert(0, entry_dir);
-            }
-        }
-
-        // Initialize resolver
-        let mut resolver = ModuleResolver::new(self.config.clone())?;
-
-        // Find the entry module name
-        let entry_module_name = self.find_entry_module_name(entry_path, &resolver)?;
-        info!("Entry module: {}", entry_module_name);
-
-        // Build dependency graph
-        let mut graph =
-            self.build_dependency_graph(entry_path, &entry_module_name, &mut resolver)?;
-
-        // Filter to only modules reachable from entry
-        debug!(
-            "Before filtering - graph has {} modules",
-            graph.get_modules().len()
-        );
-        graph = graph.filter_reachable_from(&entry_module_name)?;
-        debug!(
-            "After filtering - graph has {} modules",
-            graph.get_modules().len()
-        );
-
-        // Enhanced circular dependency detection and analysis
-        if graph.has_cycles() {
-            let analysis = graph.classify_circular_dependencies();
-
-            if !analysis.unresolvable_cycles.is_empty() {
-                let error_msg =
-                    Self::format_unresolvable_cycles_error(&analysis.unresolvable_cycles);
-                return Err(anyhow!(error_msg));
-            }
-
-            // Check if we can resolve the circular dependencies
-            let all_resolvable = analysis.resolvable_cycles.iter().all(|cycle| {
-                matches!(
-                    cycle.cycle_type,
-                    crate::dependency_graph::CircularDependencyType::FunctionLevel
-                )
-            });
-
-            if all_resolvable && analysis.unresolvable_cycles.is_empty() {
-                // All cycles are function-level and resolvable - proceed with bundling
-                warn!(
-                    "Detected {} resolvable circular dependencies - proceeding with bundling",
-                    analysis.resolvable_cycles.len()
-                );
-
-                Self::log_resolvable_cycles(&analysis.resolvable_cycles);
-            } else {
-                // We have unresolvable cycles or complex resolvable cycles - still fail for now
-                warn!(
-                    "Detected {} circular dependencies (including {} potentially resolvable)",
-                    analysis.total_cycles_detected,
-                    analysis.resolvable_cycles.len()
-                );
-
-                let error_msg = Self::build_cycle_error_message(&analysis);
-                return Err(anyhow!(error_msg));
-            }
-        }
-
-        // Get topologically sorted modules
-        // If we have cycles but they're all resolvable, we need a different approach
-        let sorted_modules = if graph.has_cycles() {
-            let analysis = graph.classify_circular_dependencies();
-            let all_resolvable = analysis.resolvable_cycles.iter().all(|cycle| {
-                matches!(
-                    cycle.cycle_type,
-                    crate::dependency_graph::CircularDependencyType::FunctionLevel
-                )
-            }) && analysis.unresolvable_cycles.is_empty();
-
-            if all_resolvable {
-                // For resolvable cycles, use a custom ordering that breaks cycles
-                self.get_modules_with_cycle_resolution(&graph, &analysis)?
-            } else {
-                // This should have been caught earlier, but be safe
-                return Err(anyhow!("Unresolvable circular dependencies detected"));
-            }
-        } else {
-            graph.topological_sort()?
-        };
-        info!("Found {} modules to bundle", sorted_modules.len());
-        for (i, module) in sorted_modules.iter().enumerate() {
-            debug!("Module {}: {} ({:?})", i, module.name, module.path);
-        }
+        let sorted_modules = self.get_sorted_modules_from_graph(&graph)?;
 
         // Generate bundled code
         let mut emitter = CodeEmitter::new(

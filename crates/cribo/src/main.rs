@@ -93,7 +93,7 @@ fn main() -> anyhow::Result<()> {
     if cli.stdout {
         // Output to stdout
         let bundled_code = bundler.bundle_to_string(&cli.entry, cli.emit_requirements)?;
-        println!("{}", bundled_code);
+        print!("{}", bundled_code);
         info!("Bundle output to stdout");
     } else {
         // Output to file
