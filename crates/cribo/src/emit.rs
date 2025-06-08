@@ -74,6 +74,85 @@ impl CodeEmitter {
         }
     }
 
+    /// Helper function to create an ExprName node
+    fn create_name_expr(name: &str, ctx: ExprContext) -> Expr {
+        Expr::Name(ExprName {
+            id: Identifier::new(name, TextRange::default()).into(),
+            ctx,
+            range: TextRange::default(),
+        })
+    }
+
+    /// Helper function to create an ExprAttribute node
+    fn create_attribute_expr(value: Expr, attr: &str, ctx: ExprContext) -> Expr {
+        Expr::Attribute(ExprAttribute {
+            value: Box::new(value),
+            attr: Identifier::new(attr, TextRange::default()),
+            ctx,
+            range: TextRange::default(),
+        })
+    }
+
+    /// Helper function to create a string literal expression
+    fn create_string_literal(value: &str) -> Expr {
+        Expr::StringLiteral(ruff_python_ast::ExprStringLiteral {
+            value: ruff_python_ast::StringLiteralValue::single(ruff_python_ast::StringLiteral {
+                range: TextRange::default(),
+                value: value.to_string().into_boxed_str(),
+                flags: ruff_python_ast::StringLiteralFlags::empty(),
+            }),
+            range: TextRange::default(),
+        })
+    }
+
+    /// Helper function to create a getattr() call expression
+    fn create_getattr_call(obj_expr: Expr, attr_name: &str) -> Expr {
+        Expr::Call(ExprCall {
+            func: Box::new(Self::create_name_expr("getattr", ExprContext::Load)),
+            arguments: Arguments {
+                args: vec![obj_expr, Self::create_string_literal(attr_name)].into(),
+                keywords: vec![].into(),
+                range: TextRange::default(),
+            },
+            range: TextRange::default(),
+        })
+    }
+
+    /// Helper function to build a dotted module expression from parts
+    fn create_dotted_module_expr(parts: &[&str], ctx: ExprContext) -> Expr {
+        let mut current_expr = Self::create_name_expr(parts[0], ExprContext::Load);
+
+        let len = parts.len();
+        for (idx, &part) in parts[1..].iter().enumerate() {
+            let attr_ctx = if idx + 2 == len {
+                ctx
+            } else {
+                ExprContext::Load
+            };
+            current_expr = Self::create_attribute_expr(current_expr, part, attr_ctx);
+        }
+        current_expr
+    }
+
+    /// Helper function to create a types.ModuleType() call
+    fn create_module_type_call(module_name: &str) -> Expr {
+        let types_module_type = Self::create_attribute_expr(
+            Self::create_name_expr("types", ExprContext::Load),
+            "ModuleType",
+            ExprContext::Load,
+        );
+
+        Expr::Call(ExprCall {
+            func: Box::new(types_module_type),
+            arguments: Arguments {
+                args: vec![Self::create_string_literal(module_name)].into(),
+                keywords: vec![].into(),
+                range: TextRange::default(),
+            },
+            range: TextRange::default(),
+        })
+    }
+
     /// Helper method to classify and add import to appropriate set
     fn classify_and_add_import(
         &self,
@@ -1047,127 +1126,29 @@ impl CodeEmitter {
         original_name: &str,
         renamed_name: &str,
     ) -> Result<Stmt> {
-        // Create the target expression: module_name.original_name = renamed_name
+        // Create the target expression: module_name.original_name
         let target_expr = if module_name.contains('.') {
-            // Handle dotted module names like "greetings.greeting"
             let parts: Vec<&str> = module_name.split('.').collect();
-            let mut current_expr = Expr::Name(ExprName {
-                id: Identifier::new(parts[0], TextRange::default()).into(),
-                ctx: ExprContext::Load,
-                range: TextRange::default(),
-            });
-
-            // Build the attribute chain
-            for &part in &parts[1..] {
-                current_expr = Expr::Attribute(ExprAttribute {
-                    value: Box::new(current_expr),
-                    attr: Identifier::new(part, TextRange::default()),
-                    ctx: ExprContext::Load,
-                    range: TextRange::default(),
-                });
-            }
-
-            // Add the final attribute (original_name) with Store context
-            Expr::Attribute(ExprAttribute {
-                value: Box::new(current_expr),
-                attr: Identifier::new(original_name, TextRange::default()),
-                ctx: ExprContext::Store,
-                range: TextRange::default(),
-            })
+            let mut module_expr = Self::create_dotted_module_expr(&parts, ExprContext::Load);
+            module_expr =
+                Self::create_attribute_expr(module_expr, original_name, ExprContext::Store);
+            module_expr
         } else {
-            // Simple module name: module.original_name
-            Expr::Attribute(ExprAttribute {
-                value: Box::new(Expr::Name(ExprName {
-                    id: Identifier::new(module_name, TextRange::default()).into(),
-                    ctx: ExprContext::Load,
-                    range: TextRange::default(),
-                })),
-                attr: Identifier::new(original_name, TextRange::default()),
-                ctx: ExprContext::Store,
-                range: TextRange::default(),
-            })
+            Self::create_attribute_expr(
+                Self::create_name_expr(module_name, ExprContext::Load),
+                original_name,
+                ExprContext::Store,
+            )
         };
 
         // Create the source expression: getattr(module_name, renamed_name)
-        // This is necessary because the renamed variable exists in the module's namespace, not globally
         let source_expr = if module_name.contains('.') {
-            // For dotted module names, access from the module namespace
             let parts: Vec<&str> = module_name.split('.').collect();
-            let mut module_expr = Expr::Name(ExprName {
-                id: Identifier::new(parts[0], TextRange::default()).into(),
-                ctx: ExprContext::Load,
-                range: TextRange::default(),
-            });
-
-            // Build the module reference
-            for &part in &parts[1..] {
-                module_expr = Expr::Attribute(ExprAttribute {
-                    value: Box::new(module_expr),
-                    attr: Identifier::new(part, TextRange::default()),
-                    ctx: ExprContext::Load,
-                    range: TextRange::default(),
-                });
-            }
-
-            // Access the renamed variable from the module namespace using getattr
-            Expr::Call(ExprCall {
-                func: Box::new(Expr::Name(ExprName {
-                    id: Identifier::new("getattr", TextRange::default()).into(),
-                    ctx: ExprContext::Load,
-                    range: TextRange::default(),
-                })),
-                arguments: Arguments {
-                    args: vec![
-                        module_expr,
-                        Expr::StringLiteral(ruff_python_ast::ExprStringLiteral {
-                            value: ruff_python_ast::StringLiteralValue::single(
-                                ruff_python_ast::StringLiteral {
-                                    range: TextRange::default(),
-                                    value: renamed_name.to_string().into_boxed_str(),
-                                    flags: ruff_python_ast::StringLiteralFlags::empty(),
-                                },
-                            ),
-                            range: TextRange::default(),
-                        }),
-                    ]
-                    .into(),
-                    keywords: vec![].into(),
-                    range: TextRange::default(),
-                },
-                range: TextRange::default(),
-            })
+            let module_expr = Self::create_dotted_module_expr(&parts, ExprContext::Load);
+            Self::create_getattr_call(module_expr, renamed_name)
         } else {
-            // Simple module name
-            Expr::Call(ExprCall {
-                func: Box::new(Expr::Name(ExprName {
-                    id: Identifier::new("getattr", TextRange::default()).into(),
-                    ctx: ExprContext::Load,
-                    range: TextRange::default(),
-                })),
-                arguments: Arguments {
-                    args: vec![
-                        Expr::Name(ExprName {
-                            id: Identifier::new(module_name, TextRange::default()).into(),
-                            ctx: ExprContext::Load,
-                            range: TextRange::default(),
-                        }),
-                        Expr::StringLiteral(ruff_python_ast::ExprStringLiteral {
-                            value: ruff_python_ast::StringLiteralValue::single(
-                                ruff_python_ast::StringLiteral {
-                                    range: TextRange::default(),
-                                    value: renamed_name.to_string().into_boxed_str(),
-                                    flags: ruff_python_ast::StringLiteralFlags::empty(),
-                                },
-                            ),
-                            range: TextRange::default(),
-                        }),
-                    ]
-                    .into(),
-                    keywords: vec![].into(),
-                    range: TextRange::default(),
-                },
-                range: TextRange::default(),
-            })
+            let module_expr = Self::create_name_expr(module_name, ExprContext::Load);
+            Self::create_getattr_call(module_expr, renamed_name)
         };
 
         // Create the assignment statement
