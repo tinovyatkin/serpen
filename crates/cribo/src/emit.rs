@@ -34,7 +34,7 @@ struct ParsedModuleData {
 
 /// Import strategy for how a module should be bundled
 #[derive(Debug, Clone, PartialEq)]
-enum ImportStrategy {
+pub enum ImportStrategy {
     /// Module imported via `import module` - needs namespace
     ModuleImport,
     /// Module imported via `from module import items` - needs direct inlining
@@ -277,9 +277,10 @@ impl CodeEmitter {
             let ast = ruff_python_parser::parse_module(&source)
                 .with_context(|| format!("Failed to parse module: {:?}", module.path))?;
 
-            // Analyze unused imports
+            // Analyze unused imports with __init__.py awareness
+            let is_init_py = module.path.file_name() == Some(std::ffi::OsStr::new("__init__.py"));
             let mut unused_analyzer = UnusedImportAnalyzer::new();
-            let unused_imports = unused_analyzer.analyze_file(&source).unwrap_or_else(|err| {
+            let unused_imports = unused_analyzer.analyze_file_with_init_check(&source, is_init_py).unwrap_or_else(|err| {
                 log::warn!(
                     "Failed to analyze unused imports in {:?}: {}",
                     module.path,
@@ -383,6 +384,9 @@ impl CodeEmitter {
         // Analyze import strategies for each module based on how they're imported by the entry module
         let import_strategies =
             self.analyze_import_strategies(modules, entry_module, &parsed_modules_data)?;
+
+        // Pass import strategies to AST rewriter so it can resolve references correctly
+        ast_rewriter.set_import_strategies(&import_strategies);
 
         // Collect and filter preserved imports
         let (mut third_party_imports, mut stdlib_imports) = self.collect_import_sets(modules);
@@ -1050,6 +1054,29 @@ impl CodeEmitter {
             let module_name = alias.name.as_str();
             if self.is_first_party_module(module_name) {
                 strategies.insert(module_name.to_string(), ImportStrategy::ModuleImport);
+                
+                // Also set parent packages as ModuleImport for submodule imports
+                // For example, if importing "greetings.irrelevant", also set "greetings" as ModuleImport
+                self.set_parent_packages_as_module_import(module_name, strategies);
+            }
+        }
+    }
+
+    /// Set parent packages as ModuleImport strategy for submodule imports
+    /// This ensures that __init__.py files are properly executed in their namespace
+    fn set_parent_packages_as_module_import(
+        &self,
+        module_name: &str,
+        strategies: &mut IndexMap<String, ImportStrategy>,
+    ) {
+        let parts: Vec<&str> = module_name.split('.').collect();
+        
+        // For each parent package level, set it as ModuleImport if it's a first-party module
+        for i in 1..parts.len() {
+            let parent_module = parts[..i].join(".");
+            
+            if self.is_first_party_module(&parent_module) && !strategies.contains_key(&parent_module) {
+                strategies.insert(parent_module.clone(), ImportStrategy::ModuleImport);
             }
         }
     }

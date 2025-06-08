@@ -11,6 +11,28 @@ expression: content
 import os
 import sys
 
+# ─ Module: utils.helpers ─
+"""Utility functions for the test project."""
+import os
+import sys
+from typing import Union
+def greet(name: str) -> str:
+    """Greet a person by name."""
+    return f"Hello, {name}!"
+def calculate(a: Union[int, float], b: Union[int, float]) -> Union[int, float]:
+    """Calculate the sum of two numbers."""
+    return a + b
+def get_system_info() -> dict:
+    """Get basic system information."""
+    return {"platform": sys.platform, "python_version": sys.version, "cwd": os.getcwd()}
+
+# ─ Module: utils ─
+greet = greet
+calculate = calculate
+get_system_info = get_system_info
+"""Utils package initialization."""
+__utils___all__ = ["greet", "calculate", "get_system_info"]
+
 # ─ Module: models.user ─
 """User model for the test project."""
 from dataclasses import dataclass
@@ -32,20 +54,10 @@ class User:
             return f"{self.name} <{self.email}>"
         return self.name
 
-# ─ Module: utils.helpers ─
-"""Utility functions for the test project."""
-import os
-import sys
-from typing import Union
-def greet(name: str) -> str:
-    """Greet a person by name."""
-    return f"Hello, {name}!"
-def calculate(a: Union[int, float], b: Union[int, float]) -> Union[int, float]:
-    """Calculate the sum of two numbers."""
-    return a + b
-def get_system_info() -> dict:
-    """Get basic system information."""
-    return {"platform": sys.platform, "python_version": sys.version, "cwd": os.getcwd()}
+# ─ Module: models ─
+User = User
+"""Models package initialization."""
+__models___all__ = ["User"]
 
 # ─ Entry Module: main ─
 """Simple test project entry point."""

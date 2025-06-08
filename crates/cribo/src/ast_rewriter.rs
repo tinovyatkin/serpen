@@ -74,6 +74,8 @@ pub struct AstRewriter {
     init_modules: IndexSet<String>,
     /// Python version for builtin checks
     python_version: u8,
+    /// Import strategies for each module (to know which are ModuleImport)
+    import_strategies: IndexMap<String, String>, // module_name -> strategy_type
 }
 
 impl AstRewriter {
@@ -97,12 +99,25 @@ impl AstRewriter {
             symbols: IndexMap::new(),
             init_modules: IndexSet::new(),
             python_version,
+            import_strategies: IndexMap::new(),
         }
     }
 
     /// Public getter for import_aliases (for testing)
     pub fn import_aliases(&self) -> &IndexMap<String, ImportAlias> {
         &self.import_aliases
+    }
+
+    /// Set import strategies for modules
+    pub fn set_import_strategies(&mut self, strategies: &IndexMap<String, crate::emit::ImportStrategy>) {
+        for (module, strategy) in strategies {
+            let strategy_str = match strategy {
+                crate::emit::ImportStrategy::ModuleImport => "ModuleImport",
+                crate::emit::ImportStrategy::FromImport => "FromImport", 
+                crate::emit::ImportStrategy::Dependency => "Dependency",
+            };
+            self.import_strategies.insert(module.clone(), strategy_str.to_string());
+        }
     }
 
     /// Get module renames for a specific module
@@ -985,7 +1000,7 @@ impl AstRewriter {
         }
     }
 
-    /// Resolve the actual name for an import considering name conflicts
+    /// Resolve the actual name for an import considering name conflicts and import strategies
     fn resolve_actual_name_for_conflict(&self, import_alias: &ImportAlias) -> String {
         if let Some(conflict) = self.name_conflicts.get(&import_alias.original_name) {
             conflict
@@ -1002,11 +1017,33 @@ impl AstRewriter {
                     "{}.{}",
                     import_alias.module_name, import_alias.original_name
                 )
+            } else if import_alias.is_from_import {
+                // This is a value import from a module
+                self.resolve_from_import_reference(import_alias)
             } else {
-                // This is a value import or regular import
-                // Use the original name directly
+                // This is a regular import
                 import_alias.original_name.clone()
             }
+        }
+    }
+
+    /// Resolve the reference for a from import considering import strategies
+    fn resolve_from_import_reference(&self, import_alias: &ImportAlias) -> String {
+        // Check if the source module was bundled with ModuleImport strategy
+        if let Some(strategy) = self.import_strategies.get(&import_alias.module_name) {
+            if strategy == "ModuleImport" {
+                // The module was bundled with namespace, so reference it as module.item
+                format!(
+                    "{}.{}",
+                    import_alias.module_name, import_alias.original_name
+                )
+            } else {
+                // Module was inlined directly, use the original name
+                import_alias.original_name.clone()
+            }
+        } else {
+            // No strategy info available, use the original name as fallback
+            import_alias.original_name.clone()
         }
     }
 
@@ -1751,14 +1788,7 @@ impl AstRewriter {
                 .get(&lookup_key)
                 .cloned()
                 .unwrap_or_else(|| {
-                    // For variables without explicit mapping, assume they become global variables
-                    // with their original name (this is the case for non-conflicted variables)
-                    log::debug!(
-                        "No bundled mapping found for '{}', assuming global variable '{}'",
-                        lookup_key,
-                        imported_name
-                    );
-                    imported_name.to_string()
+                    self.resolve_relative_import_fallback(&target_module_path, imported_name, &lookup_key)
                 });
 
             log::debug!(
@@ -1770,6 +1800,37 @@ impl AstRewriter {
 
             imported_modules.insert(imported_name.to_string(), bundled_name);
         }
+    }
+
+    /// Resolve fallback for relative import when no explicit mapping is found
+    fn resolve_relative_import_fallback(
+        &self,
+        target_module_path: &str,
+        imported_name: &str,
+        lookup_key: &str,
+    ) -> String {
+        // Check if the target module was bundled with ModuleImport strategy
+        if let Some(strategy) = self.import_strategies.get(target_module_path) {
+            if strategy == "ModuleImport" {
+                // Module was bundled with namespace, so reference as module.variable
+                let namespace_reference = format!("{}.{}", target_module_path, imported_name);
+                log::debug!(
+                    "Target module '{}' uses ModuleImport strategy, using namespace reference '{}'",
+                    target_module_path,
+                    namespace_reference
+                );
+                return namespace_reference;
+            }
+        }
+        
+        // For variables without explicit mapping, assume they become global variables
+        // with their original name (this is the case for non-conflicted variables)
+        log::debug!(
+            "No bundled mapping found for '{}', assuming global variable '{}'",
+            lookup_key,
+            imported_name
+        );
+        imported_name.to_string()
     }
 
     /// Resolve relative module path based on current module and import level

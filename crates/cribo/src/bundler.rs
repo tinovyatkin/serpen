@@ -642,6 +642,38 @@ impl Bundler {
         }
     }
 
+    /// Add parent packages to discovery queue to ensure __init__.py files are included
+    /// For example, if importing "greetings.irrelevant", also add "greetings" 
+    fn add_parent_packages_to_discovery(&self, import: &str, params: &mut DiscoveryParams) {
+        let parts: Vec<&str> = import.split('.').collect();
+        
+        // For each parent package level, try to add it to discovery
+        for i in 1..parts.len() {
+            let parent_module = parts[..i].join(".");
+            self.try_add_parent_package_to_discovery(&parent_module, import, params);
+        }
+    }
+
+    /// Try to add a single parent package to discovery if it's first-party
+    fn try_add_parent_package_to_discovery(
+        &self,
+        parent_module: &str,
+        import: &str,
+        params: &mut DiscoveryParams,
+    ) {
+        match params.resolver.classify_import(parent_module) {
+            ImportType::FirstParty => {
+                if let Ok(Some(parent_path)) = params.resolver.resolve_module_path(parent_module) {
+                    debug!("Adding parent package '{}' to discovery queue for import '{}'", parent_module, import);
+                    self.add_to_discovery_queue_if_new(parent_module, parent_path, params);
+                }
+            }
+            _ => {
+                // Parent is not first-party, processing stops here
+            }
+        }
+    }
+
     /// Process an import during discovery phase
     fn process_import_for_discovery(&self, import: &str, params: &mut DiscoveryParams) {
         match params.resolver.classify_import(import) {
@@ -650,6 +682,10 @@ impl Bundler {
                 if let Ok(Some(import_path)) = params.resolver.resolve_module_path(import) {
                     debug!("Resolved '{}' to path: {:?}", import, import_path);
                     self.add_to_discovery_queue_if_new(import, import_path, params);
+                    
+                    // Also add parent packages for submodules to ensure __init__.py files are included
+                    // For example, if importing "greetings.irrelevant", also add "greetings"
+                    self.add_parent_packages_to_discovery(import, params);
                 } else {
                     warn!("Failed to resolve path for first-party module: {}", import);
                 }
@@ -682,9 +718,48 @@ impl Bundler {
                         import, module_name
                     );
                 }
+                
+                // Also add dependency edges for parent packages
+                // For example, if importing "greetings.irrelevant", also add dependency on "greetings"
+                self.add_parent_package_dependencies(import, module_name, (resolver, graph));
             }
             ImportType::ThirdParty | ImportType::StandardLibrary => {
                 // These will be preserved in the output, not inlined
+            }
+        }
+    }
+
+    /// Add dependency edges for parent packages to ensure proper ordering
+    fn add_parent_package_dependencies(
+        &self,
+        import: &str,
+        module_name: &str,
+        resolver_and_graph: (&ModuleResolver, &mut DependencyGraph),
+    ) {
+        let (resolver, graph) = resolver_and_graph;
+        let parts: Vec<&str> = import.split('.').collect();
+        
+        // For each parent package level, add a dependency edge
+        for i in 1..parts.len() {
+            let parent_module = parts[..i].join(".");
+            self.try_add_parent_dependency(&parent_module, module_name, (resolver, graph));
+        }
+    }
+
+    /// Try to add a dependency edge for a parent package
+    fn try_add_parent_dependency(
+        &self,
+        parent_module: &str,
+        module_name: &str,
+        resolver_and_graph: (&ModuleResolver, &mut DependencyGraph),
+    ) {
+        let (resolver, graph) = resolver_and_graph;
+        if resolver.classify_import(parent_module) == ImportType::FirstParty
+            && graph.get_module(parent_module).is_some()
+        {
+            debug!("Adding parent package dependency edge: {} -> {}", parent_module, module_name);
+            if let Err(e) = graph.add_dependency(parent_module, module_name) {
+                debug!("Failed to add parent package dependency edge: {}", e);
             }
         }
     }
