@@ -134,25 +134,6 @@ impl CodeEmitter {
         current_expr
     }
 
-    /// Helper function to create a types.ModuleType() call
-    fn create_module_type_call(module_name: &str) -> Expr {
-        let types_module_type = Self::create_attribute_expr(
-            Self::create_name_expr("types", ExprContext::Load),
-            "ModuleType",
-            ExprContext::Load,
-        );
-
-        Expr::Call(ExprCall {
-            func: Box::new(types_module_type),
-            arguments: Arguments {
-                args: vec![Self::create_string_literal(module_name)].into(),
-                keywords: vec![].into(),
-                range: TextRange::default(),
-            },
-            range: TextRange::default(),
-        })
-    }
-
     /// Helper method to classify and add import to appropriate set
     fn classify_and_add_import(
         &self,

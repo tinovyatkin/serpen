@@ -1921,6 +1921,26 @@ impl AstRewriter {
         }
     }
 
+    /// Helper to return a namespace reference if ModuleImport strategy applies
+    fn module_import_namespace_ref(
+        &self,
+        target_module_path: &str,
+        imported_name: &str,
+    ) -> Option<String> {
+        if let Some(strategy) = self.import_strategies.get(target_module_path) {
+            if matches!(strategy, crate::emit::ImportStrategy::ModuleImport) {
+                let ns_ref = format!("{}.{}", target_module_path, imported_name);
+                log::debug!(
+                    "Target module '{}' uses ModuleImport strategy, using namespace reference '{}'",
+                    target_module_path,
+                    ns_ref
+                );
+                return Some(ns_ref);
+            }
+        }
+        None
+    }
+
     /// Resolve the bundled name for a relative import considering import strategies
     fn resolve_relative_import_name(
         &self,
@@ -1928,19 +1948,9 @@ impl AstRewriter {
         imported_name: &str,
         bundled_modules: &IndexMap<String, String>,
     ) -> String {
-        // Check if the target module uses ModuleImport strategy first
-        // This is important because even if there's a bundled mapping, we need to use
-        // the namespace reference for modules with ModuleImport strategy
-        if let Some(strategy) = self.import_strategies.get(target_module_path) {
-            if matches!(strategy, crate::emit::ImportStrategy::ModuleImport) {
-                let namespace_reference = format!("{}.{}", target_module_path, imported_name);
-                log::debug!(
-                    "Target module '{}' uses ModuleImport strategy, using namespace reference '{}'",
-                    target_module_path,
-                    namespace_reference
-                );
-                return namespace_reference;
-            }
+        // Use helper to check ModuleImport strategy first
+        if let Some(ns_ref) = self.module_import_namespace_ref(target_module_path, imported_name) {
+            return ns_ref;
         }
 
         // Look for the bundled variable name for this import
@@ -1964,18 +1974,9 @@ impl AstRewriter {
         imported_name: &str,
         lookup_key: &str,
     ) -> String {
-        // Check if the target module was bundled with ModuleImport strategy
-        if let Some(strategy) = self.import_strategies.get(target_module_path) {
-            if matches!(strategy, crate::emit::ImportStrategy::ModuleImport) {
-                // Module was bundled with namespace, so reference as module.variable
-                let namespace_reference = format!("{}.{}", target_module_path, imported_name);
-                log::debug!(
-                    "Target module '{}' uses ModuleImport strategy, using namespace reference '{}'",
-                    target_module_path,
-                    namespace_reference
-                );
-                return namespace_reference;
-            }
+        // Use helper to check ModuleImport strategy
+        if let Some(ns_ref) = self.module_import_namespace_ref(target_module_path, imported_name) {
+            return ns_ref;
         }
 
         // For variables without explicit mapping, assume they become global variables
