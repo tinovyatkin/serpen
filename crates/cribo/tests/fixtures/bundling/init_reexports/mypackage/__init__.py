@@ -12,21 +12,14 @@ from .data_processor import process_data
 from .formatter import format_data
 from .config import config
 
-# Also import from subpackage  
+# Also import from subpackage
 from .utils import helper_function
 
 # Package version - this IS used in this file
 __version__ = "1.0.0"
 
 # These are the public API of this package
-__all__ = [
-    "process_data",
-    "format_data", 
-    "config",
-    "helper_function",
-    "__version__"
-]
+__all__ = ["process_data", "format_data", "config", "helper_function", "__version__"]
 
-# This variable would use an import in a more complex scenario
-# For this test, we'll keep it simple to focus on re-export preservation
-DEBUG_MODE = True
+# This variable uses an import, so this import should not be flagged as unused
+DEBUG_MODE = config.DEBUG
