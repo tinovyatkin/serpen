@@ -50,6 +50,11 @@ fn sanitize_paths(text: &str) -> String {
         ),
         (r"/usr/lib/python[\d.]+/", "<PYTHON_LIB>/"),
         (r"C:\\Python\d+\\lib\\", "<PYTHON_LIB>/"),
+        // Windows hosted tool cache paths (GitHub Actions)
+        (
+            r"C:\\hostedtoolcache\\windows\\Python\\[\d.]+\\x64\\Lib\\",
+            "<PYTHON_LIB>/",
+        ),
     ];
 
     let mut result = text.to_string();
@@ -57,6 +62,17 @@ fn sanitize_paths(text: &str) -> String {
         let re = Regex::new(pattern).expect("Invalid regex pattern");
         result = re.replace_all(&result, replacement).to_string();
     }
+
+    // Normalize Python error formatting differences between versions
+    // Replace line numbers in importlib which vary between Python versions
+    let importlib_line_re = Regex::new(r"line \d+, in import_module").expect("Invalid regex");
+    result = importlib_line_re
+        .replace_all(&result, "line <LINE>, in import_module")
+        .to_string();
+
+    // Remove lines that only contain caret/tilde indicators as they vary between Python versions
+    let indicator_line_re = Regex::new(r"(?m)^\s+[\^~]+\s*\n").expect("Invalid regex");
+    result = indicator_line_re.replace_all(&result, "").to_string();
 
     result
 }
