@@ -9,6 +9,7 @@ use crate::config::Config;
 use crate::dependency_graph::{CircularDependencyGroup, DependencyGraph, ModuleNode};
 use crate::emit::CodeEmitter;
 use crate::resolver::{ImportType, ModuleResolver};
+use crate::static_bundler::StaticBundler;
 use crate::util::{module_name_from_relative, normalize_line_endings};
 
 /// Type alias for module processing queue
@@ -214,19 +215,39 @@ impl Bundler {
 
         let sorted_modules = self.get_sorted_modules_from_graph(&graph)?;
 
-        // Generate bundled code
-        let mut emitter = CodeEmitter::new(
-            resolver,
-            self.config.preserve_comments,
-            self.config.preserve_type_hints,
-        );
+        // Generate bundled code and requirements if needed
+        let bundled_code = if self.config.static_bundling {
+            // Use static bundler for exec-free bundling
+            let code = self.emit_static_bundle(&sorted_modules, &resolver)?;
 
-        let bundled_code = emitter.emit_bundle(&sorted_modules, &entry_module_name)?;
+            // Generate requirements.txt if requested
+            if emit_requirements {
+                // Static bundler needs its own emitter for requirements generation
+                let mut emitter = CodeEmitter::new(
+                    resolver,
+                    self.config.preserve_comments,
+                    self.config.preserve_type_hints,
+                );
+                self.write_requirements_file_for_stdout(&sorted_modules, &mut emitter)?;
+            }
 
-        // Generate requirements.txt if requested
-        if emit_requirements {
-            self.write_requirements_file_for_stdout(&sorted_modules, &mut emitter)?;
-        }
+            code
+        } else {
+            // Use traditional emitter
+            let mut emitter = CodeEmitter::new(
+                resolver,
+                self.config.preserve_comments,
+                self.config.preserve_type_hints,
+            );
+            let code = emitter.emit_bundle(&sorted_modules, &entry_module_name)?;
+
+            // Generate requirements.txt if requested
+            if emit_requirements {
+                self.write_requirements_file_for_stdout(&sorted_modules, &mut emitter)?;
+            }
+
+            code
+        };
 
         Ok(bundled_code)
     }
@@ -253,25 +274,45 @@ impl Bundler {
 
         let sorted_modules = self.get_sorted_modules_from_graph(&graph)?;
 
-        // Generate bundled code
-        let mut emitter = CodeEmitter::new(
-            resolver,
-            self.config.preserve_comments,
-            self.config.preserve_type_hints,
-        );
+        // Generate bundled code and requirements if needed
+        let bundled_code = if self.config.static_bundling {
+            // Use static bundler for exec-free bundling
+            let code = self.emit_static_bundle(&sorted_modules, &resolver)?;
 
-        let bundled_code = emitter.emit_bundle(&sorted_modules, &entry_module_name)?;
+            // Generate requirements.txt if requested
+            if emit_requirements {
+                // Static bundler needs its own emitter for requirements generation
+                let mut emitter = CodeEmitter::new(
+                    resolver,
+                    self.config.preserve_comments,
+                    self.config.preserve_type_hints,
+                );
+                self.write_requirements_file(&sorted_modules, &mut emitter, output_path)?;
+            }
+
+            code
+        } else {
+            // Use traditional emitter
+            let mut emitter = CodeEmitter::new(
+                resolver,
+                self.config.preserve_comments,
+                self.config.preserve_type_hints,
+            );
+            let code = emitter.emit_bundle(&sorted_modules, &entry_module_name)?;
+
+            // Generate requirements.txt if requested
+            if emit_requirements {
+                self.write_requirements_file(&sorted_modules, &mut emitter, output_path)?;
+            }
+
+            code
+        };
 
         // Write output file
         fs::write(output_path, bundled_code)
             .with_context(|| format!("Failed to write output file: {:?}", output_path))?;
 
         info!("Bundle written to: {:?}", output_path);
-
-        // Generate requirements.txt if requested
-        if emit_requirements {
-            self.write_requirements_file(&sorted_modules, &mut emitter, output_path)?;
-        }
 
         Ok(())
     }
@@ -1037,5 +1078,58 @@ impl Bundler {
                 imported_name, context.base_module
             );
         }
+    }
+
+    /// Emit bundle using static bundler (no exec calls)
+    fn emit_static_bundle(
+        &self,
+        sorted_modules: &[&ModuleNode],
+        _resolver: &ModuleResolver,
+    ) -> Result<String> {
+        // Check if we only have one module (the entry module)
+        // In this case, we can skip static bundling transformations
+        if sorted_modules.len() == 1 {
+            info!("Only entry module present - outputting original code without transformations");
+
+            let entry_module = sorted_modules[0];
+            let source = fs::read_to_string(&entry_module.path)
+                .with_context(|| format!("Failed to read module file: {:?}", entry_module.path))?;
+
+            // Return the original source code
+            return Ok(source);
+        }
+
+        let mut static_bundler = StaticBundler::new();
+
+        // Parse all modules and prepare them for bundling
+        let mut module_asts = Vec::new();
+
+        for module in sorted_modules {
+            let source = fs::read_to_string(&module.path)
+                .with_context(|| format!("Failed to read module file: {:?}", module.path))?;
+            let source = crate::util::normalize_line_endings(source);
+
+            // Parse into AST
+            let ast = ruff_python_parser::parse_module(&source)
+                .with_context(|| format!("Failed to parse module: {:?}", module.path))?;
+
+            module_asts.push((module.name.clone(), ast.into_syntax()));
+        }
+
+        // Bundle all modules using static bundler
+        let bundled_ast = static_bundler.bundle_modules(module_asts, sorted_modules)?;
+
+        // Generate Python code from AST
+        let empty_parsed = ruff_python_parser::parse_module("")?;
+        let stylist = ruff_python_codegen::Stylist::from_tokens(empty_parsed.tokens(), "");
+
+        let mut code_parts = Vec::new();
+        for stmt in &bundled_ast.body {
+            let generator = ruff_python_codegen::Generator::from(&stylist);
+            let stmt_code = generator.stmt(stmt);
+            code_parts.push(stmt_code);
+        }
+
+        Ok(code_parts.join("\n"))
     }
 }

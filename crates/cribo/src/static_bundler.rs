@@ -20,6 +20,8 @@ pub struct StaticBundler {
     /// Module export information (for __all__ handling)
     #[allow(dead_code)]
     module_exports: IndexMap<String, Vec<String>>,
+    /// The entry module AST (handled specially, not wrapped)
+    entry_module_ast: Option<(String, ModModule)>,
 }
 
 /// Represents a module that has been transformed into a wrapper class
@@ -43,7 +45,100 @@ impl StaticBundler {
         Self {
             module_registry: IndexMap::new(),
             module_exports: IndexMap::new(),
+            entry_module_ast: None,
         }
+    }
+
+    /// Bundle multiple modules together with static transformation
+    pub fn bundle_modules(
+        &mut self,
+        modules: Vec<(String, ModModule)>,
+        sorted_module_nodes: &[&ModuleNode],
+    ) -> Result<ModModule> {
+        let mut bundle_ast = ModModule {
+            body: Vec::new(),
+            range: TextRange::default(),
+        };
+
+        // Track which modules have been bundled
+        let mut bundled_modules = IndexSet::new();
+
+        // Determine the entry module (last one in sorted order)
+        let entry_module_name = sorted_module_nodes
+            .last()
+            .map(|node| node.name.as_str())
+            .unwrap_or("");
+
+        // First, transform all modules into wrapper classes
+        for (module_name, ast) in modules {
+            let is_entry_module = module_name == entry_module_name;
+
+            if is_entry_module {
+                // For the entry module, we'll handle it specially later
+                self.entry_module_ast = Some((module_name.clone(), ast));
+                // Still add to bundled_modules so imports to it can be resolved
+                bundled_modules.insert(module_name.clone());
+            } else {
+                let wrapped = self.wrap_module(&module_name, ast)?;
+                bundled_modules.insert(module_name.clone());
+
+                // Add wrapper class to bundle
+                bundle_ast.body.extend(wrapped.transformed_ast.body.clone());
+
+                // Store in registry
+                self.module_registry.insert(module_name, wrapped);
+            }
+        }
+
+        // Add module facade creation code (before processing imports to ensure modules exist)
+        let facade_creation_statements = self.generate_module_facade_creation(sorted_module_nodes);
+        bundle_ast.body.extend(facade_creation_statements);
+
+        // Add module initialization code (attributes, __cribo_vars, __cribo_init)
+        // but exclude the entry module from initialization
+        let non_entry_modules: Vec<_> = sorted_module_nodes
+            .iter()
+            .filter(|node| node.name != entry_module_name)
+            .copied()
+            .collect();
+        let initialization_statements = self.generate_module_initialization(&non_entry_modules);
+        bundle_ast.body.extend(initialization_statements);
+
+        // Process all statements to rewrite imports
+        let mut final_body = Vec::new();
+        for stmt in bundle_ast.body {
+            if let Some(rewritten) = self.rewrite_imports(&stmt, &bundled_modules) {
+                final_body.extend(rewritten);
+            } else if !matches!(stmt, Stmt::Import(_) | Stmt::ImportFrom(_)) {
+                // Only keep non-import statements when rewrite_imports returns None
+                // Import statements that return None should be completely skipped
+                final_body.push(stmt);
+            }
+            // If it's an import statement and rewrite_imports returned None,
+            // it means the import should be completely removed (bundled import)
+        }
+
+        // Finally, add the entry module's code directly (not wrapped)
+        if let Some((entry_name, entry_ast)) = &self.entry_module_ast {
+            debug!("Adding entry module '{}' code directly", entry_name);
+
+            // Process the entry module's statements
+            for stmt in &entry_ast.body {
+                // Rewrite imports in the entry module too
+                if let Some(rewritten) = self.rewrite_imports(stmt, &bundled_modules) {
+                    final_body.extend(rewritten);
+                } else if !matches!(stmt, Stmt::Import(_) | Stmt::ImportFrom(_)) {
+                    // Only keep non-import statements when rewrite_imports returns None
+                    // Import statements that return None should be completely skipped
+                    final_body.push(stmt.clone());
+                }
+                // If it's an import statement and rewrite_imports returned None,
+                // it means the import should be completely removed (bundled import)
+            }
+        }
+
+        bundle_ast.body = final_body;
+        Ok(bundle_ast)
     }
 
     /// Helper to create a string literal expression
@@ -99,15 +194,14 @@ impl StaticBundler {
                     class_body.push(Stmt::ClassDef(class_def));
                 }
 
-                // Simple assignments go to __cribo_vars
+                // Simple assignments go to __cribo_vars only if they don't reference other variables
                 Stmt::Assign(ref assign) => {
-                    if let Some(name) = self.extract_simple_target(assign) {
-                        // Store the value in module_vars
-                        module_vars.insert(name, assign.value.clone());
-                    } else {
-                        // Complex assignments need special handling in __cribo_init
-                        module_init_statements.push(stmt);
-                    }
+                    self.categorize_assignment(
+                        assign,
+                        &mut module_vars,
+                        &mut module_init_statements,
+                        stmt.clone(),
+                    );
                 }
 
                 // Import statements are skipped (they're hoisted)
@@ -214,6 +308,76 @@ impl StaticBundler {
         None
     }
 
+    /// Categorize an assignment statement - either store in module_vars or in init statements
+    #[allow(clippy::too_many_arguments)]
+    fn categorize_assignment(
+        &self,
+        assign: &StmtAssign,
+        module_vars: &mut IndexMap<String, Box<Expr>>,
+        module_init_statements: &mut Vec<Stmt>,
+        stmt: Stmt,
+    ) {
+        if let Some(name) = self.extract_simple_target(assign) {
+            // Check if the value contains variable references
+            if self.contains_variable_reference(&assign.value) {
+                // If it references variables, it needs to go in __cribo_init
+                module_init_statements.push(stmt);
+            } else {
+                // Store the value in module_vars
+                module_vars.insert(name, assign.value.clone());
+            }
+        } else {
+            // Complex assignments need special handling in __cribo_init
+            module_init_statements.push(stmt);
+        }
+    }
+
+    /// Check if an expression contains variable references
+    #[allow(clippy::only_used_in_recursion)]
+    fn contains_variable_reference(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Name(_) | Expr::Attribute(_) => true,
+            Expr::Call(call) => {
+                // Check if function or any arguments contain variables
+                self.contains_variable_reference(&call.func)
+                    || call
+                        .arguments
+                        .args
+                        .iter()
+                        .any(|arg| self.contains_variable_reference(arg))
+            }
+            Expr::BinOp(binop) => {
+                self.contains_variable_reference(&binop.left)
+                    || self.contains_variable_reference(&binop.right)
+            }
+            Expr::UnaryOp(unaryop) => self.contains_variable_reference(&unaryop.operand),
+            Expr::List(list) => list
+                .elts
+                .iter()
+                .any(|e| self.contains_variable_reference(e)),
+            Expr::Tuple(tuple) => tuple
+                .elts
+                .iter()
+                .any(|e| self.contains_variable_reference(e)),
+            Expr::Dict(dict) => dict.items.iter().any(|item| {
+                item.key
+                    .as_ref()
+                    .is_some_and(|k| self.contains_variable_reference(k))
+                    || self.contains_variable_reference(&item.value)
+            }),
+            Expr::Set(set) => set.elts.iter().any(|e| self.contains_variable_reference(e)),
+            // Literals don't contain variable references
+            Expr::StringLiteral(_)
+            | Expr::BytesLiteral(_)
+            | Expr::NumberLiteral(_)
+            | Expr::BooleanLiteral(_)
+            | Expr::NoneLiteral(_)
+            | Expr::EllipsisLiteral(_) => false,
+            // For other expression types, assume they might contain variables
+            _ => true,
+        }
+    }
+
     /// Create @staticmethod decorator
     fn create_staticmethod_decorator(&self) -> Decorator {
         Decorator {
@@ -263,7 +427,15 @@ impl StaticBundler {
             type_params: None,
             parameters: Box::new(ruff_python_ast::Parameters {
                 posonlyargs: vec![],
-                args: vec![],
+                args: vec![ruff_python_ast::ParameterWithDefault {
+                    parameter: ruff_python_ast::Parameter {
+                        name: Identifier::new("cls", TextRange::default()),
+                        annotation: None,
+                        range: TextRange::default(),
+                    },
+                    default: None,
+                    range: TextRange::default(),
+                }],
                 vararg: None,
                 kwonlyargs: vec![],
                 kwarg: None,
@@ -271,12 +443,24 @@ impl StaticBundler {
             }),
             returns: None,
             body: statements,
-            decorator_list: vec![self.create_staticmethod_decorator()],
+            decorator_list: vec![self.create_classmethod_decorator()],
             is_async: false,
             range: TextRange::default(),
         };
 
         Stmt::FunctionDef(func)
+    }
+
+    /// Create @classmethod decorator
+    fn create_classmethod_decorator(&self) -> Decorator {
+        Decorator {
+            expression: Expr::Name(ExprName {
+                id: Identifier::new("classmethod", TextRange::default()).into(),
+                ctx: ExprContext::Load,
+                range: TextRange::default(),
+            }),
+            range: TextRange::default(),
+        }
     }
 
     /// Create a class definition
@@ -298,8 +482,8 @@ impl StaticBundler {
         })
     }
 
-    /// Generate module facade creation code
-    pub fn generate_module_facades(&self, sorted_modules: &[&ModuleNode]) -> Vec<Stmt> {
+    /// Generate module facade creation code (just the module objects)
+    pub fn generate_module_facade_creation(&self, sorted_modules: &[&ModuleNode]) -> Vec<Stmt> {
         let mut statements = Vec::new();
 
         // Import types module
@@ -312,13 +496,24 @@ impl StaticBundler {
             range: TextRange::default(),
         }));
 
-        // Create facades for each module
+        // Create module objects for each module
+        for module in sorted_modules {
+            let module_name = &module.name;
+            // Create module hierarchy
+            statements.extend(self.create_module_hierarchy(module_name));
+        }
+
+        statements
+    }
+
+    /// Generate module initialization code (attributes, vars, init)
+    pub fn generate_module_initialization(&self, sorted_modules: &[&ModuleNode]) -> Vec<Stmt> {
+        let mut statements = Vec::new();
+
+        // Initialize each module
         for module in sorted_modules {
             let module_name = &module.name;
             let wrapper_name = self.generate_wrapper_name(module_name);
-
-            // Create module hierarchy
-            statements.extend(self.create_module_hierarchy(module_name));
 
             // Copy attributes from wrapper to module
             statements.extend(self.create_attribute_copying(&wrapper_name, module_name));
@@ -722,7 +917,7 @@ impl StaticBundler {
             range: TextRange::default(),
         });
 
-        // Call __cribo_init()
+        // Call __cribo_init() - no arguments needed since it's a classmethod
         let init_call = Expr::Call(ExprCall {
             func: Box::new(Expr::Attribute(ExprAttribute {
                 value: Box::new(Expr::Name(ExprName {
@@ -785,25 +980,9 @@ impl StaticBundler {
             let module_name = alias.name.as_str();
 
             if bundled_modules.contains(module_name) {
-                // This module has been bundled - create assignment instead
-                let target_name = alias
-                    .asname
-                    .as_ref()
-                    .map(|id| id.as_str())
-                    .unwrap_or(module_name);
-
-                // Create assignment: target_name = module_object
-                let assign = Stmt::Assign(StmtAssign {
-                    targets: vec![Expr::Name(ExprName {
-                        id: Identifier::new(target_name, TextRange::default()).into(),
-                        ctx: ExprContext::Store,
-                        range: TextRange::default(),
-                    })],
-                    value: Box::new(self.create_module_reference(module_name)),
-                    range: TextRange::default(),
-                });
-
-                rewritten_statements.push(assign);
+                // This module has been bundled - skip the import entirely
+                // The module object has already been created by generate_module_facade_creation
+                debug!("Skipping bundled module import: {}", module_name);
             } else {
                 // Keep non-bundled imports
                 rewritten_names.push(alias.clone());

@@ -346,7 +346,7 @@ fn test_module_facade_generation() {
 
     let modules = vec![&utils_module, &models_user_module];
 
-    let facades = bundler.generate_module_facades(&modules);
+    let facades = bundler.generate_module_facade_creation(&modules);
 
     // Should have import statement
     let has_types_import = facades.iter().any(|stmt| {

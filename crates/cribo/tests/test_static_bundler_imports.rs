@@ -33,34 +33,48 @@ import utils
         if let Some(rewritten) = bundler.rewrite_imports(&stmt, &bundled_modules) {
             rewritten_statements.extend(rewritten);
         } else {
-            rewritten_statements.push(stmt);
+            // For bundled modules, rewrite_imports returns None (skipped)
+            // For non-bundled modules, keep the original statement
+            let is_bundled_import = matches!(&stmt, Stmt::Import(import) if import.names.iter().any(|alias|
+                bundled_modules.contains(alias.name.as_str())
+            ));
+
+            if !is_bundled_import {
+                rewritten_statements.push(stmt);
+            }
         }
     }
 
-    // Should have 4 statements:
-    // 1. import os, sys (combined non-bundled)
-    // 2. models = models (assignment)
-    // 3. utils = utils (assignment)
+    // Should have 2 statements: import os and import sys (separate non-bundled)
+    // Bundled modules (models, utils) are skipped entirely since facades are pre-created
+    println!("Rewritten statements count: {}", rewritten_statements.len());
+    for (i, stmt) in rewritten_statements.iter().enumerate() {
+        println!("Statement {}: {:?}", i, stmt);
+    }
     assert!(
-        rewritten_statements.len() >= 3,
-        "Should have at least 3 statements after rewriting"
+        rewritten_statements.len() == 2,
+        "Should have 2 statements after rewriting (non-bundled imports only), got {}",
+        rewritten_statements.len()
     );
 
-    // Check that we have assignments for bundled modules
-    let has_models_assignment = rewritten_statements.iter().any(|stmt| {
-        matches!(stmt, Stmt::Assign(assign) if assign.targets.iter().any(|t| {
-            matches!(t, ruff_python_ast::Expr::Name(n) if n.id.as_str() == "models")
-        }))
+    // Check that we only have non-bundled imports left
+    let has_non_bundled_import = rewritten_statements
+        .iter()
+        .any(|stmt| matches!(stmt, Stmt::Import(_)));
+
+    assert!(has_non_bundled_import, "Should have non-bundled imports");
+
+    // Bundled modules should not appear in any import statements
+    let has_bundled_in_imports = rewritten_statements.iter().any(|stmt| {
+        matches!(stmt, Stmt::Import(import) if import.names.iter().any(|alias|
+            bundled_modules.contains(alias.name.as_str())
+        ))
     });
 
-    let has_utils_assignment = rewritten_statements.iter().any(|stmt| {
-        matches!(stmt, Stmt::Assign(assign) if assign.targets.iter().any(|t| {
-            matches!(t, ruff_python_ast::Expr::Name(n) if n.id.as_str() == "utils")
-        }))
-    });
-
-    assert!(has_models_assignment, "Should have models assignment");
-    assert!(has_utils_assignment, "Should have utils assignment");
+    assert!(
+        !has_bundled_in_imports,
+        "Bundled modules should not appear in import statements"
+    );
 }
 
 #[test]
@@ -80,20 +94,46 @@ import utils
         if let Some(rewritten) = bundler.rewrite_imports(&stmt, &bundled_modules) {
             rewritten_statements.extend(rewritten);
         } else {
-            rewritten_statements.push(stmt);
+            // For bundled modules, rewrite_imports returns None (skipped)
+            // For non-bundled modules, keep the original statement
+            let is_bundled_import = matches!(&stmt, Stmt::Import(import) if import.names.iter().any(|alias|
+                bundled_modules.contains(alias.name.as_str())
+            ));
+
+            if !is_bundled_import {
+                rewritten_statements.push(stmt);
+            }
         }
     }
 
-    // Check that aliased bundled import becomes assignment with alias
-    let has_aliased_assignment = rewritten_statements.iter().any(|stmt| {
-        matches!(stmt, Stmt::Assign(assign) if assign.targets.iter().any(|t| {
-            matches!(t, ruff_python_ast::Expr::Name(n) if n.id.as_str() == "m")
-        }))
+    // Should have 2 statements: numpy and utils imports (non-bundled)
+    // The bundled 'models' import is skipped entirely
+    assert!(
+        rewritten_statements.len() == 2,
+        "Should have 2 statements after rewriting (non-bundled imports only)"
+    );
+
+    // Check that we only have non-bundled imports
+    let import_count = rewritten_statements
+        .iter()
+        .filter(|stmt| matches!(stmt, Stmt::Import(_)))
+        .count();
+
+    assert_eq!(
+        import_count, 2,
+        "Should have 2 non-bundled import statements"
+    );
+
+    // Bundled modules should not appear in any import statements
+    let has_bundled_in_imports = rewritten_statements.iter().any(|stmt| {
+        matches!(stmt, Stmt::Import(import) if import.names.iter().any(|alias|
+            bundled_modules.contains(alias.name.as_str())
+        ))
     });
 
     assert!(
-        has_aliased_assignment,
-        "Should have aliased assignment for 'm'"
+        !has_bundled_in_imports,
+        "Bundled modules should not appear in import statements"
     );
 }
 
@@ -199,8 +239,20 @@ from collections import defaultdict
         "Should have at least 2 import statements for non-bundled modules"
     );
     assert!(
-        assignment_count >= 3,
-        "Should have at least 3 assignments for bundled modules"
+        assignment_count >= 1,
+        "Should have at least 1 assignment for bundled from-imports (User)"
+    );
+
+    // Check that bundled simple imports (models, utils) are not present
+    let has_bundled_simple_imports = rewritten_statements.iter().any(|stmt| {
+        matches!(stmt, Stmt::Import(import) if import.names.iter().any(|alias|
+            bundled_modules.contains(alias.name.as_str())
+        ))
+    });
+
+    assert!(
+        !has_bundled_simple_imports,
+        "Bundled simple imports should be skipped"
     );
 }
 
@@ -255,20 +307,25 @@ from config import settings
     for stmt in ast.body {
         if let Some(rewritten) = bundler.rewrite_imports(&stmt, &bundled_modules) {
             rewritten_statements.extend(rewritten);
-        } else {
-            rewritten_statements.push(stmt);
         }
+        // Note: We don't add else clause here because bundled simple imports are skipped entirely
     }
 
-    // All imports should become assignments
-    let all_assignments = rewritten_statements
+    // Only from-imports should create assignments (for 'settings')
+    // Simple imports (models, utils) are skipped entirely since facades are pre-created
+    let assignment_count = rewritten_statements
         .iter()
-        .all(|stmt| matches!(stmt, Stmt::Assign(_)));
+        .filter(|stmt| matches!(stmt, Stmt::Assign(_)))
+        .count();
 
-    assert!(all_assignments, "All statements should be assignments");
+    assert_eq!(
+        assignment_count, 1,
+        "Should have 1 assignment statement (for settings from config)"
+    );
+
     assert_eq!(
         rewritten_statements.len(),
-        3,
-        "Should have 3 assignment statements"
+        1,
+        "Should have 1 statement total (settings assignment)"
     );
 }

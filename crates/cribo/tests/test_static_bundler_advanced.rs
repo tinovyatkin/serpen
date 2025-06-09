@@ -479,7 +479,7 @@ if TYPE_CHECKING:
     assert!(has_vars, "Should have __cribo_vars");
     assert!(has_init, "Should have __cribo_init");
     assert_eq!(
-        static_method_count, 3,
-        "Should have 3 static methods (initialize, cleanup, and __cribo_init)"
+        static_method_count, 2,
+        "Should have 2 static methods (initialize and cleanup)"
     );
 }

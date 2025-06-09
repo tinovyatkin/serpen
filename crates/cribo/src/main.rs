@@ -36,6 +36,10 @@ struct Cli {
     /// Target Python version (e.g., py38, py39, py310, py311, py312, py313)
     #[arg(long, alias = "python-version")]
     target_version: Option<String>,
+
+    /// Use static bundling (experimental: transforms modules to classes, eliminates exec())
+    #[arg(long)]
+    static_bundling: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -69,6 +73,11 @@ fn main() -> anyhow::Result<()> {
     // Override target-version from CLI if provided
     if let Some(target_version) = cli.target_version {
         config.set_target_version(target_version)?;
+    }
+
+    // Override static-bundling from CLI if provided
+    if cli.static_bundling {
+        config.static_bundling = true;
     }
 
     debug!("Configuration: {:?}", config);
