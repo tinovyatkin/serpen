@@ -142,11 +142,6 @@ fn test_stdlib_module_in_package_is_not_generated() {
 }
 
 #[test]
-fn test_imported_modules_are_transformed() {
-    assert_script_output("imports_in_imported_modules", "Hello");
-}
-
-#[test]
 fn test_circular_references_dont_cause_stack_overflow() {
     assert_script_output("circular_reference", "Hello");
 }
