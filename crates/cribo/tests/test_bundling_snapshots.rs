@@ -74,6 +74,10 @@ fn sanitize_paths(text: &str) -> String {
     let indicator_line_re = Regex::new(r"(?m)^\s+[\^~]+\s*\n").expect("Invalid regex");
     result = indicator_line_re.replace_all(&result, "").to_string();
 
+    // Normalize Windows path separators in sanitized paths
+    result = result.replace("<PYTHON_LIB>/importlib\\", "<PYTHON_LIB>/importlib/");
+    result = result.replace("<TMP>/", "<TMP>/"); // Ensure forward slashes for temp paths
+
     result
 }
 
