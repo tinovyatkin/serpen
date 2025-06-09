@@ -2396,7 +2396,64 @@ impl CodeEmitter {
     fn add_global_declarations_to_code(&self, _module_name: &str, code: &str) -> String {
         log::debug!("add_global_declarations_to_code called");
 
-        // Look for assignment statements that import from modules (e.g., "name = module.name")
+        // Parse the Python code to find assignment statements that import from modules
+        let imported_names = self.find_imported_names_from_ast(code);
+
+        if imported_names.is_empty() {
+            // Fallback to string-based approach if AST parsing fails
+            log::debug!(
+                "AST parsing failed or found no assignments, falling back to string parsing"
+            );
+            let imported_names = self.find_imported_names_from_string(code);
+            return self.build_code_with_globals(code, imported_names);
+        }
+
+        self.build_code_with_globals(code, imported_names)
+    }
+
+    /// Find imported variable names using AST parsing for robustness
+    fn find_imported_names_from_ast(&self, code: &str) -> Vec<String> {
+        let mut imported_names = Vec::new();
+
+        match ruff_python_parser::parse_module(code) {
+            Ok(parsed) => {
+                for stmt in &parsed.syntax().body {
+                    if let Stmt::Assign(assign) = stmt {
+                        self.extract_attribute_assignments(assign, &mut imported_names);
+                    }
+                }
+                log::debug!(
+                    "AST parsing found {} imported names: {:?}",
+                    imported_names.len(),
+                    imported_names
+                );
+            }
+            Err(err) => {
+                log::debug!(
+                    "AST parsing failed: {}, falling back to string approach",
+                    err
+                );
+            }
+        }
+
+        imported_names
+    }
+
+    /// Extract variable names from assignments that use attribute access
+    fn extract_attribute_assignments(&self, assign: &StmtAssign, imported_names: &mut Vec<String>) {
+        // Check if RHS is an attribute access (module.attr)
+        if let Expr::Attribute(_) = assign.value.as_ref() {
+            // Get the target variable name(s)
+            for target in &assign.targets {
+                if let Expr::Name(name) = target {
+                    imported_names.push(name.id.to_string());
+                }
+            }
+        }
+    }
+
+    /// Fallback string-based approach for finding imported names
+    fn find_imported_names_from_string(&self, code: &str) -> Vec<String> {
         let lines: Vec<&str> = code.lines().collect();
         let mut imported_names = Vec::new();
 
@@ -2417,6 +2474,11 @@ impl CodeEmitter {
             }
         }
 
+        imported_names
+    }
+
+    /// Build the final code with global declarations and exposure statements
+    fn build_code_with_globals(&self, code: &str, imported_names: Vec<String>) -> String {
         if !imported_names.is_empty() {
             log::debug!(
                 "Found {} imported names to make global: {:?}",
