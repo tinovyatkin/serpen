@@ -115,7 +115,69 @@ impl StaticBundler {
                     debug!("Skipping import statement in module transformation");
                 }
 
-                // Other statements go into __cribo_init
+                // Handle other statement types
+                Stmt::If(_)
+                | Stmt::While(_)
+                | Stmt::For(_)
+                | Stmt::With(_)
+                | Stmt::Try(_)
+                | Stmt::Raise(_)
+                | Stmt::Assert(_)
+                | Stmt::Global(_)
+                | Stmt::Nonlocal(_)
+                | Stmt::Return(_)
+                | Stmt::Break(_)
+                | Stmt::Continue(_)
+                | Stmt::Pass(_) => {
+                    // Control flow and other statements go into __cribo_init
+                    module_init_statements.push(stmt);
+                }
+
+                // Annotated assignments can be handled like regular assignments
+                Stmt::AnnAssign(ref ann_assign) => {
+                    // Try to extract simple variable assignment
+                    match (
+                        &ann_assign.target.as_ref(),
+                        ann_assign.simple,
+                        &ann_assign.value,
+                    ) {
+                        (Expr::Name(name), true, Some(value)) => {
+                            // Simple annotated assignment with a value
+                            module_vars.insert(name.id.to_string(), value.clone());
+                        }
+                        _ => {
+                            // Complex assignment, no value, or non-simple target
+                            module_init_statements.push(stmt);
+                        }
+                    }
+                }
+
+                // Augmented assignments always go to init
+                Stmt::AugAssign(_) => {
+                    module_init_statements.push(stmt);
+                }
+
+                // Expression statements go to init
+                Stmt::Expr(_) => {
+                    module_init_statements.push(stmt);
+                }
+
+                // Delete statements go to init
+                Stmt::Delete(_) => {
+                    module_init_statements.push(stmt);
+                }
+
+                // Type alias statements (Python 3.12+) remain at class level
+                Stmt::TypeAlias(_) => {
+                    class_body.push(stmt);
+                }
+
+                // Match statements (Python 3.10+) go to init
+                Stmt::Match(_) => {
+                    module_init_statements.push(stmt);
+                }
+
+                // IPython-specific statements (if any) go to init
                 _ => {
                     module_init_statements.push(stmt);
                 }
