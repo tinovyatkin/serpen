@@ -25,12 +25,10 @@ struct ExecutionResults {
     stderr: String,
 }
 
-/// Sanitize file paths in error messages to make them deterministic for snapshots
-fn sanitize_paths(text: &str) -> String {
-    use regex::Regex;
-
-    // Match common temporary directory patterns and replace with a generic placeholder
-    let patterns = vec![
+/// Get filters for normalizing paths and Python version differences in snapshots
+fn get_path_filters() -> Vec<(&'static str, &'static str)> {
+    vec![
+        // Temporary directory patterns
         // Unix/macOS temp paths like /var/folders/xyz/abc123/T/.tmpXYZ/file.py
         (r"/var/folders/[^/]+/[^/]+/T/\.[^/]+/", "<TMP>/"),
         // Standard Unix temp paths like /tmp/.tmpXYZ/file.py
@@ -42,41 +40,32 @@ fn sanitize_paths(text: &str) -> String {
         ),
         // Generic temp directory patterns
         (r"/[Tt]emp/[^/]+/", "<TMP>/"),
-        // Python installation paths (varying versions and locations)
+        // Python installation paths
+        // macOS Homebrew Python paths
         (
             r"/opt/homebrew/Cellar/python@[\d.]+/[\d._]+/Frameworks/Python\.framework/Versions/[\d.]+/lib/python[\d.]+/",
             "<PYTHON_LIB>/",
         ),
+        // Unix system Python paths
         (r"/usr/lib/python[\d.]+/", "<PYTHON_LIB>/"),
+        // Windows Python paths
         (r"C:\\Python\d+\\lib\\", "<PYTHON_LIB>/"),
         // Windows hosted tool cache paths (GitHub Actions)
         (
             r"C:\\hostedtoolcache\\windows\\Python\\[\d.]+\\x64\\Lib\\",
             "<PYTHON_LIB>/",
         ),
-    ];
-
-    let mut result = text.to_string();
-    for (pattern, replacement) in patterns {
-        let re = Regex::new(pattern).expect("Invalid regex pattern");
-        result = re.replace_all(&result, replacement).to_string();
-    }
-
-    // Normalize Python error formatting differences between versions
-    // Replace line numbers in importlib which vary between Python versions
-    let importlib_line_re = Regex::new(r"line \d+, in import_module").expect("Invalid regex");
-    result = importlib_line_re
-        .replace_all(&result, "line <LINE>, in import_module")
-        .to_string();
-
-    // Remove lines that only contain caret/tilde indicators as they vary between Python versions
-    let indicator_line_re = Regex::new(r"(?m)^\s+[\^~]+\s*\n").expect("Invalid regex");
-    result = indicator_line_re.replace_all(&result, "").to_string();
-
-    // Normalize Windows path separators in sanitized paths
-    result = result.replace("<PYTHON_LIB>/importlib\\", "<PYTHON_LIB>/importlib/");
-
-    result
+        // Python error formatting normalization
+        // Replace line numbers in importlib which vary between Python versions
+        (
+            r"line \d+, in import_module",
+            "line <LINE>, in import_module",
+        ),
+        // Remove lines that only contain caret/tilde indicators as they vary between Python versions
+        (r"\n\s+[~^]+\s*\n", "\n"),
+        // Normalize Windows path separators in already-sanitized paths
+        (r"<PYTHON_LIB>/importlib\\", "<PYTHON_LIB>/importlib/"),
+    ]
 }
 
 #[derive(Debug)]
@@ -170,8 +159,9 @@ fn test_bundling_fixtures() {
         let temp_dir = TempDir::new().unwrap();
         let bundle_path = temp_dir.path().join("bundled.py");
 
-        // Configure bundler
-        let config = Config::default();
+        // Configure bundler with static bundling enabled
+        let mut config = Config::default();
+        config.static_bundling = true;
         let mut bundler = Bundler::new(config);
 
         // Bundle the fixture
@@ -237,11 +227,10 @@ fn test_bundling_fixtures() {
                 .trim()
                 .replace("\r\n", "\n")
                 .to_string(),
-            stderr: sanitize_paths(
-                &String::from_utf8_lossy(&python_output.stderr)
-                    .trim()
-                    .replace("\r\n", "\n"),
-            ),
+            stderr: String::from_utf8_lossy(&python_output.stderr)
+                .trim()
+                .replace("\r\n", "\n")
+                .to_string(),
         };
 
         // Use Insta's with_settings for better snapshot organization
@@ -249,11 +238,12 @@ fn test_bundling_fixtures() {
             snapshot_suffix => fixture_name,
             omit_expression => true,
             prepend_module_to_snapshot => false,
+            filters => get_path_filters(),
         }, {
             // Snapshot the bundled code
             insta::assert_snapshot!("bundled_code", bundled_code);
 
-            // Snapshot execution results
+            // Snapshot execution results with filters applied
             insta::assert_debug_snapshot!("execution_results", execution_results);
 
             // Snapshot ruff linting results
