@@ -26,6 +26,41 @@ struct ExecutionResults {
     stderr: String,
 }
 
+/// Sanitize file paths in error messages to make them deterministic for snapshots
+fn sanitize_paths(text: &str) -> String {
+    use regex::Regex;
+
+    // Match common temporary directory patterns and replace with a generic placeholder
+    let patterns = vec![
+        // Unix/macOS temp paths like /var/folders/xyz/abc123/T/.tmpXYZ/file.py
+        (r"/var/folders/[^/]+/[^/]+/T/\.[^/]+/", "<TMP>/"),
+        // Standard Unix temp paths like /tmp/.tmpXYZ/file.py
+        (r"/tmp/\.[^/]+/", "<TMP>/"),
+        // Windows temp paths
+        (
+            r"C:\\Users\\[^\\]+\\AppData\\Local\\Temp\\[^\\]+\\",
+            "<TMP>/",
+        ),
+        // Generic temp directory patterns
+        (r"/[Tt]emp/[^/]+/", "<TMP>/"),
+        // Python installation paths (varying versions and locations)
+        (
+            r"/opt/homebrew/Cellar/python@[\d.]+/[\d._]+/Frameworks/Python\.framework/Versions/[\d.]+/lib/python[\d.]+/",
+            "<PYTHON_LIB>/",
+        ),
+        (r"/usr/lib/python[\d.]+/", "<PYTHON_LIB>/"),
+        (r"C:\\Python\d+\\lib\\", "<PYTHON_LIB>/"),
+    ];
+
+    let mut result = text.to_string();
+    for (pattern, replacement) in patterns {
+        let re = Regex::new(pattern).expect("Invalid regex pattern");
+        result = re.replace_all(&result, replacement).to_string();
+    }
+
+    result
+}
+
 #[derive(Debug)]
 #[allow(dead_code)] // Fields are used via Debug trait for snapshots
 enum ExecutionStatus {
@@ -226,10 +261,11 @@ fn test_single_bundling_fixture(fixtures_dir: &Path, fixture_name: &str) -> Resu
                 .trim()
                 .replace("\r\n", "\n")
                 .to_string(),
-            stderr: String::from_utf8_lossy(&python_output.stderr)
-                .trim()
-                .replace("\r\n", "\n")
-                .to_string(),
+            stderr: sanitize_paths(
+                &String::from_utf8_lossy(&python_output.stderr)
+                    .trim()
+                    .replace("\r\n", "\n")
+            ),
         };
 
         insta::assert_debug_snapshot!("execution_results", execution_results);
