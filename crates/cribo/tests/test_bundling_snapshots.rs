@@ -1,6 +1,5 @@
 #![allow(clippy::disallowed_methods)] // insta macros use unwrap internally
 
-use anyhow::Result;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -152,144 +151,80 @@ fn run_ruff_lint_on_bundle(bundled_code: &str) -> RuffLintResults {
     }
 }
 
-/// Generic test that processes all fixture directories in tests/fixtures/bundling
-/// Each directory should contain a main.py entry point and will be bundled and executed
+/// Test bundling fixtures using Insta's glob feature
+/// This discovers and tests all fixtures automatically
 #[test]
-fn test_all_bundling_fixtures() -> Result<()> {
-    let fixtures_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join("bundling");
+fn test_bundling_fixtures() {
+    insta::glob!("fixtures/bundling", "*/main.py", |path| {
+        // Extract fixture name from the path
+        let fixture_dir = path.parent().unwrap();
+        let fixture_name = fixture_dir.file_name().unwrap().to_str().unwrap();
 
-    // Skip if bundling directory doesn't exist
-    if !fixtures_dir.exists() {
-        return Ok(());
-    }
+        // Print which fixture we're running (will only show when not filtered out)
+        eprintln!("Running fixture: {}", fixture_name);
 
-    // Read all subdirectories in the bundling fixtures directory
-    let entries = fs::read_dir(&fixtures_dir)?;
-    let mut fixture_names = Vec::new();
+        // Check if this is an expected failure fixture
+        let expects_failure = fixture_name.starts_with("xfail_");
 
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
+        // Create temporary directory for output
+        let temp_dir = TempDir::new().unwrap();
+        let bundle_path = temp_dir.path().join("bundled.py");
 
-        if path.is_dir() {
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                fixture_names.push(name.to_string());
+        // Configure bundler
+        let config = Config::default();
+        let mut bundler = Bundler::new(config);
+
+        // Bundle the fixture
+        bundler.bundle(path, &bundle_path, false).unwrap();
+
+        // Optionally validate Python syntax before execution
+        let python_cmd = get_python_executable();
+        let syntax_check = Command::new(&python_cmd)
+            .args(["-m", "py_compile"])
+            .arg(&bundle_path)
+            .output();
+        if let Ok(output) = syntax_check {
+            if !output.status.success() && std::env::var("RUST_TEST_VERBOSE").is_ok() {
+                eprintln!(
+                    "Warning: Bundled code has syntax errors for fixture {}",
+                    fixture_name
+                );
+                eprintln!("Stderr: {}", String::from_utf8_lossy(&output.stderr));
             }
         }
-    }
 
-    // Sort for deterministic test order
-    fixture_names.sort();
+        // Read the bundled code
+        let bundled_code = fs::read_to_string(&bundle_path).unwrap();
 
-    // Process each fixture directory
-    for fixture_name in fixture_names {
-        test_single_bundling_fixture(&fixtures_dir, &fixture_name)?;
-    }
+        // Run ruff linting for cross-validation
+        let ruff_results = run_ruff_lint_on_bundle(&bundled_code);
 
-    Ok(())
-}
+        // Execute the bundled code
+        let python_output = Command::new(&python_cmd)
+            .arg(&bundle_path)
+            .current_dir(temp_dir.path())
+            .output()
+            .expect("Failed to execute Python");
 
-/// Test a single bundling fixture directory
-fn test_single_bundling_fixture(fixtures_dir: &Path, fixture_name: &str) -> Result<()> {
-    let fixture_path = fixtures_dir.join(fixture_name);
-    let main_py_path = fixture_path.join("main.py");
+        // Check for unexpected Python execution failures
+        if !python_output.status.success() && !expects_failure {
+            let stderr = String::from_utf8_lossy(&python_output.stderr);
+            let stdout = String::from_utf8_lossy(&python_output.stdout);
 
-    // Skip if main.py doesn't exist
-    if !main_py_path.exists() {
-        // Skip silently or use conditional verbose logging
-        if std::env::var("RUST_TEST_VERBOSE").is_ok() {
-            eprintln!("Skipping {}: no main.py found", fixture_name);
-        }
-        return Ok(());
-    }
-
-    // Check if this is an expected failure fixture (xfail prefix)
-    let expects_failure = fixture_name.starts_with("xfail_");
-
-    // Create temporary directory for output
-    let temp_dir = TempDir::new()?;
-    let bundle_path = temp_dir.path().join("bundled.py");
-
-    // Configure bundler
-    let config = Config::default();
-    let mut bundler = Bundler::new(config);
-
-    // Bundle the fixture
-    bundler.bundle(&main_py_path, &bundle_path, false)?;
-
-    // Optionally validate Python syntax before execution
-    let python_cmd = get_python_executable();
-    let syntax_check = Command::new(&python_cmd)
-        .args(["-m", "py_compile"])
-        .arg(&bundle_path)
-        .output();
-    if let Ok(output) = syntax_check {
-        if !output.status.success() && std::env::var("RUST_TEST_VERBOSE").is_ok() {
-            eprintln!(
-                "Warning: Bundled code has syntax errors for fixture {}",
-                fixture_name
+            panic!(
+                "Python execution failed unexpectedly for fixture '{}':\n\
+                Exit code: {}\n\
+                Stdout:\n{}\n\
+                Stderr:\n{}\n\n\
+                If this failure is expected, rename the fixture directory with 'xfail_' prefix.",
+                fixture_name,
+                python_output.status.code().unwrap_or(-1),
+                stdout.trim(),
+                stderr.trim()
             );
-            eprintln!("Stderr: {}", String::from_utf8_lossy(&output.stderr));
         }
-    }
 
-    // Read the bundled code and normalize line endings for cross-platform compatibility
-    let bundled_code = fs::read_to_string(&bundle_path)?;
-
-    // Run ruff linting for cross-validation of unused imports elimination
-    let ruff_results = run_ruff_lint_on_bundle(&bundled_code);
-
-    // Execute the bundled code with Python and capture output
-    // Use Python executable with virtual environment support
-    let python_cmd = get_python_executable();
-
-    let python_output = Command::new(&python_cmd)
-        .arg(&bundle_path)
-        .current_dir(temp_dir.path()) // Set working directory for consistent execution
-        .output()
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to execute Python: {} (command: {} {:?})",
-                e,
-                python_cmd,
-                bundle_path
-            )
-        })?;
-
-    // Note: For timeout support, we'd need a more complex solution or external crate
-    // The standard library doesn't provide built-in timeout for process execution
-
-    // Check for unexpected Python execution failures
-    if !python_output.status.success() && !expects_failure {
-        let stderr = String::from_utf8_lossy(&python_output.stderr);
-        let stdout = String::from_utf8_lossy(&python_output.stdout);
-
-        // This is an unexpected failure - fail the test explicitly
-        return Err(anyhow::anyhow!(
-            "Python execution failed unexpectedly for fixture '{}':\n\
-            Exit code: {}\n\
-            Stdout:\n{}\n\
-            Stderr:\n{}\n\n\
-            If this failure is expected, rename the fixture directory with 'xfail_' prefix.",
-            fixture_name,
-            python_output.status.code().unwrap_or(-1),
-            stdout.trim(),
-            stderr.trim()
-        ));
-    }
-
-    // Create separate snapshots using insta's named snapshot feature
-    insta::with_settings!({
-        snapshot_suffix => fixture_name,
-        omit_expression => true
-    }, {
-        // Snapshot the bundled code
-        insta::assert_snapshot!("bundled_code", bundled_code);
-
-        // Create structured execution results snapshot
+        // Create structured execution results
         let execution_status = if python_output.status.success() {
             ExecutionStatus::Success
         } else {
@@ -305,15 +240,24 @@ fn test_single_bundling_fixture(fixtures_dir: &Path, fixture_name: &str) -> Resu
             stderr: sanitize_paths(
                 &String::from_utf8_lossy(&python_output.stderr)
                     .trim()
-                    .replace("\r\n", "\n")
+                    .replace("\r\n", "\n"),
             ),
         };
 
-        insta::assert_debug_snapshot!("execution_results", execution_results);
+        // Use Insta's with_settings for better snapshot organization
+        insta::with_settings!({
+            snapshot_suffix => fixture_name,
+            omit_expression => true,
+            prepend_module_to_snapshot => false,
+        }, {
+            // Snapshot the bundled code
+            insta::assert_snapshot!("bundled_code", bundled_code);
 
-        // Snapshot ruff linting results for cross-validation
-        insta::assert_debug_snapshot!("ruff_lint_results", ruff_results);
+            // Snapshot execution results
+            insta::assert_debug_snapshot!("execution_results", execution_results);
+
+            // Snapshot ruff linting results
+            insta::assert_debug_snapshot!("ruff_lint_results", ruff_results);
+        });
     });
-
-    Ok(())
 }
