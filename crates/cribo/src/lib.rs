@@ -6,6 +6,7 @@ pub mod dependency_graph;
 pub mod dirs;
 pub mod emit;
 pub mod resolver;
+pub mod static_bundler;
 pub mod unused_import_trimmer;
 pub mod unused_imports_simple;
 pub mod util;
