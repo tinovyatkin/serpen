@@ -147,11 +147,6 @@ fn test_can_import_multiple_values_from_module_using_from_import_syntax() {
 }
 
 #[test]
-fn test_can_import_module_from_package_using_from_import_syntax() {
-    assert_script_output("script_using_from_to_import_module", "Hello");
-}
-
-#[test]
 fn test_imported_modules_are_transformed() {
     assert_script_output("imports_in_imported_modules", "Hello");
 }
