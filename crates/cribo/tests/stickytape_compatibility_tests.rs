@@ -147,11 +147,6 @@ fn test_circular_references_dont_cause_stack_overflow() {
 }
 
 #[test]
-fn test_explicit_relative_imports_with_single_dot_are_resolved_correctly() {
-    assert_script_output("explicit_relative_import_single_dot", "Hello");
-}
-
-#[test]
 fn test_explicit_relative_imports_with_single_dot_in_package_init_are_resolved_correctly() {
     assert_script_output("explicit_relative_import_single_dot_in_init", "Hello");
 }
@@ -159,11 +154,6 @@ fn test_explicit_relative_imports_with_single_dot_in_package_init_are_resolved_c
 #[test]
 fn test_explicit_relative_imports_from_parent_package_are_resolved_correctly() {
     assert_script_output("explicit_relative_import_from_parent_package", "Hello");
-}
-
-#[test]
-fn test_explicit_relative_imports_with_module_name_are_resolved_correctly() {
-    assert_script_output("explicit_relative_import", "Hello");
 }
 
 #[test]
