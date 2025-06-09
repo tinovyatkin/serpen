@@ -654,3 +654,59 @@ struct DfsCycleContext<'a> {
     path: &'a mut Vec<NodeIndex>,
     cycles: &'a mut Vec<Vec<String>>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_edge_direction_simple() {
+        let mut graph = DependencyGraph::new();
+
+        // Create two modules
+        let user_module = ModuleNode {
+            name: "models.user".to_string(),
+            path: PathBuf::from("models/user.py"),
+            imports: vec![],
+        };
+
+        let connection_module = ModuleNode {
+            name: "core.database.connection".to_string(),
+            path: PathBuf::from("core/database/connection.py"),
+            imports: vec!["models.user".to_string()],
+        };
+
+        // Add modules to graph
+        graph.add_module(user_module);
+        graph.add_module(connection_module);
+
+        // Add dependency: models.user -> core.database.connection
+        // This means core.database.connection depends on models.user
+        graph
+            .add_dependency("models.user", "core.database.connection")
+            .expect("Failed to add dependency");
+
+        // Get topological sort
+        let sorted = graph
+            .topological_sort()
+            .expect("Failed to get topological sort");
+
+        // Verify the order
+        let user_pos = sorted
+            .iter()
+            .position(|m| m.name == "models.user")
+            .expect("models.user not found in sorted modules");
+        let conn_pos = sorted
+            .iter()
+            .position(|m| m.name == "core.database.connection")
+            .expect("core.database.connection not found in sorted modules");
+
+        assert!(
+            user_pos < conn_pos,
+            "models.user should come before core.database.connection but got positions {} and {}",
+            user_pos,
+            conn_pos
+        );
+    }
+}

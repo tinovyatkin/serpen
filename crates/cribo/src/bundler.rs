@@ -301,11 +301,26 @@ impl Bundler {
             .into_iter()
             .partition(|module| cycle_modules.contains(module.name.as_str()));
 
-        // For non-cycle modules, we can still use topological sorting on the subgraph
+        // For non-cycle modules, we still need to maintain dependency order
         let mut result = Vec::new();
 
-        // Add non-cycle modules first (they should sort topologically)
-        result.extend(non_cycle_mods);
+        // Sort non-cycle modules by topological order using their dependencies
+        // This is a simplified approach that respects dependencies between non-cycle modules
+        let mut sorted_non_cycle = non_cycle_mods;
+        sorted_non_cycle.sort_by(|a, b| {
+            // If a depends on b, then b should come first (a > b)
+            // If b depends on a, then a should come first (a < b)
+            if self.module_depends_on(graph, &a.name, &b.name) {
+                std::cmp::Ordering::Greater // a depends on b, so b comes first
+            } else if self.module_depends_on(graph, &b.name, &a.name) {
+                std::cmp::Ordering::Less // b depends on a, so a comes first
+            } else {
+                // No direct dependency, sort by name for deterministic output
+                a.name.cmp(&b.name)
+            }
+        });
+
+        result.extend(sorted_non_cycle);
 
         // For cycle modules, try to maintain dependency order where possible
         // Sort cycle modules by name to get deterministic output, but also
@@ -333,6 +348,15 @@ impl Bundler {
         result.extend(cycle_mods);
 
         Ok(result)
+    }
+
+    /// Check if module_a transitively depends on module_b
+    fn module_depends_on(&self, graph: &DependencyGraph, module_a: &str, module_b: &str) -> bool {
+        if let Some(dependencies) = graph.get_dependencies(module_a) {
+            dependencies.contains(&module_b)
+        } else {
+            false
+        }
     }
 
     /// Helper method to find module name in source directories

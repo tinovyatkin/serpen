@@ -8,9 +8,14 @@ source: crates/cribo/tests/test_bundling_snapshots.rs
 # Preserved imports
 import os
 
-# ─ Module: mypackage.data_processor ─
+# ─ Module: mypackage.config ─
 import types
 mypackage = types.ModuleType('mypackage')
+mypackage.config = types.ModuleType('mypackage.config')
+exec('"""Configuration module."""\nimport os\nclass Config:\n    """Configuration class."""\n\n    def __init__(self):\n        self.DEBUG = os.environ.get("DEBUG", "false").lower() == "true"\n        self.LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")\nconfig = Config()', globals(), mypackage.config.__dict__)
+
+# ─ Module: mypackage.data_processor ─
+import types
 mypackage.data_processor = types.ModuleType('mypackage.data_processor')
 exec('"""Data processing module."""\ndef process_data(data):\n    """Process the input data."""\n    processed = data.copy()\n    processed["processed"] = True\n    return processed', mypackage.data_processor.__dict__)
 
@@ -19,21 +24,16 @@ import types
 mypackage.formatter = types.ModuleType('mypackage.formatter')
 exec('"""Data formatting module."""\ndef format_data(data):\n    """Format the processed data."""\n    return f"Formatted: {data}"', mypackage.formatter.__dict__)
 
-# ─ Module: mypackage.config ─
+# ─ Module: mypackage.utils.constants ─
 import types
-mypackage.config = types.ModuleType('mypackage.config')
-exec('"""Configuration module."""\nimport os\nclass Config:\n    """Configuration class."""\n\n    def __init__(self):\n        self.DEBUG = os.environ.get("DEBUG", "false").lower() == "true"\n        self.LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")\nconfig = Config()', globals(), mypackage.config.__dict__)
+mypackage.utils = types.ModuleType('mypackage.utils')
+mypackage.utils.constants = types.ModuleType('mypackage.utils.constants')
+exec('"""Constants module."""\nMAX_ITEMS = 100\nDEFAULT_VALUE = "default"', mypackage.utils.constants.__dict__)
 
 # ─ Module: mypackage.utils.helper ─
 import types
-mypackage.utils = types.ModuleType('mypackage.utils')
 mypackage.utils.helper = types.ModuleType('mypackage.utils.helper')
 exec('"""Helper utilities."""\ndef helper_function(data):\n    """Helper function for processing data."""\n    return f"Helped: {data}"', mypackage.utils.helper.__dict__)
-
-# ─ Module: mypackage.utils.constants ─
-import types
-mypackage.utils.constants = types.ModuleType('mypackage.utils.constants')
-exec('"""Constants module."""\nMAX_ITEMS = 100\nDEFAULT_VALUE = "default"', mypackage.utils.constants.__dict__)
 
 # ─ Module: mypackage.utils ─
 exec('global helper_function, MAX_ITEMS, DEFAULT_VALUE\nhelper_function = mypackage.utils.helper.helper_function\nMAX_ITEMS = mypackage.utils.constants.MAX_ITEMS\nDEFAULT_VALUE = mypackage.utils.constants.DEFAULT_VALUE\n"""Utils subpackage with re-exports."""\n__all__ = ["helper_function", "MAX_ITEMS", "DEFAULT_VALUE"]\nlocals()[\'helper_function\'] = helper_function\nlocals()[\'MAX_ITEMS\'] = MAX_ITEMS\nlocals()[\'DEFAULT_VALUE\'] = DEFAULT_VALUE', {**globals(), 'mypackage': mypackage}, mypackage.utils.__dict__)
