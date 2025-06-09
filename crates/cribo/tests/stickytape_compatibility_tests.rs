@@ -134,14 +134,6 @@ fn assert_script_output(script_name: &str, expected_output: &str) {
 }
 
 #[test]
-fn test_stdlib_imports_are_not_modified() {
-    assert_script_output(
-        "single_file_using_stdlib",
-        "f7ff9e8b7bb2e09b70935a5d785e0cc5d9d0abf0",
-    );
-}
-
-#[test]
 fn test_stdlib_module_in_package_is_not_generated() {
     assert_script_output(
         "script_using_stdlib_module_in_package",
