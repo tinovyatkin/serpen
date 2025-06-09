@@ -284,57 +284,73 @@ impl CodeEmitter {
 
         for (module_name, imported_names) in sorted_modules {
             if imported_names.contains("*") {
-                // Direct import: import module
-                let direct_import = Stmt::Import(StmtImport {
-                    names: vec![Alias {
-                        name: Identifier::new(module_name.clone(), TextRange::default()),
-                        asname: None,
-                        range: TextRange::default(),
-                    }],
-                    range: TextRange::default(),
-                });
-                bundle_ast.body.push(direct_import);
+                self.add_direct_import(bundle_ast, module_name);
             } else {
-                // From import: from module import names
-                let mut sorted_names: Vec<_> = imported_names.iter().collect();
-                sorted_names.sort();
-
-                let names = sorted_names
-                    .into_iter()
-                    .map(|name| {
-                        if name.contains(" as ") {
-                            // Handle aliased imports like "Dict as MyDict"
-                            let parts: Vec<&str> = name.split(" as ").collect();
-                            Alias {
-                                name: Identifier::new(parts[0].to_string(), TextRange::default()),
-                                asname: Some(Identifier::new(
-                                    parts[1].to_string(),
-                                    TextRange::default(),
-                                )),
-                                range: TextRange::default(),
-                            }
-                        } else {
-                            Alias {
-                                name: Identifier::new(name.clone(), TextRange::default()),
-                                asname: None,
-                                range: TextRange::default(),
-                            }
-                        }
-                    })
-                    .collect();
-
-                let from_import = Stmt::ImportFrom(StmtImportFrom {
-                    module: Some(Identifier::new(module_name.clone(), TextRange::default())),
-                    names,
-                    level: 0,
-                    range: TextRange::default(),
-                });
-                bundle_ast.body.push(from_import);
+                self.add_from_import(bundle_ast, module_name, imported_names);
             }
         }
 
         if !self.stdlib_imports.is_empty() {
             bundle_ast.body.push(self.create_comment_stmt("")); // Add blank line after stdlib imports
+        }
+    }
+
+    /// Add a direct import statement (e.g., "import os")
+    fn add_direct_import(&self, bundle_ast: &mut ModModule, module_name: &str) {
+        let direct_import = Stmt::Import(StmtImport {
+            names: vec![Alias {
+                name: Identifier::new(module_name.to_string(), TextRange::default()),
+                asname: None,
+                range: TextRange::default(),
+            }],
+            range: TextRange::default(),
+        });
+        bundle_ast.body.push(direct_import);
+    }
+
+    /// Add a from import statement (e.g., "from typing import Dict")
+    fn add_from_import(
+        &self,
+        bundle_ast: &mut ModModule,
+        module_name: &str,
+        imported_names: &IndexSet<String>,
+    ) {
+        let mut sorted_names: Vec<_> = imported_names.iter().collect();
+        sorted_names.sort();
+
+        let names = sorted_names
+            .into_iter()
+            .map(|name| self.create_import_alias(name))
+            .collect();
+
+        let from_import = Stmt::ImportFrom(StmtImportFrom {
+            module: Some(Identifier::new(
+                module_name.to_string(),
+                TextRange::default(),
+            )),
+            names,
+            level: 0,
+            range: TextRange::default(),
+        });
+        bundle_ast.body.push(from_import);
+    }
+
+    /// Create an import alias from a name that may contain "as"
+    fn create_import_alias(&self, name: &str) -> Alias {
+        if name.contains(" as ") {
+            // Handle aliased imports like "Dict as MyDict"
+            let parts: Vec<&str> = name.split(" as ").collect();
+            Alias {
+                name: Identifier::new(parts[0].to_string(), TextRange::default()),
+                asname: Some(Identifier::new(parts[1].to_string(), TextRange::default())),
+                range: TextRange::default(),
+            }
+        } else {
+            Alias {
+                name: Identifier::new(name.to_string(), TextRange::default()),
+                asname: None,
+                range: TextRange::default(),
+            }
         }
     }
 
@@ -2192,49 +2208,61 @@ impl CodeEmitter {
         for stmt in &module.body {
             match stmt {
                 Stmt::Import(import_stmt) => {
-                    for alias in &import_stmt.names {
-                        let module_name = alias.name.as_str();
-                        // Check if this is a standard library module
-                        if self.resolver.classify_import(module_name)
-                            == crate::resolver::ImportType::StandardLibrary
-                        {
-                            // For direct imports like "import os", we add the module name itself
-                            self.stdlib_imports
-                                .entry(module_name.to_string())
-                                .or_default()
-                                .insert("*".to_string()); // Special marker for direct import
-                        }
-                    }
+                    self.collect_direct_stdlib_imports(import_stmt);
                 }
                 Stmt::ImportFrom(import_from_stmt) => {
-                    let Some(module) = &import_from_stmt.module else {
-                        continue;
-                    };
-
-                    let module_name = module.as_str();
-                    // Check if this is a standard library module
-                    if self.resolver.classify_import(module_name)
-                        == crate::resolver::ImportType::StandardLibrary
-                    {
-                        let entry = self
-                            .stdlib_imports
-                            .entry(module_name.to_string())
-                            .or_default();
-
-                        // Collect all imported names
-                        for alias in &import_from_stmt.names {
-                            let import_name = if let Some(ref asname) = alias.asname {
-                                // For "from typing import Dict as MyDict", store "Dict as MyDict"
-                                format!("{} as {}", alias.name.as_str(), asname.as_str())
-                            } else {
-                                alias.name.as_str().to_string()
-                            };
-                            entry.insert(import_name);
-                        }
-                    }
+                    self.collect_from_stdlib_imports(import_from_stmt);
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// Collect direct stdlib imports (e.g., "import os")
+    fn collect_direct_stdlib_imports(&mut self, import_stmt: &StmtImport) {
+        for alias in &import_stmt.names {
+            let module_name = alias.name.as_str();
+            // Check if this is a standard library module
+            if self.resolver.classify_import(module_name)
+                == crate::resolver::ImportType::StandardLibrary
+            {
+                // For direct imports like "import os", we add the module name itself
+                self.stdlib_imports
+                    .entry(module_name.to_string())
+                    .or_default()
+                    .insert("*".to_string()); // Special marker for direct import
+            }
+        }
+    }
+
+    /// Collect from stdlib imports (e.g., "from typing import Dict")
+    fn collect_from_stdlib_imports(&mut self, import_from_stmt: &StmtImportFrom) {
+        let Some(module) = &import_from_stmt.module else {
+            return;
+        };
+
+        let module_name = module.as_str();
+        // Check if this is a standard library module
+        if self.resolver.classify_import(module_name)
+            != crate::resolver::ImportType::StandardLibrary
+        {
+            return;
+        }
+
+        let entry = self
+            .stdlib_imports
+            .entry(module_name.to_string())
+            .or_default();
+
+        // Collect all imported names
+        for alias in &import_from_stmt.names {
+            let import_name = if let Some(ref asname) = alias.asname {
+                // For "from typing import Dict as MyDict", store "Dict as MyDict"
+                format!("{} as {}", alias.name.as_str(), asname.as_str())
+            } else {
+                alias.name.as_str().to_string()
+            };
+            entry.insert(import_name);
         }
     }
 
