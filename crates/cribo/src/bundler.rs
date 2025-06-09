@@ -350,13 +350,11 @@ impl Bundler {
         Ok(result)
     }
 
-    /// Check if module_a transitively depends on module_b
+    /// Check if module_a transitively depends on module_b (including indirect dependencies)
     fn module_depends_on(&self, graph: &DependencyGraph, module_a: &str, module_b: &str) -> bool {
-        if let Some(dependencies) = graph.get_dependencies(module_a) {
-            dependencies.contains(&module_b)
-        } else {
-            false
-        }
+        // Use a visited set to avoid infinite recursion in case of cycles
+        let mut visited = IndexSet::new();
+        check_transitive_dependency(graph, module_a, module_b, &mut visited)
     }
 
     /// Helper method to find module name in source directories
@@ -1062,4 +1060,33 @@ impl Bundler {
             );
         }
     }
+}
+
+/// Recursive helper to check transitive dependencies
+fn check_transitive_dependency(
+    graph: &DependencyGraph,
+    current: &str,
+    target: &str,
+    visited: &mut IndexSet<String>,
+) -> bool {
+    // If we've already visited this module, return false to avoid cycles
+    if !visited.insert(current.to_string()) {
+        return false;
+    }
+
+    if let Some(dependencies) = graph.get_dependencies(current) {
+        // Check direct dependencies first
+        if dependencies.contains(&target) {
+            return true;
+        }
+
+        // Check transitive dependencies
+        for dep in dependencies {
+            if check_transitive_dependency(graph, dep, target, visited) {
+                return true;
+            }
+        }
+    }
+
+    false
 }
