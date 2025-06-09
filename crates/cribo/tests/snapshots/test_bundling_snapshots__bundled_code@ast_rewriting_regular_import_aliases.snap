@@ -15,10 +15,6 @@ import sys
 import urllib.parse
 import xml.etree.ElementTree
 
-# Preserved imports
-import math
-import random
-
 
 # Imports for alias assignments
 import collections.abc

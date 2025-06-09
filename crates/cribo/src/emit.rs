@@ -584,8 +584,8 @@ impl CodeEmitter {
         // Add standard library imports (hoisted from all modules)
         self.add_stdlib_imports_to_bundle(&mut bundle_ast);
 
-        // Add preserved imports at the top
-        self.add_preserved_imports_to_bundle(&mut bundle_ast, stdlib_imports, third_party_imports);
+        // Add preserved imports at the top (only third-party, stdlib are already hoisted)
+        self.add_preserved_imports_to_bundle(&mut bundle_ast, IndexSet::new(), third_party_imports);
 
         // Add aliased imports separately (not in preserved imports section)
         self.add_aliased_imports_to_bundle(&mut bundle_ast, aliased_imports);

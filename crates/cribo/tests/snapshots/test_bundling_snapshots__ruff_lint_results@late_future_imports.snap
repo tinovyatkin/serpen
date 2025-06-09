@@ -1,9 +1,12 @@
 ---
-source: crates/serpen/tests/test_bundling_snapshots.rs
+source: crates/cribo/tests/test_bundling_snapshots.rs
 ---
 RuffLintResults {
-    f401_violations: [],
+    f401_violations: [
+        "Line 7: F401 - `os` imported but unused",
+        "Line 9: F401 - `sys` imported but unused",
+    ],
     f404_violations: [],
     other_violations: [],
-    total_violations: 0,
+    total_violations: 2,
 }

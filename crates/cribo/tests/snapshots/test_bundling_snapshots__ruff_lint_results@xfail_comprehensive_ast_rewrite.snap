@@ -2,8 +2,14 @@
 source: crates/cribo/tests/test_bundling_snapshots.rs
 ---
 RuffLintResults {
-    f401_violations: [],
+    f401_violations: [
+        "Line 5: F401 - `os` imported but unused",
+        "Line 6: F401 - `typing.Optional` imported but unused",
+        "Line 6: F401 - `typing.List` imported but unused",
+        "Line 6: F401 - `typing.Dict` imported but unused",
+        "Line 6: F401 - `typing.Any` imported but unused",
+    ],
     f404_violations: [],
     other_violations: [],
-    total_violations: 0,
+    total_violations: 5,
 }

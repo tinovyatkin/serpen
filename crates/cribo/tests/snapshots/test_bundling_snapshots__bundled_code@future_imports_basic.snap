@@ -7,8 +7,9 @@ source: crates/cribo/tests/test_bundling_snapshots.rs
 
 from __future__ import annotations
 
+from typing import Any, Dict, List, Union
+
 # ─ Module: mypackage.submodule.utils ─
-from typing import Dict, Any, Union
 def validate_input(data: InputData) -> bool:
     """Validate input data structure.\n\n    Uses forward reference that requires future import.\n    """
     if not isinstance(data, dict):
@@ -21,7 +22,6 @@ InputData = Dict[str, Any]
 FormattedOutput = Union[str, Dict[str, Any]]
 
 # ─ Module: mypackage.core ─
-from typing import Dict, List, Any
 def process_data(data: Dict[str, Any]) -> Dict[str, Any]:
     """Process input data and return results.\n\n    This function uses forward references in type hints.\n    """
     result: ProcessingResult = {"input": data, "processed": True, "output": _transform_data(data)}
