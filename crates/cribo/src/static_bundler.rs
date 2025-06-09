@@ -1,4 +1,5 @@
 use anyhow::Result;
+use cow_utils::CowUtils;
 use indexmap::IndexMap;
 use log::debug;
 use ruff_python_ast::{
@@ -14,19 +15,21 @@ use crate::dependency_graph::ModuleNode;
 /// eliminating the need for runtime exec() calls
 pub struct StaticBundler {
     /// Registry of transformed modules
+    #[allow(dead_code)]
     module_registry: IndexMap<String, WrappedModule>,
     /// Module export information (for __all__ handling)
+    #[allow(dead_code)]
     module_exports: IndexMap<String, Vec<String>>,
 }
 
 /// Represents a module that has been transformed into a wrapper class
-struct WrappedModule {
+pub struct WrappedModule {
     /// The generated wrapper class name (e.g., "__cribo_module_models_user")
-    wrapper_class_name: String,
+    pub wrapper_class_name: String,
     /// The original module name (e.g., "models.user")
-    original_name: String,
+    pub original_name: String,
     /// The transformed AST with the module as a class
-    transformed_ast: ModModule,
+    pub transformed_ast: ModModule,
 }
 
 impl Default for StaticBundler {
@@ -70,7 +73,7 @@ impl StaticBundler {
     /// Generate a wrapper class name from a module name
     /// e.g., "models.user" -> "__cribo_module_models_user"
     fn generate_wrapper_name(&self, module_name: &str) -> String {
-        format!("__cribo_module_{}", module_name.replace('.', "_"))
+        format!("__cribo_module_{}", module_name.cow_replace('.', "_"))
     }
 
     /// Transform a module AST into a class definition
