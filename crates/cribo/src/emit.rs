@@ -63,7 +63,6 @@ struct ModuleExecParams<'a> {
 struct TransformImportsParams<'a> {
     module_name: &'a str,
     module_ast: &'a mut ModModule,
-    bundled_modules: &'a IndexMap<String, String>,
     import_strategies: &'a IndexMap<String, ImportStrategy>,
 }
 
@@ -880,7 +879,6 @@ impl CodeEmitter {
             self.transform_absolute_first_party_imports_in_init_py(TransformImportsParams {
                 module_name,
                 module_ast: &mut transformed_ast,
-                bundled_modules: &bundled_modules,
                 import_strategies,
             })?;
         }
@@ -1495,48 +1493,51 @@ impl CodeEmitter {
                     })
                 };
 
-                // Create a dict merge using | operator for Python 3.9+
-                // globals() | {'package_name': package}
-                let dict_merge = Expr::BinOp(ruff_python_ast::ExprBinOp {
-                    left: Box::new(Expr::Call(ExprCall {
-                        func: Box::new(Expr::Name(ExprName {
-                            id: "globals".into(),
-                            ctx: ExprContext::Load,
-                            range: TextRange::default(),
-                        })),
-                        arguments: ruff_python_ast::Arguments {
-                            args: vec![].into(),
-                            keywords: vec![].into(),
-                            range: TextRange::default(),
+                // Create dict merge compatible with Python 3.5+
+                // Use {**globals(), 'package_name': package} pattern
+                let package_name = if params.module_name.contains('.') {
+                    params
+                        .module_name
+                        .split('.')
+                        .next()
+                        .expect("module name should have at least one part before dot")
+                        .to_string()
+                } else {
+                    params.module_name.to_string()
+                };
+
+                let dict_merge = Expr::Dict(ruff_python_ast::ExprDict {
+                    items: vec![
+                        ruff_python_ast::DictItem {
+                            key: None, // **kwargs unpacking
+                            value: Expr::Call(ExprCall {
+                                func: Box::new(Expr::Name(ExprName {
+                                    id: "globals".into(),
+                                    ctx: ExprContext::Load,
+                                    range: TextRange::default(),
+                                })),
+                                arguments: ruff_python_ast::Arguments {
+                                    args: vec![].into(),
+                                    keywords: vec![].into(),
+                                    range: TextRange::default(),
+                                },
+                                range: TextRange::default(),
+                            }),
                         },
-                        range: TextRange::default(),
-                    })),
-                    op: ruff_python_ast::Operator::BitOr,
-                    right: Box::new(Expr::Dict(ruff_python_ast::ExprDict {
-                        items: vec![ruff_python_ast::DictItem {
+                        ruff_python_ast::DictItem {
                             key: Some(Expr::StringLiteral(ruff_python_ast::ExprStringLiteral {
                                 value: ruff_python_ast::StringLiteralValue::single(
                                     ruff_python_ast::StringLiteral {
                                         range: TextRange::default(),
-                                        value: if params.module_name.contains('.') {
-                                            params.module_name
-                                                .split('.')
-                                                .next()
-                                                .expect("module name should have at least one part before dot")
-                                                .to_string()
-                                                .into_boxed_str()
-                                        } else {
-                                            params.module_name.to_string().into_boxed_str()
-                                        },
+                                        value: package_name.into_boxed_str(),
                                         flags: ruff_python_ast::StringLiteralFlags::empty(),
                                     },
                                 ),
                                 range: TextRange::default(),
                             })),
                             value: module_ref,
-                        }],
-                        range: TextRange::default(),
-                    })),
+                        },
+                    ],
                     range: TextRange::default(),
                 });
 
