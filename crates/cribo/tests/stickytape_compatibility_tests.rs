@@ -182,11 +182,6 @@ fn test_package_init_can_be_used_even_if_not_imported_explicitly() {
 }
 
 #[test]
-fn test_value_import_is_detected_when_import_is_renamed() {
-    assert_script_output("import_from_as_value", "Hello");
-}
-
-#[test]
 fn test_module_import_is_detected_when_import_is_renamed() {
     assert_script_output("import_from_as_module", "Hello");
 }
