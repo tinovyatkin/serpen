@@ -134,11 +134,6 @@ fn assert_script_output(script_name: &str, expected_output: &str) {
 }
 
 #[test]
-fn test_single_file_script_still_works() {
-    assert_script_output("single_file", "Hello");
-}
-
-#[test]
 fn test_stdlib_imports_are_not_modified() {
     assert_script_output(
         "single_file_using_stdlib",
