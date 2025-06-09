@@ -1,11 +1,11 @@
 use anyhow::Result;
 use cow_utils::CowUtils;
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use log::debug;
 use ruff_python_ast::{
     Decorator, Expr, ExprAttribute, ExprCall, ExprContext, ExprDict, ExprName, ExprStringLiteral,
     Identifier, ModModule, Stmt, StmtAssign, StmtClassDef, StmtExpr, StmtFor, StmtFunctionDef,
-    StmtIf, StmtImport, StringLiteralValue,
+    StmtIf, StmtImport, StmtImportFrom, StringLiteralValue,
 };
 use ruff_text_size::TextRange;
 
@@ -322,6 +322,9 @@ impl StaticBundler {
 
             // Copy attributes from wrapper to module
             statements.extend(self.create_attribute_copying(&wrapper_name, module_name));
+
+            // Call __cribo_init if it exists
+            statements.extend(self.create_init_call(&wrapper_name, module_name));
         }
 
         statements
@@ -691,5 +694,196 @@ impl StaticBundler {
 
         statements.push(if_stmt);
         statements
+    }
+
+    /// Create __cribo_init call if method exists
+    fn create_init_call(&self, wrapper_name: &str, _module_name: &str) -> Vec<Stmt> {
+        let mut statements = Vec::new();
+
+        // Check if wrapper has __cribo_init using hasattr
+        let has_init_check = Expr::Call(ExprCall {
+            func: Box::new(Expr::Name(ExprName {
+                id: Identifier::new("hasattr", TextRange::default()).into(),
+                ctx: ExprContext::Load,
+                range: TextRange::default(),
+            })),
+            arguments: ruff_python_ast::Arguments {
+                args: Box::from([
+                    Expr::Name(ExprName {
+                        id: Identifier::new(wrapper_name, TextRange::default()).into(),
+                        ctx: ExprContext::Load,
+                        range: TextRange::default(),
+                    }),
+                    self.create_string_literal("__cribo_init"),
+                ]),
+                keywords: Box::from([]),
+                range: TextRange::default(),
+            },
+            range: TextRange::default(),
+        });
+
+        // Call __cribo_init()
+        let init_call = Expr::Call(ExprCall {
+            func: Box::new(Expr::Attribute(ExprAttribute {
+                value: Box::new(Expr::Name(ExprName {
+                    id: Identifier::new(wrapper_name, TextRange::default()).into(),
+                    ctx: ExprContext::Load,
+                    range: TextRange::default(),
+                })),
+                attr: Identifier::new("__cribo_init", TextRange::default()),
+                ctx: ExprContext::Load,
+                range: TextRange::default(),
+            })),
+            arguments: ruff_python_ast::Arguments {
+                args: Box::from([]),
+                keywords: Box::from([]),
+                range: TextRange::default(),
+            },
+            range: TextRange::default(),
+        });
+
+        // Create if statement
+        let if_stmt = Stmt::If(StmtIf {
+            test: Box::new(has_init_check),
+            body: vec![Stmt::Expr(StmtExpr {
+                value: Box::new(init_call),
+                range: TextRange::default(),
+            })],
+            elif_else_clauses: vec![],
+            range: TextRange::default(),
+        });
+
+        statements.push(if_stmt);
+        statements
+    }
+
+    /// Rewrite import statements to use wrapped modules
+    pub fn rewrite_imports(
+        &self,
+        stmt: &Stmt,
+        bundled_modules: &IndexSet<String>,
+    ) -> Option<Vec<Stmt>> {
+        match stmt {
+            Stmt::Import(import) => self.rewrite_import_stmt(import, bundled_modules),
+            Stmt::ImportFrom(import_from) => {
+                self.rewrite_import_from_stmt(import_from, bundled_modules)
+            }
+            _ => None,
+        }
+    }
+
+    /// Rewrite a simple import statement
+    fn rewrite_import_stmt(
+        &self,
+        import: &StmtImport,
+        bundled_modules: &IndexSet<String>,
+    ) -> Option<Vec<Stmt>> {
+        let mut rewritten_statements = Vec::new();
+        let mut rewritten_names = Vec::new();
+
+        for alias in &import.names {
+            let module_name = alias.name.as_str();
+
+            if bundled_modules.contains(module_name) {
+                // This module has been bundled - create assignment instead
+                let target_name = alias
+                    .asname
+                    .as_ref()
+                    .map(|id| id.as_str())
+                    .unwrap_or(module_name);
+
+                // Create assignment: target_name = module_object
+                let assign = Stmt::Assign(StmtAssign {
+                    targets: vec![Expr::Name(ExprName {
+                        id: Identifier::new(target_name, TextRange::default()).into(),
+                        ctx: ExprContext::Store,
+                        range: TextRange::default(),
+                    })],
+                    value: Box::new(self.create_module_reference(module_name)),
+                    range: TextRange::default(),
+                });
+
+                rewritten_statements.push(assign);
+            } else {
+                // Keep non-bundled imports
+                rewritten_names.push(alias.clone());
+            }
+        }
+
+        // If we still have some imports left, keep the import statement
+        if !rewritten_names.is_empty() {
+            let new_import = Stmt::Import(StmtImport {
+                names: rewritten_names,
+                range: import.range,
+            });
+            rewritten_statements.insert(0, new_import);
+        }
+
+        if rewritten_statements.is_empty() {
+            None
+        } else {
+            Some(rewritten_statements)
+        }
+    }
+
+    /// Rewrite a from-import statement
+    fn rewrite_import_from_stmt(
+        &self,
+        import_from: &StmtImportFrom,
+        bundled_modules: &IndexSet<String>,
+    ) -> Option<Vec<Stmt>> {
+        if let Some(module) = &import_from.module {
+            let module_name = module.as_str();
+
+            if bundled_modules.contains(module_name) {
+                // This module has been bundled - create assignments for each imported name
+                let mut statements = Vec::new();
+
+                for alias in &import_from.names {
+                    let imported_name = alias.name.as_str();
+                    let target_name = alias
+                        .asname
+                        .as_ref()
+                        .map(|id| id.as_str())
+                        .unwrap_or(imported_name);
+
+                    // Create getattr to get the attribute from the module
+                    let getattr_call = Expr::Call(ExprCall {
+                        func: Box::new(Expr::Name(ExprName {
+                            id: Identifier::new("getattr", TextRange::default()).into(),
+                            ctx: ExprContext::Load,
+                            range: TextRange::default(),
+                        })),
+                        arguments: ruff_python_ast::Arguments {
+                            args: Box::from([
+                                self.create_module_reference(module_name),
+                                self.create_string_literal(imported_name),
+                            ]),
+                            keywords: Box::from([]),
+                            range: TextRange::default(),
+                        },
+                        range: TextRange::default(),
+                    });
+
+                    // Create assignment
+                    let assign = Stmt::Assign(StmtAssign {
+                        targets: vec![Expr::Name(ExprName {
+                            id: Identifier::new(target_name, TextRange::default()).into(),
+                            ctx: ExprContext::Store,
+                            range: TextRange::default(),
+                        })],
+                        value: Box::new(getattr_call),
+                        range: TextRange::default(),
+                    });
+
+                    statements.push(assign);
+                }
+
+                return Some(statements);
+            }
+        }
+
+        // Keep non-bundled imports as-is
+        None
     }
 }
