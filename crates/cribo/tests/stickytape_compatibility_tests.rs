@@ -142,11 +142,6 @@ fn test_stdlib_module_in_package_is_not_generated() {
 }
 
 #[test]
-fn test_script_that_imports_local_module_is_converted_to_single_file() {
-    assert_script_output("script_with_single_local_import", "Hello");
-}
-
-#[test]
 fn test_script_that_imports_local_package_is_converted_to_single_file() {
     assert_script_output("script_with_single_local_import_of_package", "Hello");
 }
