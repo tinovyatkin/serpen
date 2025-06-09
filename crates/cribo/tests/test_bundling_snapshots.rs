@@ -76,7 +76,6 @@ fn sanitize_paths(text: &str) -> String {
 
     // Normalize Windows path separators in sanitized paths
     result = result.replace("<PYTHON_LIB>/importlib\\", "<PYTHON_LIB>/importlib/");
-    result = result.replace("<TMP>/", "<TMP>/"); // Ensure forward slashes for temp paths
 
     result
 }
