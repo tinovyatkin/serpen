@@ -206,9 +206,8 @@ fn test_single_bundling_fixture(fixtures_dir: &Path, fixture_name: &str) -> Resu
         return Ok(());
     }
 
-    // Check for expected failure marker file
-    let expected_failure_marker = fixture_path.join(".expected_failure");
-    let expects_failure = expected_failure_marker.exists();
+    // Check if this is an expected failure fixture (xfail prefix)
+    let expects_failure = fixture_name.starts_with("xfail_");
 
     // Create temporary directory for output
     let temp_dir = TempDir::new()?;
@@ -268,32 +267,18 @@ fn test_single_bundling_fixture(fixtures_dir: &Path, fixture_name: &str) -> Resu
         let stderr = String::from_utf8_lossy(&python_output.stderr);
         let stdout = String::from_utf8_lossy(&python_output.stdout);
 
-        // Special handling for known limitations
-        if fixture_name.contains("dynamic_import") && stderr.contains("ModuleNotFoundError") {
-            // Dynamic imports are a known limitation of bundling
-            // Create a marker file to indicate this is expected
-            fs::write(
-                &expected_failure_marker,
-                "Dynamic imports are not supported by the bundler\n",
-            )?;
-            eprintln!(
-                "Note: Created .expected_failure marker for {} (dynamic imports not supported)",
-                fixture_name
-            );
-        } else {
-            // This is an unexpected failure - fail the test explicitly
-            return Err(anyhow::anyhow!(
-                "Python execution failed unexpectedly for fixture '{}':\n\
-                Exit code: {}\n\
-                Stdout:\n{}\n\
-                Stderr:\n{}\n\n\
-                If this failure is expected, create a '.expected_failure' file in the fixture directory.",
-                fixture_name,
-                python_output.status.code().unwrap_or(-1),
-                stdout.trim(),
-                stderr.trim()
-            ));
-        }
+        // This is an unexpected failure - fail the test explicitly
+        return Err(anyhow::anyhow!(
+            "Python execution failed unexpectedly for fixture '{}':\n\
+            Exit code: {}\n\
+            Stdout:\n{}\n\
+            Stderr:\n{}\n\n\
+            If this failure is expected, rename the fixture directory with 'xfail_' prefix.",
+            fixture_name,
+            python_output.status.code().unwrap_or(-1),
+            stdout.trim(),
+            stderr.trim()
+        ));
     }
 
     // Create separate snapshots using insta's named snapshot feature
