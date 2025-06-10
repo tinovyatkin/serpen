@@ -8,32 +8,35 @@ input_file: crates/cribo/tests/fixtures/bundling/init_reexports/main.py
 
 import os
 import sys, types
-def __cribo_init___cribo_f6dfc4_mypackage_utils_constants():
-    if '__cribo_f6dfc4_mypackage_utils_constants' in sys.modules:
-        return sys.modules['__cribo_f6dfc4_mypackage_utils_constants']
-    module = types.ModuleType('__cribo_f6dfc4_mypackage_utils_constants')
-    module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/init_reexports/mypackage/utils/constants.py'
-    sys.modules['__cribo_f6dfc4_mypackage_utils_constants'] = module
-    sys.modules['mypackage.utils.constants'] = module
-    """Constants module."""
-    MAX_ITEMS = 100
-    module.MAX_ITEMS = MAX_ITEMS
-    DEFAULT_VALUE = "default"
-    module.DEFAULT_VALUE = DEFAULT_VALUE
-    return module
-def __cribo_init___cribo_bf58d0_mypackage_utils_helper():
-    if '__cribo_bf58d0_mypackage_utils_helper' in sys.modules:
-        return sys.modules['__cribo_bf58d0_mypackage_utils_helper']
-    module = types.ModuleType('__cribo_bf58d0_mypackage_utils_helper')
-    module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/init_reexports/mypackage/utils/helper.py'
-    sys.modules['__cribo_bf58d0_mypackage_utils_helper'] = module
-    sys.modules['mypackage.utils.helper'] = module
-    """Helper utilities."""
+def __cribo_init___cribo_3992ed_mypackage_data_processor():
+    if '__cribo_3992ed_mypackage_data_processor' in sys.modules:
+        return sys.modules['__cribo_3992ed_mypackage_data_processor']
+    module = types.ModuleType('__cribo_3992ed_mypackage_data_processor')
+    module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/init_reexports/mypackage/data_processor.py'
+    sys.modules['__cribo_3992ed_mypackage_data_processor'] = module
+    sys.modules['mypackage.data_processor'] = module
+    """Data processing module."""
 
-    def helper_function(data):
-        """Helper function for processing data."""
-        return f"Helped: {data}"
-    module.helper_function = helper_function
+    def process_data(data):
+        """Process the input data."""
+        processed = data.copy()
+        processed["processed"] = True
+        return processed
+    module.process_data = process_data
+    return module
+def __cribo_init___cribo_dc4b98_mypackage_formatter():
+    if '__cribo_dc4b98_mypackage_formatter' in sys.modules:
+        return sys.modules['__cribo_dc4b98_mypackage_formatter']
+    module = types.ModuleType('__cribo_dc4b98_mypackage_formatter')
+    module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/init_reexports/mypackage/formatter.py'
+    sys.modules['__cribo_dc4b98_mypackage_formatter'] = module
+    sys.modules['mypackage.formatter'] = module
+    """Data formatting module."""
+
+    def format_data(data):
+        """Format the processed data."""
+        return f"Formatted: {data}"
+    module.format_data = format_data
     return module
 def __cribo_init___cribo_fbc73e_mypackage_config():
     if '__cribo_fbc73e_mypackage_config' in sys.modules:
@@ -56,35 +59,32 @@ def __cribo_init___cribo_fbc73e_mypackage_config():
     config = Config()
     module.config = config
     return module
-def __cribo_init___cribo_dc4b98_mypackage_formatter():
-    if '__cribo_dc4b98_mypackage_formatter' in sys.modules:
-        return sys.modules['__cribo_dc4b98_mypackage_formatter']
-    module = types.ModuleType('__cribo_dc4b98_mypackage_formatter')
-    module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/init_reexports/mypackage/formatter.py'
-    sys.modules['__cribo_dc4b98_mypackage_formatter'] = module
-    sys.modules['mypackage.formatter'] = module
-    """Data formatting module."""
+def __cribo_init___cribo_bf58d0_mypackage_utils_helper():
+    if '__cribo_bf58d0_mypackage_utils_helper' in sys.modules:
+        return sys.modules['__cribo_bf58d0_mypackage_utils_helper']
+    module = types.ModuleType('__cribo_bf58d0_mypackage_utils_helper')
+    module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/init_reexports/mypackage/utils/helper.py'
+    sys.modules['__cribo_bf58d0_mypackage_utils_helper'] = module
+    sys.modules['mypackage.utils.helper'] = module
+    """Helper utilities."""
 
-    def format_data(data):
-        """Format the processed data."""
-        return f"Formatted: {data}"
-    module.format_data = format_data
+    def helper_function(data):
+        """Helper function for processing data."""
+        return f"Helped: {data}"
+    module.helper_function = helper_function
     return module
-def __cribo_init___cribo_3992ed_mypackage_data_processor():
-    if '__cribo_3992ed_mypackage_data_processor' in sys.modules:
-        return sys.modules['__cribo_3992ed_mypackage_data_processor']
-    module = types.ModuleType('__cribo_3992ed_mypackage_data_processor')
-    module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/init_reexports/mypackage/data_processor.py'
-    sys.modules['__cribo_3992ed_mypackage_data_processor'] = module
-    sys.modules['mypackage.data_processor'] = module
-    """Data processing module."""
-
-    def process_data(data):
-        """Process the input data."""
-        processed = data.copy()
-        processed["processed"] = True
-        return processed
-    module.process_data = process_data
+def __cribo_init___cribo_f6dfc4_mypackage_utils_constants():
+    if '__cribo_f6dfc4_mypackage_utils_constants' in sys.modules:
+        return sys.modules['__cribo_f6dfc4_mypackage_utils_constants']
+    module = types.ModuleType('__cribo_f6dfc4_mypackage_utils_constants')
+    module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/init_reexports/mypackage/utils/constants.py'
+    sys.modules['__cribo_f6dfc4_mypackage_utils_constants'] = module
+    sys.modules['mypackage.utils.constants'] = module
+    """Constants module."""
+    MAX_ITEMS = 100
+    module.MAX_ITEMS = MAX_ITEMS
+    DEFAULT_VALUE = "default"
+    module.DEFAULT_VALUE = DEFAULT_VALUE
     return module
 def __cribo_init___cribo_1af1ed_mypackage_utils():
     if '__cribo_1af1ed_mypackage_utils' in sys.modules:
@@ -125,8 +125,8 @@ def __cribo_init___cribo_d70f30_mypackage():
     DEBUG_MODE = config.DEBUG
     module.__all__ = ['process_data', 'format_data', 'config', 'helper_function', '__version__']
     return module
-__cribo_modules = {'mypackage.utils.constants': '__cribo_f6dfc4_mypackage_utils_constants', 'mypackage.utils.helper': '__cribo_bf58d0_mypackage_utils_helper', 'mypackage.config': '__cribo_fbc73e_mypackage_config', 'mypackage.formatter': '__cribo_dc4b98_mypackage_formatter', 'mypackage.data_processor': '__cribo_3992ed_mypackage_data_processor', 'mypackage.utils': '__cribo_1af1ed_mypackage_utils', 'mypackage': '__cribo_d70f30_mypackage'}
-__cribo_init_functions = {'__cribo_f6dfc4_mypackage_utils_constants': __cribo_init___cribo_f6dfc4_mypackage_utils_constants, '__cribo_bf58d0_mypackage_utils_helper': __cribo_init___cribo_bf58d0_mypackage_utils_helper, '__cribo_fbc73e_mypackage_config': __cribo_init___cribo_fbc73e_mypackage_config, '__cribo_dc4b98_mypackage_formatter': __cribo_init___cribo_dc4b98_mypackage_formatter, '__cribo_3992ed_mypackage_data_processor': __cribo_init___cribo_3992ed_mypackage_data_processor, '__cribo_1af1ed_mypackage_utils': __cribo_init___cribo_1af1ed_mypackage_utils, '__cribo_d70f30_mypackage': __cribo_init___cribo_d70f30_mypackage}
+__cribo_modules = {'mypackage.data_processor': '__cribo_3992ed_mypackage_data_processor', 'mypackage.formatter': '__cribo_dc4b98_mypackage_formatter', 'mypackage.config': '__cribo_fbc73e_mypackage_config', 'mypackage.utils.helper': '__cribo_bf58d0_mypackage_utils_helper', 'mypackage.utils.constants': '__cribo_f6dfc4_mypackage_utils_constants', 'mypackage.utils': '__cribo_1af1ed_mypackage_utils', 'mypackage': '__cribo_d70f30_mypackage'}
+__cribo_init_functions = {'__cribo_3992ed_mypackage_data_processor': __cribo_init___cribo_3992ed_mypackage_data_processor, '__cribo_dc4b98_mypackage_formatter': __cribo_init___cribo_dc4b98_mypackage_formatter, '__cribo_fbc73e_mypackage_config': __cribo_init___cribo_fbc73e_mypackage_config, '__cribo_bf58d0_mypackage_utils_helper': __cribo_init___cribo_bf58d0_mypackage_utils_helper, '__cribo_f6dfc4_mypackage_utils_constants': __cribo_init___cribo_f6dfc4_mypackage_utils_constants, '__cribo_1af1ed_mypackage_utils': __cribo_init___cribo_1af1ed_mypackage_utils, '__cribo_d70f30_mypackage': __cribo_init___cribo_d70f30_mypackage}
 class CriboBundledFinder:
 
     def __init__(self, module_registry, init_functions):
@@ -144,11 +144,11 @@ class CriboBundledFinder:
             return importlib.util.find_spec(synthetic_name)
         return None
 sys.meta_path.insert(0, CriboBundledFinder(__cribo_modules, __cribo_init_functions))
-__cribo_init___cribo_f6dfc4_mypackage_utils_constants()
-__cribo_init___cribo_bf58d0_mypackage_utils_helper()
-__cribo_init___cribo_fbc73e_mypackage_config()
-__cribo_init___cribo_dc4b98_mypackage_formatter()
 __cribo_init___cribo_3992ed_mypackage_data_processor()
+__cribo_init___cribo_dc4b98_mypackage_formatter()
+__cribo_init___cribo_fbc73e_mypackage_config()
+__cribo_init___cribo_bf58d0_mypackage_utils_helper()
+__cribo_init___cribo_f6dfc4_mypackage_utils_constants()
 __cribo_init___cribo_1af1ed_mypackage_utils()
 __cribo_init___cribo_d70f30_mypackage()
 '''\nTest script demonstrating __init__.py re-export preservation.\n\nThis fixture tests that imports in __init__.py files are preserved even if they\nappear "unused" within that file, as they are typically re-exports for the package interface.\n'''

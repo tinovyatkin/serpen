@@ -112,10 +112,9 @@ impl Bundler {
             "Before filtering - graph has {} modules",
             graph.get_modules().len()
         );
-        // Temporarily disable filtering to debug topological sort
-        // *graph = graph.filter_reachable_from(&entry_module_name)?;
+        *graph = graph.filter_reachable_from(&entry_module_name)?;
         debug!(
-            "After filtering - graph has {} modules (filtering disabled for debugging)",
+            "After filtering - graph has {} modules",
             graph.get_modules().len()
         );
 
