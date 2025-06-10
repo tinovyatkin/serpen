@@ -59,6 +59,7 @@ class UserResponse(BaseModel):
     is_active: bool
     bio: Optional[str] = None
 """Schemas package initialization."""
+from pydantic import BaseModel, EmailStr, Field
 """Pydantic test project entry point."""
 from pydantic import ValidationError
 def main():

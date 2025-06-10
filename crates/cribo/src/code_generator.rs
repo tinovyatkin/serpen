@@ -21,6 +21,7 @@ struct InlineContext<'a> {
     global_symbols: &'a mut IndexSet<String>,
     module_renames: &'a mut IndexMap<String, IndexMap<String, String>>,
     inlined_stmts: &'a mut Vec<Stmt>,
+    deferred_imports: &'a mut Vec<(String, Stmt)>, // (module_name, import_stmt)
 }
 
 use crate::dependency_graph::ModuleNode;
@@ -318,7 +319,9 @@ impl HybridStaticBundler {
         // Track bundled modules
         for (module_name, _, _, _) in &modules {
             self.bundled_modules.insert(module_name.clone());
+            log::debug!("Added '{}' to bundled modules", module_name);
         }
+        log::debug!("All bundled modules: {:?}", self.bundled_modules);
 
         // Check which modules are imported directly (e.g., import module_name)
         let directly_imported_modules =
@@ -428,6 +431,7 @@ impl HybridStaticBundler {
         // Collect global symbols from the entry module first
         let mut global_symbols = self.collect_global_symbols(&modules, entry_module_name);
         let mut symbol_renames = IndexMap::new();
+        let mut deferred_imports = Vec::new();
 
         // Inline the inlinable modules BEFORE initializing wrapper modules
         // This ensures that any symbols referenced by wrapper modules are already defined
@@ -439,6 +443,7 @@ impl HybridStaticBundler {
                 global_symbols: &mut global_symbols,
                 module_renames: &mut symbol_renames,
                 inlined_stmts: &mut inlined_stmts,
+                deferred_imports: &mut deferred_imports,
             };
             self.inline_module(&module_name, ast, &mut inline_ctx)?;
             log::debug!(
@@ -447,6 +452,17 @@ impl HybridStaticBundler {
                 module_name
             );
             final_body.extend(inlined_stmts);
+        }
+
+        // Now process all deferred imports with complete rename information
+        log::debug!("Processing {} deferred imports", deferred_imports.len());
+        for (module_name, import_stmt) in deferred_imports {
+            let transformed_stmts = self.rewrite_import_in_stmt_multiple_with_context(
+                import_stmt,
+                &module_name,
+                &symbol_renames,
+            );
+            final_body.extend(transformed_stmts);
         }
 
         // Initialize wrapper modules in dependency order AFTER inlined modules are defined
@@ -1764,10 +1780,25 @@ impl HybridStaticBundler {
             // This is a relative import
             let mut parts: Vec<&str> = current_module.split('.').collect();
 
-            // For level 1 (.module), we stay in the current package
-            // For level 2 (..module), we go up one level, etc.
-            // So we remove (level - 1) parts
-            for _ in 0..(import_from.level - 1) {
+            // For relative imports, we need to go up to the parent package
+            // Level 1 (.) = current package
+            // Level 2 (..) = parent package, etc.
+            
+            // Special handling for __init__.py modules:
+            // If the current module is likely a package __init__.py (e.g., "core.database"),
+            // we shouldn't pop anything for level 1 imports, as we're already at the package level
+            let is_likely_init = !self.bundled_modules.contains(&format!("{}.py", current_module))
+                && self.bundled_modules.contains(current_module);
+            
+            if !is_likely_init {
+                // For regular modules, remove the current module name to get to its package
+                if !parts.is_empty() {
+                    parts.pop();
+                }
+            }
+            
+            // Then go up additional levels for .. imports
+            for _ in 1..import_from.level {
                 if parts.is_empty() {
                     log::debug!("Invalid relative import - ran out of parent levels");
                     return None; // Invalid relative import
@@ -1919,13 +1950,14 @@ impl HybridStaticBundler {
         for stmt in ast.body {
             match &stmt {
                 Stmt::Import(_) | Stmt::ImportFrom(_) => {
-                    // Skip imports - they should be handled separately
+                    // Defer imports to be processed after all modules are inlined
                     if !self.is_hoisted_import(&stmt) {
                         log::debug!(
-                            "Skipping import in inlined module '{}': {:?}",
+                            "Deferring import in inlined module '{}': {:?}",
                             module_name,
                             stmt
                         );
+                        ctx.deferred_imports.push((module_name.to_string(), stmt.clone()));
                     }
                 }
                 Stmt::FunctionDef(func_def) => {
@@ -2036,6 +2068,7 @@ impl HybridStaticBundler {
             let local_name = alias.asname.as_ref().unwrap_or(&alias.name);
 
             // Check if this symbol was renamed during inlining
+            // We need to look up renames in the SOURCE module, not the current module
             let actual_name = if let Some(module_renames) = symbol_renames.get(module_name) {
                 module_renames
                     .get(imported_name)
@@ -2186,11 +2219,13 @@ impl HybridStaticBundler {
         let resolved_module_name = self.resolve_relative_import(&import_from, current_module);
 
         let Some(module_name) = resolved_module_name else {
+            log::debug!("Failed to resolve relative import from module '{}'", current_module);
             return vec![Stmt::ImportFrom(import_from)];
         };
 
         log::debug!(
-            "Checking if resolved module '{}' is in bundled modules: {:?}",
+            "Resolved import from '{}' to '{}', checking if in bundled modules: {:?}",
+            current_module,
             module_name,
             self.bundled_modules
         );
@@ -2333,6 +2368,14 @@ impl HybridStaticBundler {
             return;
         }
 
+        // First, rename any references in the value expression using existing renames
+        let mut assign_clone = assign.clone();
+        assign_clone.value = Box::new(self.rename_expr_references(
+            &assign_clone.value,
+            module_renames,
+        ));
+        
+        // Then get the unique name for the target
         let renamed_name = self.get_unique_name(&name, ctx.global_symbols);
         if renamed_name != name {
             module_renames.insert(name.clone(), renamed_name.clone());
@@ -2345,11 +2388,11 @@ impl HybridStaticBundler {
         }
         ctx.global_symbols.insert(renamed_name.clone());
 
-        // Clone and rename the assignment
-        let mut assign_clone = assign.clone();
+        // Finally, update the target name
         if let Expr::Name(name_expr) = &mut assign_clone.targets[0] {
             name_expr.id = renamed_name.into();
         }
+        
         ctx.inlined_stmts.push(Stmt::Assign(assign_clone));
     }
 
@@ -2389,5 +2432,30 @@ impl HybridStaticBundler {
             name_expr.id = renamed_name.into();
         }
         ctx.inlined_stmts.push(Stmt::AnnAssign(ann_assign_clone));
+    }
+
+    /// Rename references in an expression based on module renames
+    fn rename_expr_references(
+        &self,
+        expr: &Expr,
+        module_renames: &IndexMap<String, String>,
+    ) -> Expr {
+        match expr {
+            Expr::Name(name) => {
+                let name_str = name.id.as_str();
+                if let Some(renamed) = module_renames.get(name_str) {
+                    Expr::Name(ExprName {
+                        id: renamed.as_str().into(),
+                        ctx: name.ctx,
+                        range: name.range,
+                    })
+                } else {
+                    expr.clone()
+                }
+            }
+            // For now, we only handle simple name references
+            // More complex expressions would need recursive handling
+            _ => expr.clone(),
+        }
     }
 }
