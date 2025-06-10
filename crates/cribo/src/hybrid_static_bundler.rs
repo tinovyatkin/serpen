@@ -224,32 +224,6 @@ impl HybridStaticBundler {
         format!("__cribo_{}_{}", short_hash, module_name_escaped)
     }
 
-    /// Get a deterministic file path that works across different build environments
-    fn get_deterministic_file_path(&self, module_path: &Path) -> String {
-        // Try to make path relative to entry path if we have one
-        let relative_path = self.try_get_relative_path(module_path);
-        if let Some(path) = relative_path {
-            return path;
-        }
-
-        // Fallback: use just the filename for deterministic output
-        // This provides enough information for debugging while being environment-independent
-        module_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| format!("<bundled>/{}", name))
-            .unwrap_or_else(|| "<bundled>/unknown.py".to_string())
-    }
-
-    /// Helper method to try getting a relative path, reducing nesting
-    fn try_get_relative_path(&self, module_path: &Path) -> Option<String> {
-        let entry_path_str = self.entry_path.as_ref()?;
-        let entry_path = Path::new(entry_path_str).canonicalize().ok()?;
-        let entry_dir = entry_path.parent()?;
-        let relative_path = module_path.strip_prefix(entry_dir).ok()?;
-        Some(relative_path.to_string_lossy().to_string())
-    }
-
     /// Bundle multiple modules using the hybrid approach
     pub fn bundle_modules(
         &mut self,
@@ -1172,7 +1146,7 @@ impl HybridStaticBundler {
     }
 
     /// Create module object
-    fn create_module_object_stmt(&self, synthetic_name: &str, module_path: &Path) -> Vec<Stmt> {
+    fn create_module_object_stmt(&self, synthetic_name: &str, _module_path: &Path) -> Vec<Stmt> {
         let module_call = Expr::Call(ExprCall {
             func: Box::new(Expr::Attribute(ExprAttribute {
                 value: Box::new(Expr::Name(ExprName {
@@ -1192,9 +1166,6 @@ impl HybridStaticBundler {
             range: TextRange::default(),
         });
 
-        // Create a deterministic file path that doesn't depend on the build environment
-        let file_path = self.get_deterministic_file_path(module_path);
-
         vec![
             // module = types.ModuleType(synthetic_name)
             Stmt::Assign(StmtAssign {
@@ -1206,7 +1177,7 @@ impl HybridStaticBundler {
                 value: Box::new(module_call),
                 range: TextRange::default(),
             }),
-            // module.__file__ = 'deterministic/path.py'
+            // module.__file__ = __file__  (points to the actual bundled file)
             Stmt::Assign(StmtAssign {
                 targets: vec![Expr::Attribute(ExprAttribute {
                     value: Box::new(Expr::Name(ExprName {
@@ -1218,7 +1189,11 @@ impl HybridStaticBundler {
                     ctx: ExprContext::Store,
                     range: TextRange::default(),
                 })],
-                value: Box::new(self.create_string_literal(&file_path)),
+                value: Box::new(Expr::Name(ExprName {
+                    id: "__file__".into(),
+                    ctx: ExprContext::Load,
+                    range: TextRange::default(),
+                })),
                 range: TextRange::default(),
             }),
         ]
