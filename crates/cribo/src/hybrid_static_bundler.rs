@@ -1,9 +1,9 @@
 use anyhow::Result;
 use indexmap::{IndexMap, IndexSet};
 use ruff_python_ast::{
-    Expr, ExprAttribute, ExprCall, ExprContext, ExprList, ExprName, ExprStringLiteral, Identifier,
-    ModModule, Stmt, StmtAssign, StmtFunctionDef, StmtIf, StmtImport, StmtImportFrom,
-    StringLiteralValue,
+    Comprehension, Expr, ExprAttribute, ExprCall, ExprContext, ExprList, ExprName,
+    ExprStringLiteral, Identifier, ModModule, Stmt, StmtAssign, StmtFunctionDef, StmtIf,
+    StmtImport, StmtImportFrom, StringLiteralValue,
 };
 use ruff_text_size::TextRange;
 use sha2::{Digest, Sha256};
@@ -84,7 +84,10 @@ impl HybridStaticBundler {
                 | Stmt::Match(_)
                 | Stmt::Raise(_)
                 | Stmt::Try(_)
-                | Stmt::Assert(_) => return true,
+                | Stmt::Assert(_)
+                | Stmt::Global(_)
+                | Stmt::Nonlocal(_)
+                | Stmt::Delete(_) => return true,
 
                 // Any other statement type is considered a side effect
                 _ => return true,
@@ -134,6 +137,25 @@ impl HybridStaticBundler {
             // Subscripts might trigger __getitem__, so it's a side effect
             Expr::Subscript(_) => true,
 
+            // Comprehensions need recursive checking of their parts
+            Expr::ListComp(comp) => {
+                Self::expression_has_side_effects(&comp.elt)
+                    || Self::generators_have_side_effects(&comp.generators)
+            }
+            Expr::SetComp(comp) => {
+                Self::expression_has_side_effects(&comp.elt)
+                    || Self::generators_have_side_effects(&comp.generators)
+            }
+            Expr::DictComp(comp) => {
+                Self::expression_has_side_effects(&comp.key)
+                    || Self::expression_has_side_effects(&comp.value)
+                    || Self::generators_have_side_effects(&comp.generators)
+            }
+            Expr::Generator(comp) => {
+                Self::expression_has_side_effects(&comp.elt)
+                    || Self::generators_have_side_effects(&comp.generators)
+            }
+
             // Any other expression type is considered to have side effects
             _ => true,
         }
@@ -145,6 +167,23 @@ impl HybridStaticBundler {
             return false;
         }
         matches!(&assign.targets[0], Expr::Name(name) if name.id.as_str() == "__all__")
+    }
+
+    /// Check if comprehension generators have side effects
+    fn generators_have_side_effects(generators: &[Comprehension]) -> bool {
+        for generator in generators {
+            // Check the iterator expression
+            if Self::expression_has_side_effects(&generator.iter) {
+                return true;
+            }
+            // Check all condition expressions
+            for condition in &generator.ifs {
+                if Self::expression_has_side_effects(condition) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Generate a hash from the module's file path relative to entry point
