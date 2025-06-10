@@ -50,8 +50,10 @@ fn get_path_filters() -> Vec<(&'static str, &'static str)> {
             r"line \d+, in import_module",
             "line <LINE>, in import_module",
         ),
+        // Remove Python traceback call indicators that vary between environments
+        // Pattern: Remove call indicators at the end of function call lines
+        (r"([^\n]+)\n[ ]*[~^]+[~^]*[ ]*", "$1"),
         // Note: File paths eliminated by using stdin execution (shows as <stdin>)
-        // Note: Python traceback call indicators removed by using -X tracebacklimit=1
     ]
 }
 
@@ -183,10 +185,8 @@ fn test_bundling_fixtures() {
         // Run ruff linting for cross-validation
         let ruff_results = run_ruff_lint_on_bundle(&bundled_code);
 
-        // Execute the bundled code via stdin with limited traceback for consistent snapshots
+        // Execute the bundled code via stdin for consistent snapshots
         let python_output = Command::new(&python_cmd)
-            .arg("-X")
-            .arg("tracebacklimit=1")
             .arg("-")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
