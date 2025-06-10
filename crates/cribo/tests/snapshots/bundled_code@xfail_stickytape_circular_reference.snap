@@ -11,7 +11,7 @@ def __cribo_init___cribo_996948_first():
     if '__cribo_996948_first' in sys.modules:
         return sys.modules['__cribo_996948_first']
     module = types.ModuleType('__cribo_996948_first')
-    module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/xfail_stickytape_circular_reference/first.py'
+    module.__file__ = 'first.py'
     sys.modules['__cribo_996948_first'] = module
     sys.modules['first'] = module
     second = sys.modules['second']
@@ -21,7 +21,7 @@ def __cribo_init___cribo_08a7dc_second():
     if '__cribo_08a7dc_second' in sys.modules:
         return sys.modules['__cribo_08a7dc_second']
     module = types.ModuleType('__cribo_08a7dc_second')
-    module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/xfail_stickytape_circular_reference/second.py'
+    module.__file__ = 'second.py'
     sys.modules['__cribo_08a7dc_second'] = module
     sys.modules['second'] = module
     first = sys.modules['first']

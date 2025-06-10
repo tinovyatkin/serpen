@@ -11,7 +11,7 @@ def __cribo_init___cribo_e3b0c4_greetings_irrelevant():
     if '__cribo_e3b0c4_greetings_irrelevant' in sys.modules:
         return sys.modules['__cribo_e3b0c4_greetings_irrelevant']
     module = types.ModuleType('__cribo_e3b0c4_greetings_irrelevant')
-    module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/xfail_stickytape_implicit_init_import/greetings/irrelevant.py'
+    module.__file__ = 'greetings/irrelevant.py'
     sys.modules['__cribo_e3b0c4_greetings_irrelevant'] = module
     sys.modules['greetings.irrelevant'] = module
     return module

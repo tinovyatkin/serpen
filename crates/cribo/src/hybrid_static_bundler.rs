@@ -224,6 +224,28 @@ impl HybridStaticBundler {
         format!("__cribo_{}_{}", short_hash, module_name_escaped)
     }
 
+    /// Get a deterministic file path that works across different build environments
+    fn get_deterministic_file_path(&self, module_path: &Path) -> String {
+        // Try to make path relative to entry path if we have one
+        if let Some(ref entry_path_str) = self.entry_path {
+            if let Ok(entry_path) = Path::new(entry_path_str).canonicalize() {
+                if let Some(entry_dir) = entry_path.parent() {
+                    if let Ok(relative_path) = module_path.strip_prefix(entry_dir) {
+                        return relative_path.to_string_lossy().to_string();
+                    }
+                }
+            }
+        }
+
+        // Fallback: use just the filename for deterministic output
+        // This provides enough information for debugging while being environment-independent
+        module_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| format!("<bundled>/{}", name))
+            .unwrap_or_else(|| "<bundled>/unknown.py".to_string())
+    }
+
     /// Bundle multiple modules using the hybrid approach
     pub fn bundle_modules(
         &mut self,
@@ -1166,6 +1188,9 @@ impl HybridStaticBundler {
             range: TextRange::default(),
         });
 
+        // Create a deterministic file path that doesn't depend on the build environment
+        let file_path = self.get_deterministic_file_path(module_path);
+
         vec![
             // module = types.ModuleType(synthetic_name)
             Stmt::Assign(StmtAssign {
@@ -1177,7 +1202,7 @@ impl HybridStaticBundler {
                 value: Box::new(module_call),
                 range: TextRange::default(),
             }),
-            // module.__file__ = 'original/path.py'
+            // module.__file__ = 'deterministic/path.py'
             Stmt::Assign(StmtAssign {
                 targets: vec![Expr::Attribute(ExprAttribute {
                     value: Box::new(Expr::Name(ExprName {
@@ -1189,7 +1214,7 @@ impl HybridStaticBundler {
                     ctx: ExprContext::Store,
                     range: TextRange::default(),
                 })],
-                value: Box::new(self.create_string_literal(&module_path.to_string_lossy())),
+                value: Box::new(self.create_string_literal(&file_path)),
                 range: TextRange::default(),
             }),
         ]

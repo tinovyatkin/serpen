@@ -11,7 +11,7 @@ def __cribo_init___cribo_bc01a2_greetings_greeting():
     if '__cribo_bc01a2_greetings_greeting' in sys.modules:
         return sys.modules['__cribo_bc01a2_greetings_greeting']
     module = types.ModuleType('__cribo_bc01a2_greetings_greeting')
-    module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/xfail_stickytape_explicit_relative_import/greetings/greeting.py'
+    module.__file__ = 'greetings/greeting.py'
     sys.modules['__cribo_bc01a2_greetings_greeting'] = module
     sys.modules['greetings.greeting'] = module
     from .messages import message
