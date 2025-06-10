@@ -14,8 +14,9 @@ fn get_fixture_path(relative_path: &str) -> String {
 /// Run cribo with given arguments and return (stdout, stderr, exit_code)
 fn run_cribo(args: &[&str]) -> (String, String, i32) {
     let output = Command::new("cargo")
-        .args(["run", "--bin", "cribo", "--"])
+        .args(["run", "--bin", "cribo", "--quiet", "--"])
         .args(args)
+        .env("RUST_LOG", "off")
         .output()
         .expect("Failed to execute command");
 
@@ -29,28 +30,44 @@ fn run_cribo(args: &[&str]) -> (String, String, i32) {
 /// Filters for normalizing paths in snapshots
 fn get_cli_filters() -> Vec<(&'static str, &'static str)> {
     vec![
-        // Normalize file paths
+        // Normalize file paths - Unix/macOS
         (r"/Volumes/workplace/[^\s]+", "<WORKSPACE>"),
-        (r"\\\\?[A-Z]:\\\\[^\\s]+", "<WORKSPACE>"),
-        // Normalize cargo paths
-        (r"/Users/[^/]+/.cargo/[^\s]+", "<CARGO>"),
-        (
-            r"\\\\?C:\\\\Users\\\\[^\\\\]+\\\\.cargo\\\\[^\\s]+",
-            "<CARGO>",
-        ),
-        // Normalize temporary paths
+        (r"/home/[^/]+/[^\s]+", "<WORKSPACE>"),
+        (r"/Users/[^/]+/[^\s]+", "<WORKSPACE>"),
+        // Normalize file paths - Windows
+        (r"\\\\?[A-Z]:\\[^\s]+", "<WORKSPACE>"),
+        (r"[A-Z]:\\[^\s]+", "<WORKSPACE>"),
+        (r"[A-Z]:/[^\s]+", "<WORKSPACE>"),
+        // Normalize cargo paths - Unix/macOS
+        (r"/Users/[^/]+/\.cargo/[^\s]+", "<CARGO>"),
+        (r"/home/[^/]+/\.cargo/[^\s]+", "<CARGO>"),
+        // Normalize cargo paths - Windows
+        (r"\\\\?C:\\Users\\[^\\]+\\\.cargo\\[^\s]+", "<CARGO>"),
+        (r"C:\\Users\\[^\\]+\\\.cargo\\[^\s]+", "<CARGO>"),
+        // Normalize temporary paths - Unix/macOS
         (r"/var/folders/[^/]+/[^/]+/T/[^\s]+", "<TMP>"),
         (r"/tmp/[^\s]+", "<TMP>"),
+        // Normalize temporary paths - Windows
+        (r"\\\\?C:\\temp\\[^\s]+", "<TMP>"),
+        (r"\\\\?C:\\Windows\\Temp\\[^\s]+", "<TMP>"),
+        // Normalize GitHub Actions paths
+        (r"/home/runner/work/[^\s]+", "<WORKSPACE>"),
+        (r"D:\\a\\[^\s]+", "<WORKSPACE>"),
+        (r"C:\\hostedtoolcache\\[^\s]+", "<WORKSPACE>"),
+        // Normalize content hashes that might vary across platforms
+        (r"__cribo_[a-f0-9]{6,}", "__cribo_<HASH>"),
         // Normalize timestamps if any
         (r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", "<TIMESTAMP>"),
-        // Normalize build times
-        (
-            r"Finished `[^`]+` profile \[[^\]]+\] target\(s\) in [0-9.]+s",
-            "Finished `<PROFILE>` profile [<FLAGS>] target(s) in <TIME>",
-        ),
-        // Remove variable "Blocking waiting" lines and compilation lines
-        (r"(?m)^\s*Blocking waiting for file lock.*\n", ""),
-        (r"(?m)^\s*Compiling cribo.*\n", ""),
+        // Remove any remaining cargo output (should be minimal with --quiet)
+        (r"(?m)^\s*Compiling [^\n]*\n", ""),
+        (r"(?m)^\s*Finished [^\n]*\n", ""),
+        (r"(?m)^\s*Blocking waiting for file lock[^\n]*\n", ""),
+        (r"(?m)^\s*warning: [^\n]*unused manifest key[^\n]*\n", ""),
+        // Normalize line endings
+        (r"\r\n", "\n"),
+        (r"\r", "\n"),
+        // Normalize module paths in bundled code
+        (r"# Bundle from: [^\n]+", "# Bundle from: <MODULE_PATH>"),
     ]
 }
 

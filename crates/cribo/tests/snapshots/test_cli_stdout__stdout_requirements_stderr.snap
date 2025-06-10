@@ -2,6 +2,4 @@
 source: crates/cribo/tests/test_cli_stdout.rs
 expression: stderr
 ---
-warning: <WORKSPACE> unused manifest key: workspace.package.default-run
-    Finished `<PROFILE>` profile [<FLAGS>] target(s) in <TIME>
-     Running `<WORKSPACE> --entry <WORKSPACE> --stdout --emit-requirements`
+

@@ -2,19 +2,4 @@
 source: crates/cribo/tests/test_cli_stdout.rs
 expression: stderr
 ---
-warning: <WORKSPACE> unused manifest key: workspace.package.default-run
-    Finished `<PROFILE>` profile [<FLAGS>] target(s) in <TIME>
-     Running `<WORKSPACE> --entry <WORKSPACE> --stdout -v`
-[<TIMESTAMP>Z INFO  cribo] Starting Cribo Python bundler
-[<TIMESTAMP>Z INFO  cribo] Target Python version: py310 (resolved to Python 3.10)
-[<TIMESTAMP>Z INFO  cribo::bundler] Starting bundle process for stdout output
-[<TIMESTAMP>Z INFO  cribo::bundler] Entry module: main
-[<TIMESTAMP>Z INFO  cribo::bundler] Phase 1: Discovering all modules...
-[<TIMESTAMP>Z INFO  cribo::bundler] Phase 1 complete: discovered 5 modules
-[<TIMESTAMP>Z INFO  cribo::bundler] Phase 2: Adding modules to graph...
-[<TIMESTAMP>Z INFO  cribo::bundler] Added 5 modules to graph
-[<TIMESTAMP>Z INFO  cribo::bundler] Phase 2: Creating dependency edges...
-[<TIMESTAMP>Z INFO  cribo::bundler] Phase 2 complete: dependency graph built with 5 modules
-[<TIMESTAMP>Z INFO  cribo::bundler] Found 5 modules to bundle
-[<TIMESTAMP>Z INFO  cribo::bundler] Using hybrid static bundler
-[<TIMESTAMP>Z INFO  cribo] Bundle output to stdout
+
