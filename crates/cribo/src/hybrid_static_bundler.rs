@@ -227,14 +227,9 @@ impl HybridStaticBundler {
     /// Get a deterministic file path that works across different build environments
     fn get_deterministic_file_path(&self, module_path: &Path) -> String {
         // Try to make path relative to entry path if we have one
-        if let Some(ref entry_path_str) = self.entry_path {
-            if let Ok(entry_path) = Path::new(entry_path_str).canonicalize() {
-                if let Some(entry_dir) = entry_path.parent() {
-                    if let Ok(relative_path) = module_path.strip_prefix(entry_dir) {
-                        return relative_path.to_string_lossy().to_string();
-                    }
-                }
-            }
+        let relative_path = self.try_get_relative_path(module_path);
+        if let Some(path) = relative_path {
+            return path;
         }
 
         // Fallback: use just the filename for deterministic output
@@ -244,6 +239,15 @@ impl HybridStaticBundler {
             .and_then(|name| name.to_str())
             .map(|name| format!("<bundled>/{}", name))
             .unwrap_or_else(|| "<bundled>/unknown.py".to_string())
+    }
+
+    /// Helper method to try getting a relative path, reducing nesting
+    fn try_get_relative_path(&self, module_path: &Path) -> Option<String> {
+        let entry_path_str = self.entry_path.as_ref()?;
+        let entry_path = Path::new(entry_path_str).canonicalize().ok()?;
+        let entry_dir = entry_path.parent()?;
+        let relative_path = module_path.strip_prefix(entry_dir).ok()?;
+        Some(relative_path.to_string_lossy().to_string())
     }
 
     /// Bundle multiple modules using the hybrid approach
