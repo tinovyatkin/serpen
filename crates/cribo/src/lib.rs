@@ -1,4 +1,3 @@
-pub mod ast_rewriter;
 pub mod bundler;
 pub mod combine;
 pub mod config;

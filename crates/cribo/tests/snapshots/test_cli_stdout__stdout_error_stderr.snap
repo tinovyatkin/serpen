@@ -3,27 +3,6 @@ source: crates/cribo/tests/test_cli_stdout.rs
 expression: stderr
 ---
 warning: <WORKSPACE> unused manifest key: workspace.package.default-run
-warning: methods `transform_bundled_import_from`, `rewrite_import_in_stmt_multiple`, `transform_bundled_import_multiple`, and `handle_star_import_from_inlined_module` are never used
-    --> crates/cribo/src/hybrid_static_bundler.rs:1439:8
-     |
-39   | impl HybridStaticBundler {
-     | ------------------------ methods in this implementation
-...
-1439 |     fn transform_bundled_import_from(
-     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-...
-1500 |     fn rewrite_import_in_stmt_multiple(&self, stmt: Stmt) -> Vec<Stmt> {
-     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-...
-1533 |     fn transform_bundled_import_multiple(&self, import_stmt: StmtImport) -> Vec<Stmt> {
-     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-...
-2030 |     fn handle_star_import_from_inlined_module(
-     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-     |
-     = note: `#[warn(dead_code)]` on by default
-
-warning: `cribo` (lib) generated 1 warning
     Finished `<PROFILE>` profile [<FLAGS>] target(s) in <TIME>
      Running `<WORKSPACE> --entry nonexistent_file.py --stdout`
 Error: Failed to read file: "nonexistent_file.py"
