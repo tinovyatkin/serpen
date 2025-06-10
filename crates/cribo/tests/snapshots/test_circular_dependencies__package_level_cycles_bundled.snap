@@ -7,12 +7,12 @@ expression: bundled_content
 # https://github.com/ophidiarium/cribo
 
 import sys, types
-def __cribo_init___cribo_858e3b_pkg1():
-    if '__cribo_858e3b_pkg1' in sys.modules:
-        return sys.modules['__cribo_858e3b_pkg1']
-    module = types.ModuleType('__cribo_858e3b_pkg1')
+def __cribo_init___cribo_176078_pkg1():
+    if '__cribo_176078_pkg1' in sys.modules:
+        return sys.modules['__cribo_176078_pkg1']
+    module = types.ModuleType('__cribo_176078_pkg1')
     module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/circular_dependencies/package_level_cycles/pkg1/__init__.py'
-    sys.modules['__cribo_858e3b_pkg1'] = module
+    sys.modules['__cribo_176078_pkg1'] = module
     sys.modules['pkg1'] = module
 
     def main_function():
@@ -25,8 +25,8 @@ def __cribo_init___cribo_858e3b_pkg1():
         return "pkg1_utility"
     module.utility_function = utility_function
     return module
-__cribo_modules = {'pkg1': '__cribo_858e3b_pkg1'}
-__cribo_init_functions = {'__cribo_858e3b_pkg1': __cribo_init___cribo_858e3b_pkg1}
+__cribo_modules = {'pkg1': '__cribo_176078_pkg1'}
+__cribo_init_functions = {'__cribo_176078_pkg1': __cribo_init___cribo_176078_pkg1}
 class CriboBundledFinder:
 
     def __init__(self, module_registry, init_functions):
@@ -51,7 +51,7 @@ def helper_function():
 def another_helper():
     """Another function in pkg2"""
     return "pkg2_helper"
-__cribo_init___cribo_858e3b_pkg1()
+__cribo_init___cribo_176078_pkg1()
 sys.modules['pkg1'].helper_function = helper_function
 pkg1 = sys.modules['pkg1']
 def main():

@@ -8,12 +8,12 @@ input_file: crates/cribo/tests/fixtures/bundling/init_reexports/main.py
 
 import os
 import sys, types
-def __cribo_init___cribo_117426_mypackage_config():
-    if '__cribo_117426_mypackage_config' in sys.modules:
-        return sys.modules['__cribo_117426_mypackage_config']
-    module = types.ModuleType('__cribo_117426_mypackage_config')
+def __cribo_init___cribo_9a4a7e_mypackage_config():
+    if '__cribo_9a4a7e_mypackage_config' in sys.modules:
+        return sys.modules['__cribo_9a4a7e_mypackage_config']
+    module = types.ModuleType('__cribo_9a4a7e_mypackage_config')
     module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/init_reexports/mypackage/config.py'
-    sys.modules['__cribo_117426_mypackage_config'] = module
+    sys.modules['__cribo_9a4a7e_mypackage_config'] = module
     sys.modules['mypackage.config'] = module
     """Configuration module."""
     import os
@@ -29,12 +29,12 @@ def __cribo_init___cribo_117426_mypackage_config():
     config = Config()
     module.config = config
     return module
-def __cribo_init___cribo_8e2c1f_mypackage():
-    if '__cribo_8e2c1f_mypackage' in sys.modules:
-        return sys.modules['__cribo_8e2c1f_mypackage']
-    module = types.ModuleType('__cribo_8e2c1f_mypackage')
+def __cribo_init___cribo_a81151_mypackage():
+    if '__cribo_a81151_mypackage' in sys.modules:
+        return sys.modules['__cribo_a81151_mypackage']
+    module = types.ModuleType('__cribo_a81151_mypackage')
     module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/init_reexports/mypackage/__init__.py'
-    sys.modules['__cribo_8e2c1f_mypackage'] = module
+    sys.modules['__cribo_a81151_mypackage'] = module
     sys.modules['mypackage'] = module
     """\nPackage initialization with re-exports.\n\nThis __init__.py demonstrates the pattern where imports are made but not directly used\nwithin this file - they are re-exports for the package interface.\nThese imports should NOT be stripped as unused, even though they don't appear\nto be used within this file itself.\n"""
     config = sys.modules['mypackage.config'].config
@@ -45,8 +45,8 @@ def __cribo_init___cribo_8e2c1f_mypackage():
     DEBUG_MODE = config.DEBUG
     module.__all__ = ['process_data', 'format_data', 'config', 'helper_function', '__version__']
     return module
-__cribo_modules = {'mypackage.config': '__cribo_117426_mypackage_config', 'mypackage': '__cribo_8e2c1f_mypackage'}
-__cribo_init_functions = {'__cribo_117426_mypackage_config': __cribo_init___cribo_117426_mypackage_config, '__cribo_8e2c1f_mypackage': __cribo_init___cribo_8e2c1f_mypackage}
+__cribo_modules = {'mypackage.config': '__cribo_9a4a7e_mypackage_config', 'mypackage': '__cribo_a81151_mypackage'}
+__cribo_init_functions = {'__cribo_9a4a7e_mypackage_config': __cribo_init___cribo_9a4a7e_mypackage_config, '__cribo_a81151_mypackage': __cribo_init___cribo_a81151_mypackage}
 class CriboBundledFinder:
 
     def __init__(self, module_registry, init_functions):
@@ -82,8 +82,8 @@ def helper_function(data):
 MAX_ITEMS = 100
 DEFAULT_VALUE = "default"
 """Utils subpackage with re-exports."""
-__cribo_init___cribo_117426_mypackage_config()
-__cribo_init___cribo_8e2c1f_mypackage()
+__cribo_init___cribo_9a4a7e_mypackage_config()
+__cribo_init___cribo_a81151_mypackage()
 sys.modules['mypackage'].process_data = process_data
 sys.modules['mypackage'].format_data = format_data
 sys.modules['mypackage'].helper_function = helper_function

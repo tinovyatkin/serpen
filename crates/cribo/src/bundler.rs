@@ -1078,11 +1078,23 @@ impl Bundler {
                 .with_context(|| format!("Failed to read module file: {:?}", module.path))?;
             let source = crate::util::normalize_line_endings(source);
 
+            // Calculate content hash for deterministic module naming
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(source.as_bytes());
+            let hash = hasher.finalize();
+            let content_hash = format!("{:x}", hash);
+
             // Parse into AST
             let ast = ruff_python_parser::parse_module(&source)
                 .with_context(|| format!("Failed to parse module: {:?}", module.path))?;
 
-            module_asts.push((module.name.clone(), ast.into_syntax(), module.path.clone()));
+            module_asts.push((
+                module.name.clone(),
+                ast.into_syntax(),
+                module.path.clone(),
+                content_hash,
+            ));
         }
 
         // Bundle all modules using static bundler

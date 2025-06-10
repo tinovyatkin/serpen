@@ -7,12 +7,12 @@ expression: bundled_content
 # https://github.com/ophidiarium/cribo
 
 import sys, types
-def __cribo_init___cribo_1d1bea_module_a():
-    if '__cribo_1d1bea_module_a' in sys.modules:
-        return sys.modules['__cribo_1d1bea_module_a']
-    module = types.ModuleType('__cribo_1d1bea_module_a')
+def __cribo_init___cribo_ae45fc_module_a():
+    if '__cribo_ae45fc_module_a' in sys.modules:
+        return sys.modules['__cribo_ae45fc_module_a']
+    module = types.ModuleType('__cribo_ae45fc_module_a')
     module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/circular_dependencies/three_module_cycle/module_a.py'
-    sys.modules['__cribo_1d1bea_module_a'] = module
+    sys.modules['__cribo_ae45fc_module_a'] = module
     sys.modules['module_a'] = module
 
     def process_a():
@@ -24,8 +24,8 @@ def __cribo_init___cribo_1d1bea_module_a():
         return "value_from_A"
     module.get_value_a = get_value_a
     return module
-__cribo_modules = {'module_a': '__cribo_1d1bea_module_a'}
-__cribo_init_functions = {'__cribo_1d1bea_module_a': __cribo_init___cribo_1d1bea_module_a}
+__cribo_modules = {'module_a': '__cribo_ae45fc_module_a'}
+__cribo_init_functions = {'__cribo_ae45fc_module_a': __cribo_init___cribo_ae45fc_module_a}
 class CriboBundledFinder:
 
     def __init__(self, module_registry, init_functions):
@@ -54,7 +54,7 @@ def process_c():
     return f"C(using_{value})"
 def get_value_c():
     return "value_from_C"
-__cribo_init___cribo_1d1bea_module_a()
+__cribo_init___cribo_ae45fc_module_a()
 sys.modules['module_a'].process_b = process_b
 module_a = sys.modules['module_a']
 def main():

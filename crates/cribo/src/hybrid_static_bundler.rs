@@ -6,7 +6,6 @@ use ruff_python_ast::{
     StmtImport, StmtImportFrom, StringLiteralValue,
 };
 use ruff_text_size::TextRange;
-use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 /// Context for module transformation operations
@@ -214,74 +213,21 @@ impl HybridStaticBundler {
         false
     }
 
-    /// Generate a hash from the module's file path relative to entry point
-    fn generate_module_hash(&self, module_path: &Path) -> String {
-        let mut hasher = Sha256::new();
-
-        // Create relative path for deterministic hashing across environments
-        let path_str = if let Some(entry_path) = &self.entry_path {
-            // Get the directory containing the entry point
-            let entry_dir = Path::new(entry_path).parent().unwrap_or(Path::new(""));
-
-            // Try to strip the common prefix to get relative path
-            if let Ok(relative_path) = module_path.strip_prefix(entry_dir) {
-                relative_path.to_string_lossy().to_string()
-            } else {
-                // If strip_prefix fails, find common directory structure patterns
-                self.extract_relative_path_fallback(module_path)
-            }
-        } else {
-            // No entry path available, use fallback method
-            self.extract_relative_path_fallback(module_path)
-        };
-
-        log::debug!("Hash input for path {:?}: {}", module_path, path_str);
-        hasher.update(path_str.as_bytes());
-
-        let hash = hasher.finalize();
-        // Take first 6 characters of hex for readability
-        format!("{:x}", hash)[..6].to_string()
-    }
-
-    /// Extract a relative path for hashing when common prefixes aren't available
-    fn extract_relative_path_fallback(&self, module_path: &Path) -> String {
-        // Use the last 2-3 path components to maintain some structure while being deterministic
-        // This approach works for any directory structure without hardcoding specific patterns
-        let components: Vec<_> = module_path
-            .components()
-            .rev()
-            .take(3) // Take up to 3 components from the end
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .map(|c| c.as_os_str().to_string_lossy().to_string())
-            .collect();
-
-        if components.is_empty() {
-            // Ultimate fallback: use just the filename
-            module_path
-                .file_name()
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| "unknown".to_string())
-        } else {
-            components.join("/")
-        }
-    }
-
-    /// Generate synthetic module name
-    fn get_synthetic_module_name(&self, module_name: &str, module_path: &Path) -> String {
-        let hash = self.generate_module_hash(module_path);
+    /// Generate synthetic module name using content hash
+    fn get_synthetic_module_name(&self, module_name: &str, content_hash: &str) -> String {
         let module_name_escaped = module_name
             .chars()
             .map(|c| if c == '.' { '_' } else { c })
             .collect::<String>();
-        format!("__cribo_{}_{}", hash, module_name_escaped)
+        // Use first 6 characters of content hash for readability
+        let short_hash = &content_hash[..6];
+        format!("__cribo_{}_{}", short_hash, module_name_escaped)
     }
 
     /// Bundle multiple modules using the hybrid approach
     pub fn bundle_modules(
         &mut self,
-        modules: Vec<(String, ModModule, PathBuf)>,
+        modules: Vec<(String, ModModule, PathBuf, String)>, // Added content hash
         sorted_module_nodes: &[&ModuleNode],
         entry_module_name: &str,
     ) -> Result<ModModule> {
@@ -290,7 +236,10 @@ impl HybridStaticBundler {
         log::debug!("Entry module name: {}", entry_module_name);
         log::debug!(
             "Module names in modules vector: {:?}",
-            modules.iter().map(|(name, _, _)| name).collect::<Vec<_>>()
+            modules
+                .iter()
+                .map(|(name, _, _, _)| name)
+                .collect::<Vec<_>>()
         );
 
         // Store entry path for relative path calculation
@@ -299,7 +248,7 @@ impl HybridStaticBundler {
         }
 
         // Track bundled modules
-        for (module_name, _, _) in &modules {
+        for (module_name, _, _, _) in &modules {
             self.bundled_modules.insert(module_name.clone());
         }
 
@@ -313,7 +262,7 @@ impl HybridStaticBundler {
         let mut wrapper_modules = Vec::new();
         let mut module_exports_map = IndexMap::new();
 
-        for (module_name, ast, module_path) in &modules {
+        for (module_name, ast, module_path, content_hash) in &modules {
             if module_name == entry_module_name {
                 continue;
             }
@@ -340,30 +289,40 @@ impl HybridStaticBundler {
                     module_name,
                     reason
                 );
-                wrapper_modules.push((module_name.clone(), ast.clone(), module_path.clone()));
+                wrapper_modules.push((
+                    module_name.clone(),
+                    ast.clone(),
+                    module_path.clone(),
+                    content_hash.clone(),
+                ));
             } else {
                 log::debug!(
                     "Module '{}' has no side effects and is not imported directly - can be inlined",
                     module_name
                 );
-                inlinable_modules.push((module_name.clone(), ast.clone(), module_path.clone()));
+                inlinable_modules.push((
+                    module_name.clone(),
+                    ast.clone(),
+                    module_path.clone(),
+                    content_hash.clone(),
+                ));
             }
         }
 
         // First pass: collect imports from ALL modules (for hoisting)
-        for (_module_name, ast, _) in &modules {
+        for (_module_name, ast, _, _) in &modules {
             self.collect_imports_from_module(ast);
         }
 
         // Register wrapper modules
-        for (module_name, _ast, module_path) in &wrapper_modules {
+        for (module_name, _ast, _module_path, content_hash) in &wrapper_modules {
             self.module_exports.insert(
                 module_name.clone(),
                 module_exports_map.get(module_name).cloned().flatten(),
             );
 
-            // Register module with synthetic name
-            let synthetic_name = self.get_synthetic_module_name(module_name, module_path);
+            // Register module with synthetic name using content hash
+            let synthetic_name = self.get_synthetic_module_name(module_name, content_hash);
             self.module_registry
                 .insert(module_name.clone(), synthetic_name.clone());
 
@@ -383,7 +342,7 @@ impl HybridStaticBundler {
             final_body.extend(self.generate_import_infrastructure_without_registries());
 
             // Transform wrapper modules into init functions
-            for (module_name, ast, module_path) in wrapper_modules {
+            for (module_name, ast, module_path, _content_hash) in wrapper_modules {
                 let synthetic_name = self.module_registry[&module_name].clone();
                 let ctx = ModuleTransformContext {
                     module_name: &module_name,
@@ -404,7 +363,7 @@ impl HybridStaticBundler {
 
         // Inline the inlinable modules BEFORE initializing wrapper modules
         // This ensures that any symbols referenced by wrapper modules are already defined
-        for (module_name, ast, _module_path) in inlinable_modules {
+        for (module_name, ast, _module_path, _content_hash) in inlinable_modules {
             log::debug!("Inlining module '{}'", module_name);
             let mut inlined_stmts = Vec::new();
             let mut inline_ctx = InlineContext {
@@ -450,7 +409,7 @@ impl HybridStaticBundler {
         }
 
         // Finally, add entry module code (it's always last in topological order)
-        for (module_name, ast, _) in modules {
+        for (module_name, ast, _, _) in modules {
             if module_name != entry_module_name {
                 continue;
             }
@@ -1753,13 +1712,13 @@ impl HybridStaticBundler {
     /// Find which modules are imported directly in all modules
     fn find_directly_imported_modules(
         &self,
-        modules: &[(String, ModModule, PathBuf)],
+        modules: &[(String, ModModule, PathBuf, String)],
         _entry_module_name: &str,
     ) -> IndexSet<String> {
         let mut directly_imported = IndexSet::new();
 
         // Check all modules for direct imports
-        for (_module_name, ast, _) in modules {
+        for (_module_name, ast, _, _) in modules {
             for stmt in &ast.body {
                 self.collect_direct_imports(stmt, modules, &mut directly_imported);
             }
@@ -1772,14 +1731,17 @@ impl HybridStaticBundler {
     fn collect_direct_imports(
         &self,
         stmt: &Stmt,
-        modules: &[(String, ModModule, PathBuf)],
+        modules: &[(String, ModModule, PathBuf, String)],
         directly_imported: &mut IndexSet<String>,
     ) {
         if let Stmt::Import(import_stmt) = stmt {
             for alias in &import_stmt.names {
                 let imported_module = alias.name.as_str();
                 // Check if this is a bundled module
-                if modules.iter().any(|(name, _, _)| name == imported_module) {
+                if modules
+                    .iter()
+                    .any(|(name, _, _, _)| name == imported_module)
+                {
                     directly_imported.insert(imported_module.to_string());
                 }
             }
@@ -1789,13 +1751,13 @@ impl HybridStaticBundler {
     /// Collect all defined symbols in the global scope
     fn collect_global_symbols(
         &self,
-        modules: &[(String, ModModule, PathBuf)],
+        modules: &[(String, ModModule, PathBuf, String)],
         entry_module_name: &str,
     ) -> IndexSet<String> {
         let mut global_symbols = IndexSet::new();
 
         // Collect symbols from all modules that will be in the bundle
-        for (module_name, ast, _) in modules {
+        for (module_name, ast, _, _) in modules {
             if module_name == entry_module_name {
                 // For entry module, collect all top-level symbols
                 for stmt in &ast.body {
@@ -2027,12 +1989,13 @@ impl HybridStaticBundler {
     fn generate_post_init_attributes(
         &self,
         module_name: &str,
-        modules: &[(String, ModModule, PathBuf)],
+        modules: &[(String, ModModule, PathBuf, String)],
     ) -> Vec<Stmt> {
         let mut stmts = Vec::new();
 
         // Find the module's AST
-        let Some((_, ast, _)) = modules.iter().find(|(name, _, _)| name == module_name) else {
+        let Some((_, ast, _, _)) = modules.iter().find(|(name, _, _, _)| name == module_name)
+        else {
             return stmts;
         };
 
