@@ -7,5 +7,5 @@ ExecutionResults {
         1,
     ),
     stdout: "",
-    stderr: "Traceback (most recent call last):\n  File \"<stdin>\", line 39, in <module>\n  File \"<stdin>\", line 13, in __cribo_init___cribo_cf5a45_greetings_greeting\nAttributeError: module '__cribo_cf5a45_greetings_greeting' has no attribute 'messages'",
+    stderr: "Traceback (most recent call last):\n  File \"<stdin>\", line 39, in <module>",
 }

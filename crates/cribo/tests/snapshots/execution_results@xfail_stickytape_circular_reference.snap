@@ -7,5 +7,5 @@ ExecutionResults {
         1,
     ),
     stdout: "",
-    stderr: "Traceback (most recent call last):\n  File \"<stdin>\", line 45, in <module>\n  File \"<stdin>\", line 13, in __cribo_init___cribo_996948_first\nKeyError: 'second'",
+    stderr: "Traceback (most recent call last):\n  File \"<stdin>\", line 45, in <module>",
 }

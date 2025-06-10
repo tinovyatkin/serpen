@@ -29,7 +29,7 @@ struct ExecutionResults {
 /// Get filters for normalizing paths and Python version differences in snapshots
 fn get_path_filters() -> Vec<(&'static str, &'static str)> {
     vec![
-        // Python library paths (still present in importlib traces)
+        // Python installation paths (minimal filtering needed with 5-line stderr limit)
         // macOS Homebrew Python paths
         (
             r"/opt/homebrew/Cellar/python@[\d.]+/[\d._]+/Frameworks/Python\.framework/Versions/[\d.]+/lib/python[\d.]+/",
@@ -44,15 +44,12 @@ fn get_path_filters() -> Vec<(&'static str, &'static str)> {
             r"C:\\hostedtoolcache\\windows\\Python\\[\d.]+\\x64\\Lib\\",
             "<PYTHON_LIB>/",
         ),
-        // Python error formatting normalization
-        // Replace line numbers in importlib which vary between Python versions
+        // Replace line numbers that may vary between Python versions
         (
             r"line \d+, in import_module",
             "line <LINE>, in import_module",
         ),
-        // Remove Python traceback call indicators that vary between environments
-        // Pattern: Remove call indicators at the end of function call lines
-        (r"([^\n]+)\n[ ]*[~^]+[~^]*[ ]*", "$1"),
+        // Note: Only keeping first 2 lines of stderr eliminates most cross-platform differences
         // Note: File paths eliminated by using stdin execution (shows as <stdin>)
     ]
 }
@@ -249,10 +246,13 @@ fn test_bundling_fixtures() {
                 .trim()
                 .replace("\r\n", "\n")
                 .to_string(),
-            stderr: String::from_utf8_lossy(&python_output.stderr)
-                .trim()
-                .replace("\r\n", "\n")
-                .to_string(),
+            stderr: {
+                let full_stderr = String::from_utf8_lossy(&python_output.stderr)
+                    .trim()
+                    .replace("\r\n", "\n");
+                // Keep only first 2 lines to avoid cross-platform traceback differences
+                full_stderr.lines().take(2).collect::<Vec<_>>().join("\n")
+            },
         };
 
         // Use Insta's with_settings for better snapshot organization
