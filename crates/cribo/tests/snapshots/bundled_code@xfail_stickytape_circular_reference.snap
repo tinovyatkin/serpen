@@ -7,28 +7,28 @@ input_file: crates/cribo/tests/fixtures/bundling/xfail_stickytape_circular_refer
 # https://github.com/ophidiarium/cribo
 
 import sys, types
-def __cribo_init___cribo_ac4932_first():
-    if '__cribo_ac4932_first' in sys.modules:
-        return sys.modules['__cribo_ac4932_first']
-    module = types.ModuleType('__cribo_ac4932_first')
+def __cribo_init___cribo_078611_first():
+    if '__cribo_078611_first' in sys.modules:
+        return sys.modules['__cribo_078611_first']
+    module = types.ModuleType('__cribo_078611_first')
     module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/xfail_stickytape_circular_reference/first.py'
-    sys.modules['__cribo_ac4932_first'] = module
+    sys.modules['__cribo_078611_first'] = module
     sys.modules['first'] = module
     second = sys.modules['second']
     module.second = second
     return module
-def __cribo_init___cribo_0d4b36_second():
-    if '__cribo_0d4b36_second' in sys.modules:
-        return sys.modules['__cribo_0d4b36_second']
-    module = types.ModuleType('__cribo_0d4b36_second')
+def __cribo_init___cribo_a950cc_second():
+    if '__cribo_a950cc_second' in sys.modules:
+        return sys.modules['__cribo_a950cc_second']
+    module = types.ModuleType('__cribo_a950cc_second')
     module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/xfail_stickytape_circular_reference/second.py'
-    sys.modules['__cribo_0d4b36_second'] = module
+    sys.modules['__cribo_a950cc_second'] = module
     sys.modules['second'] = module
     first = sys.modules['first']
     module.first = first
     return module
-__cribo_modules = {'first': '__cribo_ac4932_first', 'second': '__cribo_0d4b36_second'}
-__cribo_init_functions = {'__cribo_ac4932_first': __cribo_init___cribo_ac4932_first, '__cribo_0d4b36_second': __cribo_init___cribo_0d4b36_second}
+__cribo_modules = {'first': '__cribo_078611_first', 'second': '__cribo_a950cc_second'}
+__cribo_init_functions = {'__cribo_078611_first': __cribo_init___cribo_078611_first, '__cribo_a950cc_second': __cribo_init___cribo_a950cc_second}
 class CriboBundledFinder:
 
     def __init__(self, module_registry, init_functions):
@@ -46,7 +46,7 @@ class CriboBundledFinder:
             return importlib.util.find_spec(synthetic_name)
         return None
 sys.meta_path.insert(0, CriboBundledFinder(__cribo_modules, __cribo_init_functions))
-__cribo_init___cribo_ac4932_first()
-__cribo_init___cribo_0d4b36_second()
+__cribo_init___cribo_078611_first()
+__cribo_init___cribo_a950cc_second()
 first = sys.modules['first']
 print("Hello")

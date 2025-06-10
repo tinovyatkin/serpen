@@ -8,18 +8,18 @@ input_file: crates/cribo/tests/fixtures/bundling/stickytape_script_using_stdlib_
 
 import xml.etree.ElementTree
 import sys, types
-def __cribo_init___cribo_b8ca7b_greeting():
-    if '__cribo_b8ca7b_greeting' in sys.modules:
-        return sys.modules['__cribo_b8ca7b_greeting']
-    module = types.ModuleType('__cribo_b8ca7b_greeting')
+def __cribo_init___cribo_96b076_greeting():
+    if '__cribo_96b076_greeting' in sys.modules:
+        return sys.modules['__cribo_96b076_greeting']
+    module = types.ModuleType('__cribo_96b076_greeting')
     module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/stickytape_script_using_stdlib_module_in_package/greeting.py'
-    sys.modules['__cribo_b8ca7b_greeting'] = module
+    sys.modules['__cribo_96b076_greeting'] = module
     sys.modules['greeting'] = module
     message = "Hello"
     module.message = message
     return module
-__cribo_modules = {'greeting': '__cribo_b8ca7b_greeting'}
-__cribo_init_functions = {'__cribo_b8ca7b_greeting': __cribo_init___cribo_b8ca7b_greeting}
+__cribo_modules = {'greeting': '__cribo_96b076_greeting'}
+__cribo_init_functions = {'__cribo_96b076_greeting': __cribo_init___cribo_96b076_greeting}
 class CriboBundledFinder:
 
     def __init__(self, module_registry, init_functions):
@@ -37,7 +37,7 @@ class CriboBundledFinder:
             return importlib.util.find_spec(synthetic_name)
         return None
 sys.meta_path.insert(0, CriboBundledFinder(__cribo_modules, __cribo_init_functions))
-__cribo_init___cribo_b8ca7b_greeting()
+__cribo_init___cribo_96b076_greeting()
 import xml.etree.ElementTree
 greeting = sys.modules['greeting']
 print(xml.etree.ElementTree.__name__)
