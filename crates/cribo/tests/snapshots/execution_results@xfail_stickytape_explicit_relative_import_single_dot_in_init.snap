@@ -7,5 +7,5 @@ ExecutionResults {
         1,
     ),
     stdout: "",
-    stderr: "Traceback (most recent call last):\n  File \"<TMP>/bundled.py\", line 34, in <module>\n    __cribo_init___cribo_ae061f_greetings()\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"<TMP>/bundled.py\", line 9, in __cribo_init___cribo_ae061f_greetings\n    greeting = sys.modules['greetings'].greeting\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: module '__cribo_ae061f_greetings' has no attribute 'greeting'",
+    stderr: "Traceback (most recent call last):\n  File \"<TMP>/bundled.py\", line 38, in <module>\n    __cribo_init___cribo_ae061f_greetings()\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"<TMP>/bundled.py\", line 13, in __cribo_init___cribo_ae061f_greetings\n    greeting = sys.modules['greetings'].greeting\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: module '__cribo_ae061f_greetings' has no attribute 'greeting'",
 }

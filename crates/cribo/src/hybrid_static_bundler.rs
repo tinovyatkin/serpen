@@ -238,9 +238,13 @@ impl HybridStaticBundler {
             }
         }
 
-        // First pass: collect imports and register wrapper modules only
-        for (module_name, ast, module_path) in &wrapper_modules {
+        // First pass: collect imports from ALL modules (for hoisting)
+        for (_module_name, ast, _) in &modules {
             self.collect_imports_from_module(ast);
+        }
+
+        // Register wrapper modules
+        for (module_name, _ast, module_path) in &wrapper_modules {
             self.module_exports.insert(
                 module_name.clone(),
                 module_exports_map.get(module_name).cloned().flatten(),

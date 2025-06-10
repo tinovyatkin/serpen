@@ -7,5 +7,5 @@ ExecutionResults {
         1,
     ),
     stdout: "",
-    stderr: "Traceback (most recent call last):\n  File \"<TMP>/bundled.py\", line 2, in <module>\n    from greetings import greeting\nModuleNotFoundError: No module named 'greetings'",
+    stderr: "Traceback (most recent call last):\n  File \"<TMP>/bundled.py\", line 6, in <module>\n    from greetings import greeting\nModuleNotFoundError: No module named 'greetings'",
 }

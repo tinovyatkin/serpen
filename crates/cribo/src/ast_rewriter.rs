@@ -5,6 +5,17 @@ use ruff_python_ast::{self as ast, Alias, Expr, ExprContext, Identifier, Stmt};
 use ruff_python_stdlib::{builtins, keyword};
 use ruff_text_size::TextRange;
 
+/// Import strategy for how a module should be bundled
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImportStrategy {
+    /// Module imported via `import module` - needs namespace
+    ModuleImport,
+    /// Module imported via `from module import items` - needs direct inlining
+    FromImport,
+    /// Module not imported directly (dependency of other modules)
+    Dependency,
+}
+
 /// Suffix used to identify relative import modules
 const REL_IMPORT_SUFFIX: &str = "_imported";
 
@@ -75,7 +86,7 @@ pub struct AstRewriter {
     /// Python version for builtin checks
     python_version: u8,
     /// Import strategies for each module (to know which are ModuleImport)
-    import_strategies: IndexMap<String, crate::emit::ImportStrategy>, // module_name -> strategy_type
+    import_strategies: IndexMap<String, ImportStrategy>, // module_name -> strategy_type
 }
 
 impl AstRewriter {
@@ -109,10 +120,7 @@ impl AstRewriter {
     }
 
     /// Set import strategies for modules
-    pub fn set_import_strategies(
-        &mut self,
-        strategies: &IndexMap<String, crate::emit::ImportStrategy>,
-    ) {
+    pub fn set_import_strategies(&mut self, strategies: &IndexMap<String, ImportStrategy>) {
         for (module, strategy) in strategies {
             self.import_strategies
                 .insert(module.clone(), strategy.clone());
@@ -1048,7 +1056,7 @@ impl AstRewriter {
         // Check if the source module uses ModuleImport strategy
         let needs_namespace_reference =
             if let Some(strategy) = self.import_strategies.get(&import_alias.module_name) {
-                matches!(strategy, crate::emit::ImportStrategy::ModuleImport)
+                matches!(strategy, ImportStrategy::ModuleImport)
             } else {
                 false
             };
@@ -1133,15 +1141,14 @@ impl AstRewriter {
         // Check if the source module was bundled with a specific import strategy
         if let Some(strategy) = self.import_strategies.get(&import_alias.module_name) {
             match strategy {
-                crate::emit::ImportStrategy::ModuleImport => {
+                ImportStrategy::ModuleImport => {
                     // The module was bundled with namespace, so reference it as module.item
                     format!(
                         "{}.{}",
                         import_alias.module_name, import_alias.original_name
                     )
                 }
-                crate::emit::ImportStrategy::FromImport
-                | crate::emit::ImportStrategy::Dependency => {
+                ImportStrategy::FromImport | ImportStrategy::Dependency => {
                     // Module was inlined directly, check for name conflicts
                     self.resolve_alias_name_for_inlined_module(import_alias)
                 }
@@ -1736,7 +1743,7 @@ impl AstRewriter {
         // Check if the target module uses ModuleImport strategy
         // If so, we should access the attribute through the module namespace
         if let Some(import_strategy) = self.import_strategies.get(&target_module_path) {
-            if matches!(import_strategy, crate::emit::ImportStrategy::ModuleImport) {
+            if matches!(import_strategy, ImportStrategy::ModuleImport) {
                 // For ModuleImport strategy, access the attribute through the module namespace
                 let module_attr_access = format!("{}.{}", target_module_path, attr_name);
                 log::debug!(
@@ -1991,7 +1998,7 @@ impl AstRewriter {
         imported_name: &str,
     ) -> Option<String> {
         if let Some(strategy) = self.import_strategies.get(target_module_path) {
-            if matches!(strategy, crate::emit::ImportStrategy::ModuleImport) {
+            if matches!(strategy, ImportStrategy::ModuleImport) {
                 let ns_ref = format!("{}.{}", target_module_path, imported_name);
                 log::debug!(
                     "Target module '{}' uses ModuleImport strategy, using namespace reference '{}'",

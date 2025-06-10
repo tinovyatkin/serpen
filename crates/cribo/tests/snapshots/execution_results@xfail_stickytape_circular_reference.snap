@@ -7,5 +7,5 @@ ExecutionResults {
         1,
     ),
     stdout: "",
-    stderr: "Traceback (most recent call last):\n  File \"<TMP>/bundled.py\", line 41, in <module>\n    __cribo_init___cribo_ac4932_first()\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"<TMP>/bundled.py\", line 9, in __cribo_init___cribo_ac4932_first\n    second = sys.modules['second']\n             ~~~~~~~~~~~^^^^^^^^^^\nKeyError: 'second'",
+    stderr: "Traceback (most recent call last):\n  File \"<TMP>/bundled.py\", line 45, in <module>\n    __cribo_init___cribo_ac4932_first()\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"<TMP>/bundled.py\", line 13, in __cribo_init___cribo_ac4932_first\n    second = sys.modules['second']\n             ~~~~~~~~~~~^^^^^^^^^^\nKeyError: 'second'",
 }

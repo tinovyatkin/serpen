@@ -30,11 +30,6 @@ pub struct Config {
     /// Defaults to "py310" (Python 3.10)
     #[serde(rename = "target-version")]
     pub target_version: String,
-
-    /// Whether to use static bundling (transforms modules to init functions, eliminates exec())
-    /// This is the default behavior as it improves compatibility and security
-    #[serde(rename = "static-bundling")]
-    pub static_bundling: bool,
 }
 
 impl Default for Config {
@@ -46,7 +41,6 @@ impl Default for Config {
             preserve_comments: true,
             preserve_type_hints: true,
             target_version: "py310".to_owned(),
-            static_bundling: true,
         }
     }
 }
@@ -75,7 +69,6 @@ impl Combine for Config {
             preserve_comments: self.preserve_comments,
             preserve_type_hints: self.preserve_type_hints,
             target_version: self.target_version,
-            static_bundling: self.static_bundling,
         }
     }
 }
@@ -89,7 +82,6 @@ pub struct EnvConfig {
     pub preserve_comments: Option<bool>,
     pub preserve_type_hints: Option<bool>,
     pub target_version: Option<String>,
-    pub static_bundling: Option<bool>,
 }
 
 impl EnvConfig {
@@ -151,11 +143,6 @@ impl EnvConfig {
             config.target_version = Some(target_version);
         }
 
-        // CRIBO_STATIC_BUNDLING - boolean flag
-        if let Ok(static_bundling_str) = env::var("CRIBO_STATIC_BUNDLING") {
-            config.static_bundling = parse_bool(&static_bundling_str);
-        }
-
         config
     }
 
@@ -178,9 +165,6 @@ impl EnvConfig {
         }
         if let Some(target_version) = self.target_version {
             config.target_version = target_version;
-        }
-        if let Some(static_bundling) = self.static_bundling {
-            config.static_bundling = static_bundling;
         }
         config
     }

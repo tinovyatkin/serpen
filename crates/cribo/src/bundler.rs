@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 use crate::config::Config;
 use crate::dependency_graph::{CircularDependencyGroup, DependencyGraph, ModuleNode};
-use crate::emit::CodeEmitter;
 use crate::hybrid_static_bundler::HybridStaticBundler;
 use crate::resolver::{ImportType, ModuleResolver};
 use crate::util::{module_name_from_relative, normalize_line_endings};
@@ -224,40 +223,15 @@ impl Bundler {
 
         let sorted_modules = self.get_sorted_modules_from_graph(&graph)?;
 
-        // Generate bundled code and requirements if needed
-        let bundled_code = if self.config.static_bundling {
-            info!("Using hybrid static bundler for exec-free bundling");
-            // Use static bundler for exec-free bundling
-            let code = self.emit_static_bundle(&sorted_modules, &resolver, &entry_module_name)?;
+        // Generate bundled code
+        info!("Using hybrid static bundler");
+        let bundled_code =
+            self.emit_static_bundle(&sorted_modules, &resolver, &entry_module_name)?;
 
-            // Generate requirements.txt if requested
-            if emit_requirements {
-                // Static bundler needs its own emitter for requirements generation
-                let mut emitter = CodeEmitter::new(
-                    resolver,
-                    self.config.preserve_comments,
-                    self.config.preserve_type_hints,
-                );
-                self.write_requirements_file_for_stdout(&sorted_modules, &mut emitter)?;
-            }
-
-            code
-        } else {
-            // Use traditional emitter
-            let mut emitter = CodeEmitter::new(
-                resolver,
-                self.config.preserve_comments,
-                self.config.preserve_type_hints,
-            );
-            let code = emitter.emit_bundle(&sorted_modules, &entry_module_name)?;
-
-            // Generate requirements.txt if requested
-            if emit_requirements {
-                self.write_requirements_file_for_stdout(&sorted_modules, &mut emitter)?;
-            }
-
-            code
-        };
+        // Generate requirements.txt if requested
+        if emit_requirements {
+            self.write_requirements_file_for_stdout(&sorted_modules, &resolver)?;
+        }
 
         Ok(bundled_code)
     }
@@ -284,40 +258,15 @@ impl Bundler {
 
         let sorted_modules = self.get_sorted_modules_from_graph(&graph)?;
 
-        // Generate bundled code and requirements if needed
-        let bundled_code = if self.config.static_bundling {
-            info!("Using hybrid static bundler for exec-free bundling");
-            // Use static bundler for exec-free bundling
-            let code = self.emit_static_bundle(&sorted_modules, &resolver, &entry_module_name)?;
+        // Generate bundled code
+        info!("Using hybrid static bundler");
+        let bundled_code =
+            self.emit_static_bundle(&sorted_modules, &resolver, &entry_module_name)?;
 
-            // Generate requirements.txt if requested
-            if emit_requirements {
-                // Static bundler needs its own emitter for requirements generation
-                let mut emitter = CodeEmitter::new(
-                    resolver,
-                    self.config.preserve_comments,
-                    self.config.preserve_type_hints,
-                );
-                self.write_requirements_file(&sorted_modules, &mut emitter, output_path)?;
-            }
-
-            code
-        } else {
-            // Use traditional emitter
-            let mut emitter = CodeEmitter::new(
-                resolver,
-                self.config.preserve_comments,
-                self.config.preserve_type_hints,
-            );
-            let code = emitter.emit_bundle(&sorted_modules, &entry_module_name)?;
-
-            // Generate requirements.txt if requested
-            if emit_requirements {
-                self.write_requirements_file(&sorted_modules, &mut emitter, output_path)?;
-            }
-
-            code
-        };
+        // Generate requirements.txt if requested
+        if emit_requirements {
+            self.write_requirements_file(&sorted_modules, &resolver, output_path)?;
+        }
 
         // Write output file
         fs::write(output_path, bundled_code)
@@ -925,9 +874,9 @@ impl Bundler {
     fn write_requirements_file_for_stdout(
         &self,
         sorted_modules: &[&ModuleNode],
-        emitter: &mut CodeEmitter,
+        resolver: &ModuleResolver,
     ) -> Result<()> {
-        let requirements_content = emitter.generate_requirements(sorted_modules)?;
+        let requirements_content = self.generate_requirements(sorted_modules, resolver)?;
         if !requirements_content.is_empty() {
             let requirements_path = Path::new("requirements.txt");
 
@@ -946,10 +895,10 @@ impl Bundler {
     fn write_requirements_file(
         &self,
         sorted_modules: &[&ModuleNode],
-        emitter: &mut CodeEmitter,
+        resolver: &ModuleResolver,
         output_path: &Path,
     ) -> Result<()> {
-        let requirements_content = emitter.generate_requirements(sorted_modules)?;
+        let requirements_content = self.generate_requirements(sorted_modules, resolver)?;
         if !requirements_content.is_empty() {
             let requirements_path = output_path
                 .parent()
@@ -1152,6 +1101,39 @@ impl Bundler {
             code_parts.push(stmt_code);
         }
 
-        Ok(code_parts.join("\n"))
+        // Add shebang and header
+        let mut final_output = vec![
+            "#!/usr/bin/env python3".to_string(),
+            "# Generated by Cribo - Python Source Bundler".to_string(),
+            "# https://github.com/ophidiarium/cribo".to_string(),
+            String::new(), // Empty line
+        ];
+        final_output.extend(code_parts);
+
+        Ok(final_output.join("\n"))
+    }
+
+    /// Generate requirements.txt content from third-party imports
+    fn generate_requirements(
+        &self,
+        modules: &[&ModuleNode],
+        resolver: &ModuleResolver,
+    ) -> Result<String> {
+        let mut third_party_imports = IndexSet::new();
+
+        for module in modules {
+            for import in &module.imports {
+                if let ImportType::ThirdParty = resolver.classify_import(import) {
+                    // Extract top-level package name
+                    let package_name = import.split('.').next().unwrap_or(import);
+                    third_party_imports.insert(package_name.to_string());
+                }
+            }
+        }
+
+        let mut requirements: Vec<String> = third_party_imports.into_iter().collect();
+        requirements.sort();
+
+        Ok(requirements.join("\n"))
     }
 }

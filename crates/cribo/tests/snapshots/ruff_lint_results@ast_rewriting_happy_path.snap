@@ -4,11 +4,11 @@ input_file: crates/cribo/tests/fixtures/bundling/ast_rewriting_happy_path/main.p
 ---
 RuffLintResults {
     f401_violations: [
-        "Line 1: F401 - `typing.List` imported but unused",
-        "Line 2: F401 - `enum.Enum` imported but unused",
-        "Line 4: F401 - `typing.Optional` imported but unused",
-        "Line 4: F401 - `typing.Dict` imported but unused",
-        "Line 4: F401 - `typing.Any` imported but unused",
+        "Line 5: F401 - `typing.List` imported but unused",
+        "Line 6: F401 - `enum.Enum` imported but unused",
+        "Line 8: F401 - `typing.Optional` imported but unused",
+        "Line 8: F401 - `typing.Dict` imported but unused",
+        "Line 8: F401 - `typing.Any` imported but unused",
     ],
     f404_violations: [],
     other_violations: [],

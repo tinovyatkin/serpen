@@ -7,5 +7,5 @@ ExecutionResults {
         1,
     ),
     stdout: "",
-    stderr: "Traceback (most recent call last):\n  File \"<TMP>/bundled.py\", line 32, in <module>\n    __cribo_init___cribo_874ce2_greetings()\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"<TMP>/bundled.py\", line 9, in __cribo_init___cribo_874ce2_greetings\n    module.message = message\n                     ^^^^^^^\nNameError: name 'message' is not defined",
+    stderr: "Traceback (most recent call last):\n  File \"<TMP>/bundled.py\", line 36, in <module>\n    __cribo_init___cribo_874ce2_greetings()\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"<TMP>/bundled.py\", line 13, in __cribo_init___cribo_874ce2_greetings\n    module.message = message\n                     ^^^^^^^\nNameError: name 'message' is not defined",
 }
