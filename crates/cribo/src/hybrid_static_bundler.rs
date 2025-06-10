@@ -1642,6 +1642,15 @@ impl HybridStaticBundler {
             }
 
             let resolved = parts.join(".");
+
+            // Check for potential circular import
+            if resolved == current_module {
+                log::warn!(
+                    "Potential circular import detected: {} importing itself",
+                    current_module
+                );
+            }
+
             log::debug!("Resolved relative import to: {}", resolved);
             Some(resolved)
         } else {
