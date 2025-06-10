@@ -258,35 +258,39 @@ impl HybridStaticBundler {
         let mut module_exports_map = IndexMap::new();
 
         for (module_name, ast, module_path) in &modules {
-            if module_name != entry_module_name {
-                // Extract __all__ exports from the module
-                let module_exports = self.extract_all_exports(ast);
-                module_exports_map.insert(module_name.clone(), module_exports.clone());
+            if module_name == entry_module_name {
+                continue;
+            }
 
-                // Check if module can be inlined
-                // A module can only be inlined if:
-                // 1. It has no side effects
-                // 2. It's never imported directly (only from X import Y style)
-                if Self::has_side_effects(ast) || directly_imported_modules.contains(module_name) {
-                    if Self::has_side_effects(ast) {
-                        log::debug!(
-                            "Module '{}' has side effects - using wrapper approach",
-                            module_name
-                        );
-                    } else {
-                        log::debug!(
-                            "Module '{}' is imported directly - using wrapper approach",
-                            module_name
-                        );
-                    }
-                    wrapper_modules.push((module_name.clone(), ast.clone(), module_path.clone()));
+            // Extract __all__ exports from the module
+            let module_exports = self.extract_all_exports(ast);
+            module_exports_map.insert(module_name.clone(), module_exports.clone());
+
+            // Check if module can be inlined
+            // A module can only be inlined if:
+            // 1. It has no side effects
+            // 2. It's never imported directly (only from X import Y style)
+            let has_side_effects = Self::has_side_effects(ast);
+            let is_directly_imported = directly_imported_modules.contains(module_name);
+
+            if has_side_effects || is_directly_imported {
+                let reason = if has_side_effects {
+                    "has side effects"
                 } else {
-                    log::debug!(
-                        "Module '{}' has no side effects and is not imported directly - can be inlined",
-                        module_name
-                    );
-                    inlinable_modules.push((module_name.clone(), ast.clone(), module_path.clone()));
-                }
+                    "is imported directly"
+                };
+                log::debug!(
+                    "Module '{}' {} - using wrapper approach",
+                    module_name,
+                    reason
+                );
+                wrapper_modules.push((module_name.clone(), ast.clone(), module_path.clone()));
+            } else {
+                log::debug!(
+                    "Module '{}' has no side effects and is not imported directly - can be inlined",
+                    module_name
+                );
+                inlinable_modules.push((module_name.clone(), ast.clone(), module_path.clone()));
             }
         }
 
@@ -364,11 +368,13 @@ impl HybridStaticBundler {
         // Initialize wrapper modules in dependency order AFTER inlined modules are defined
         if need_sys_import {
             for module_node in sorted_module_nodes {
-                if module_node.name != entry_module_name {
-                    if let Some(synthetic_name) = self.module_registry.get(&module_node.name) {
-                        let init_call = self.generate_module_init_call(synthetic_name);
-                        final_body.push(init_call);
-                    }
+                if module_node.name == entry_module_name {
+                    continue;
+                }
+
+                if let Some(synthetic_name) = self.module_registry.get(&module_node.name) {
+                    let init_call = self.generate_module_init_call(synthetic_name);
+                    final_body.push(init_call);
                 }
             }
 
@@ -388,18 +394,22 @@ impl HybridStaticBundler {
 
         // Finally, add entry module code (it's always last in topological order)
         for (module_name, ast, _) in modules {
-            if module_name == entry_module_name {
-                // Entry module - add its code directly at the end
-                for stmt in ast.body {
-                    if !self.is_hoisted_import(&stmt) {
-                        let rewritten_stmts = self.rewrite_import_in_stmt_multiple_with_context(
-                            stmt,
-                            &module_name,
-                            &symbol_renames,
-                        );
-                        final_body.extend(rewritten_stmts);
-                    }
+            if module_name != entry_module_name {
+                continue;
+            }
+
+            // Entry module - add its code directly at the end
+            for stmt in ast.body {
+                if self.is_hoisted_import(&stmt) {
+                    continue;
                 }
+
+                let rewritten_stmts = self.rewrite_import_in_stmt_multiple_with_context(
+                    stmt,
+                    &module_name,
+                    &symbol_renames,
+                );
+                final_body.extend(rewritten_stmts);
             }
         }
 
@@ -470,11 +480,7 @@ impl HybridStaticBundler {
                 Stmt::Assign(assign) => {
                     // For simple assignments, also set as module attribute if it should be exported
                     body.push(stmt.clone());
-                    if let Some(name) = self.extract_simple_assign_target(assign) {
-                        if self.should_export_symbol(&name, module_name) {
-                            body.push(self.create_module_attr_assignment("module", &name));
-                        }
-                    }
+                    self.add_module_attr_if_exported(assign, module_name, &mut body);
                 }
                 _ => {
                     // Other statements execute normally
@@ -1265,6 +1271,20 @@ impl HybridStaticBundler {
         None
     }
 
+    /// Add module attribute assignment if the symbol should be exported
+    fn add_module_attr_if_exported(
+        &self,
+        assign: &StmtAssign,
+        module_name: &str,
+        body: &mut Vec<Stmt>,
+    ) {
+        if let Some(name) = self.extract_simple_assign_target(assign) {
+            if self.should_export_symbol(&name, module_name) {
+                body.push(self.create_module_attr_assignment("module", &name));
+            }
+        }
+    }
+
     /// Generate a call to initialize a module
     fn generate_module_init_call(&self, synthetic_name: &str) -> Stmt {
         if let Some(init_func_name) = self.init_functions.get(synthetic_name) {
@@ -1327,27 +1347,38 @@ impl HybridStaticBundler {
         for stmt in &ast.body {
             match stmt {
                 Stmt::ImportFrom(import_from) => {
-                    if let Some(ref module) = import_from.module {
-                        let module_name = module.as_str();
-
-                        if module_name == "__future__" {
-                            for alias in &import_from.names {
-                                self.future_imports.insert(alias.name.to_string());
-                            }
-                        } else if self.is_safe_stdlib_module(module_name) {
-                            self.stdlib_imports.push(stmt.clone());
-                        }
-                    }
+                    self.collect_import_from(import_from, stmt);
                 }
                 Stmt::Import(import_stmt) => {
-                    for alias in &import_stmt.names {
-                        if self.is_safe_stdlib_module(alias.name.as_str()) {
-                            self.stdlib_imports.push(stmt.clone());
-                            break;
-                        }
-                    }
+                    self.collect_import(import_stmt, stmt);
                 }
                 _ => {}
+            }
+        }
+    }
+
+    /// Collect ImportFrom statements
+    fn collect_import_from(&mut self, import_from: &StmtImportFrom, stmt: &Stmt) {
+        let Some(ref module) = import_from.module else {
+            return;
+        };
+
+        let module_name = module.as_str();
+        if module_name == "__future__" {
+            for alias in &import_from.names {
+                self.future_imports.insert(alias.name.to_string());
+            }
+        } else if self.is_safe_stdlib_module(module_name) {
+            self.stdlib_imports.push(stmt.clone());
+        }
+    }
+
+    /// Collect Import statements
+    fn collect_import(&mut self, import_stmt: &StmtImport, stmt: &Stmt) {
+        for alias in &import_stmt.names {
+            if self.is_safe_stdlib_module(alias.name.as_str()) {
+                self.stdlib_imports.push(stmt.clone());
+                break;
             }
         }
     }
@@ -1356,15 +1387,21 @@ impl HybridStaticBundler {
     /// Returns Some(vec) if __all__ is defined, None if not defined
     fn extract_all_exports(&self, ast: &ModModule) -> Option<Vec<String>> {
         for stmt in &ast.body {
-            if let Stmt::Assign(assign) = stmt {
-                // Look for __all__ = [...]
-                if assign.targets.len() == 1 {
-                    if let Expr::Name(name) = &assign.targets[0] {
-                        if name.id.as_str() == "__all__" {
-                            return self.extract_string_list_from_expr(&assign.value);
-                        }
-                    }
-                }
+            let Stmt::Assign(assign) = stmt else {
+                continue;
+            };
+
+            // Look for __all__ = [...]
+            if assign.targets.len() != 1 {
+                continue;
+            }
+
+            let Expr::Name(name) = &assign.targets[0] else {
+                continue;
+            };
+
+            if name.id.as_str() == "__all__" {
+                return self.extract_string_list_from_expr(&assign.value);
             }
         }
         None
@@ -1580,102 +1617,9 @@ impl HybridStaticBundler {
     ) -> Vec<Stmt> {
         match stmt {
             Stmt::ImportFrom(import_from) => {
-                // Resolve relative imports to absolute module names
-                let resolved_module_name =
-                    self.resolve_relative_import(&import_from, current_module);
-
-                if let Some(module_name) = resolved_module_name {
-                    log::debug!(
-                        "Checking if resolved module '{}' is in bundled modules: {:?}",
-                        module_name,
-                        self.bundled_modules
-                    );
-                    // Check if this is a bundled module
-                    if self.bundled_modules.contains(&module_name) {
-                        log::debug!("Transforming bundled import from module: {}", module_name);
-
-                        // Check if this module is in the registry (wrapper approach)
-                        // or if it was inlined
-                        if self.module_registry.contains_key(&module_name) {
-                            // Module uses wrapper approach - transform to sys.modules access
-                            return self
-                                .transform_bundled_import_from_multiple(import_from, &module_name);
-                        } else {
-                            // Module was inlined - create assignments for imported symbols
-                            log::debug!(
-                                "Module '{}' was inlined, creating assignments for imported symbols",
-                                module_name
-                            );
-                            return self.create_assignments_for_inlined_imports(
-                                import_from,
-                                &module_name,
-                                symbol_renames,
-                            );
-                        }
-                    } else {
-                        log::debug!(
-                            "Module '{}' not found in bundled modules, keeping original import",
-                            module_name
-                        );
-                    }
-                }
-                vec![Stmt::ImportFrom(import_from)]
+                self.rewrite_import_from(import_from, current_module, symbol_renames)
             }
-            Stmt::Import(import_stmt) => {
-                // Check each import individually
-                let mut result_stmts = Vec::new();
-                let mut handled_all = true;
-
-                for alias in &import_stmt.names {
-                    let module_name = alias.name.as_str();
-                    if self.bundled_modules.contains(module_name) {
-                        if self.module_registry.contains_key(module_name) {
-                            // Module uses wrapper approach - transform to sys.modules access
-                            let target_name = alias.asname.as_ref().unwrap_or(&alias.name);
-                            result_stmts.push(Stmt::Assign(StmtAssign {
-                                targets: vec![Expr::Name(ExprName {
-                                    id: target_name.as_str().into(),
-                                    ctx: ExprContext::Store,
-                                    range: TextRange::default(),
-                                })],
-                                value: Box::new(Expr::Subscript(ruff_python_ast::ExprSubscript {
-                                    value: Box::new(Expr::Attribute(ExprAttribute {
-                                        value: Box::new(Expr::Name(ExprName {
-                                            id: "sys".into(),
-                                            ctx: ExprContext::Load,
-                                            range: TextRange::default(),
-                                        })),
-                                        attr: Identifier::new("modules", TextRange::default()),
-                                        ctx: ExprContext::Load,
-                                        range: TextRange::default(),
-                                    })),
-                                    slice: Box::new(self.create_string_literal(module_name)),
-                                    ctx: ExprContext::Load,
-                                    range: TextRange::default(),
-                                })),
-                                range: TextRange::default(),
-                            }));
-                        } else {
-                            // Module was inlined - this is problematic for direct imports
-                            // We need to create a mock module object
-                            log::warn!(
-                                "Direct import of inlined module '{}' detected - this pattern is not fully supported",
-                                module_name
-                            );
-                            // For now, skip it
-                        }
-                    } else {
-                        handled_all = false;
-                    }
-                }
-
-                if handled_all {
-                    result_stmts
-                } else {
-                    // Keep original import for non-bundled modules
-                    vec![Stmt::Import(import_stmt)]
-                }
-            }
+            Stmt::Import(import_stmt) => self.rewrite_import(import_stmt),
             _ => vec![stmt],
         }
     }
@@ -1762,19 +1706,29 @@ impl HybridStaticBundler {
         // Check all modules for direct imports
         for (_module_name, ast, _) in modules {
             for stmt in &ast.body {
-                if let Stmt::Import(import_stmt) = stmt {
-                    for alias in &import_stmt.names {
-                        let imported_module = alias.name.as_str();
-                        // Check if this is a bundled module
-                        if modules.iter().any(|(name, _, _)| name == imported_module) {
-                            directly_imported.insert(imported_module.to_string());
-                        }
-                    }
-                }
+                self.collect_direct_imports(stmt, modules, &mut directly_imported);
             }
         }
 
         directly_imported
+    }
+
+    /// Helper to collect direct imports from a statement
+    fn collect_direct_imports(
+        &self,
+        stmt: &Stmt,
+        modules: &[(String, ModModule, PathBuf)],
+        directly_imported: &mut IndexSet<String>,
+    ) {
+        if let Stmt::Import(import_stmt) = stmt {
+            for alias in &import_stmt.names {
+                let imported_module = alias.name.as_str();
+                // Check if this is a bundled module
+                if modules.iter().any(|(name, _, _)| name == imported_module) {
+                    directly_imported.insert(imported_module.to_string());
+                }
+            }
+        }
     }
 
     /// Collect all defined symbols in the global scope
@@ -1790,30 +1744,35 @@ impl HybridStaticBundler {
             if module_name == entry_module_name {
                 // For entry module, collect all top-level symbols
                 for stmt in &ast.body {
-                    match stmt {
-                        Stmt::FunctionDef(func_def) => {
-                            global_symbols.insert(func_def.name.to_string());
-                        }
-                        Stmt::ClassDef(class_def) => {
-                            global_symbols.insert(class_def.name.to_string());
-                        }
-                        Stmt::Assign(assign) => {
-                            if let Some(name) = self.extract_simple_assign_target(assign) {
-                                global_symbols.insert(name);
-                            }
-                        }
-                        Stmt::AnnAssign(ann_assign) => {
-                            if let Expr::Name(name) = ann_assign.target.as_ref() {
-                                global_symbols.insert(name.id.to_string());
-                            }
-                        }
-                        _ => {}
-                    }
+                    self.collect_symbol_from_statement(stmt, &mut global_symbols);
                 }
             }
         }
 
         global_symbols
+    }
+
+    /// Helper to collect symbols from a statement
+    fn collect_symbol_from_statement(&self, stmt: &Stmt, global_symbols: &mut IndexSet<String>) {
+        match stmt {
+            Stmt::FunctionDef(func_def) => {
+                global_symbols.insert(func_def.name.to_string());
+            }
+            Stmt::ClassDef(class_def) => {
+                global_symbols.insert(class_def.name.to_string());
+            }
+            Stmt::Assign(assign) => {
+                if let Some(name) = self.extract_simple_assign_target(assign) {
+                    global_symbols.insert(name);
+                }
+            }
+            Stmt::AnnAssign(ann_assign) => {
+                if let Expr::Name(name) = ann_assign.target.as_ref() {
+                    global_symbols.insert(name.id.to_string());
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Generate a unique symbol name to avoid conflicts
@@ -1837,6 +1796,25 @@ impl HybridStaticBundler {
     /// Get a unique name for a symbol, using the same pattern as generate_unique_name
     fn get_unique_name(&self, base_name: &str, existing_symbols: &IndexSet<String>) -> String {
         self.generate_unique_name(base_name, existing_symbols)
+    }
+
+    /// Record a rename if the new name differs from the original
+    fn record_rename_if_needed(
+        &self,
+        original_name: &str,
+        new_name: &str,
+        module_name: &str,
+        module_renames: &mut IndexMap<String, String>,
+    ) {
+        if new_name != original_name {
+            module_renames.insert(original_name.to_string(), new_name.to_string());
+            log::debug!(
+                "Renaming '{}' to '{}' in module '{}'",
+                original_name,
+                new_name,
+                module_name
+            );
+        }
     }
 
     /// Inline a module without side effects directly into the bundle
@@ -1868,15 +1846,12 @@ impl HybridStaticBundler {
                     let func_name = func_def.name.to_string();
                     if self.should_inline_symbol(&func_name, module_name, module_exports_map) {
                         let renamed_name = self.get_unique_name(&func_name, global_symbols);
-                        if renamed_name != func_name {
-                            module_renames.insert(func_name.clone(), renamed_name.clone());
-                            log::debug!(
-                                "Renaming function '{}' to '{}' in module '{}'",
-                                func_name,
-                                renamed_name,
-                                module_name
-                            );
-                        }
+                        self.record_rename_if_needed(
+                            &func_name,
+                            &renamed_name,
+                            module_name,
+                            &mut module_renames,
+                        );
                         global_symbols.insert(renamed_name.clone());
 
                         // Clone and rename the function
@@ -1886,74 +1861,34 @@ impl HybridStaticBundler {
                     }
                 }
                 Stmt::ClassDef(class_def) => {
-                    let class_name = class_def.name.to_string();
-                    if self.should_inline_symbol(&class_name, module_name, module_exports_map) {
-                        let renamed_name = self.get_unique_name(&class_name, global_symbols);
-                        if renamed_name != class_name {
-                            module_renames.insert(class_name.clone(), renamed_name.clone());
-                            log::debug!(
-                                "Renaming class '{}' to '{}' in module '{}'",
-                                class_name,
-                                renamed_name,
-                                module_name
-                            );
-                        }
-                        global_symbols.insert(renamed_name.clone());
-
-                        // Clone and rename the class
-                        let mut class_def_clone = class_def.clone();
-                        class_def_clone.name = Identifier::new(renamed_name, TextRange::default());
-                        inlined_stmts.push(Stmt::ClassDef(class_def_clone));
-                    }
+                    self.inline_class(
+                        class_def,
+                        module_name,
+                        module_exports_map,
+                        global_symbols,
+                        &mut module_renames,
+                        &mut inlined_stmts,
+                    );
                 }
                 Stmt::Assign(assign) => {
-                    if let Some(name) = self.extract_simple_assign_target(assign) {
-                        if self.should_inline_symbol(&name, module_name, module_exports_map) {
-                            let renamed_name = self.get_unique_name(&name, global_symbols);
-                            if renamed_name != name {
-                                module_renames.insert(name.clone(), renamed_name.clone());
-                                log::debug!(
-                                    "Renaming variable '{}' to '{}' in module '{}'",
-                                    name,
-                                    renamed_name,
-                                    module_name
-                                );
-                            }
-                            global_symbols.insert(renamed_name.clone());
-
-                            // Clone and rename the assignment
-                            let mut assign_clone = assign.clone();
-                            if let Expr::Name(name_expr) = &mut assign_clone.targets[0] {
-                                name_expr.id = renamed_name.into();
-                            }
-                            inlined_stmts.push(Stmt::Assign(assign_clone));
-                        }
-                    }
+                    self.inline_assignment(
+                        assign,
+                        module_name,
+                        module_exports_map,
+                        global_symbols,
+                        &mut module_renames,
+                        &mut inlined_stmts,
+                    );
                 }
                 Stmt::AnnAssign(ann_assign) => {
-                    if let Expr::Name(name) = ann_assign.target.as_ref() {
-                        let var_name = name.id.to_string();
-                        if self.should_inline_symbol(&var_name, module_name, module_exports_map) {
-                            let renamed_name = self.get_unique_name(&var_name, global_symbols);
-                            if renamed_name != var_name {
-                                module_renames.insert(var_name.clone(), renamed_name.clone());
-                                log::debug!(
-                                    "Renaming annotated variable '{}' to '{}' in module '{}'",
-                                    var_name,
-                                    renamed_name,
-                                    module_name
-                                );
-                            }
-                            global_symbols.insert(renamed_name.clone());
-
-                            // Clone and rename the annotated assignment
-                            let mut ann_assign_clone = ann_assign.clone();
-                            if let Expr::Name(name_expr) = ann_assign_clone.target.as_mut() {
-                                name_expr.id = renamed_name.into();
-                            }
-                            inlined_stmts.push(Stmt::AnnAssign(ann_assign_clone));
-                        }
-                    }
+                    self.inline_ann_assignment(
+                        ann_assign,
+                        module_name,
+                        module_exports_map,
+                        global_symbols,
+                        &mut module_renames,
+                        &mut inlined_stmts,
+                    );
                 }
                 // TypeAlias statements are safe metadata definitions
                 Stmt::TypeAlias(_) => {
@@ -2079,73 +2014,317 @@ impl HybridStaticBundler {
         let mut stmts = Vec::new();
 
         // Find the module's AST
-        if let Some((_, ast, _)) = modules.iter().find(|(name, _, _)| name == module_name) {
-            // Look for imports from inlined modules
-            for stmt in &ast.body {
-                if let Stmt::ImportFrom(import_from) = stmt {
-                    let resolved_module_name =
-                        self.resolve_relative_import(import_from, module_name);
-                    if let Some(ref imported_module) = resolved_module_name {
-                        // Check if this is an import from an inlined module
-                        if self.bundled_modules.contains(imported_module)
-                            && !self.module_registry.contains_key(imported_module)
-                        {
-                            // This is an inlined module - generate attribute assignments
-                            for alias in &import_from.names {
-                                let imported_name = alias.name.as_str();
-                                let local_name =
-                                    alias.asname.as_ref().unwrap_or(&alias.name).as_str();
+        let Some((_, ast, _)) = modules.iter().find(|(name, _, _)| name == module_name) else {
+            return stmts;
+        };
 
-                                // Check if this symbol should be exported
-                                if self.should_export_symbol(local_name, module_name) {
-                                    // Generate: sys.modules[module_name].local_name = imported_name
-                                    let attr_assignment = Stmt::Assign(StmtAssign {
-                                        targets: vec![Expr::Attribute(ExprAttribute {
-                                            value: Box::new(Expr::Subscript(
-                                                ruff_python_ast::ExprSubscript {
-                                                    value: Box::new(Expr::Attribute(
-                                                        ExprAttribute {
-                                                            value: Box::new(Expr::Name(ExprName {
-                                                                id: "sys".into(),
-                                                                ctx: ExprContext::Load,
-                                                                range: TextRange::default(),
-                                                            })),
-                                                            attr: Identifier::new(
-                                                                "modules",
-                                                                TextRange::default(),
-                                                            ),
-                                                            ctx: ExprContext::Load,
-                                                            range: TextRange::default(),
-                                                        },
-                                                    )),
-                                                    slice: Box::new(
-                                                        self.create_string_literal(module_name),
-                                                    ),
-                                                    ctx: ExprContext::Load,
-                                                    range: TextRange::default(),
-                                                },
-                                            )),
-                                            attr: Identifier::new(local_name, TextRange::default()),
-                                            ctx: ExprContext::Store,
-                                            range: TextRange::default(),
-                                        })],
-                                        value: Box::new(Expr::Name(ExprName {
-                                            id: imported_name.into(),
-                                            ctx: ExprContext::Load,
-                                            range: TextRange::default(),
-                                        })),
-                                        range: TextRange::default(),
-                                    });
-
-                                    stmts.push(attr_assignment);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        // Look for imports from inlined modules
+        for stmt in &ast.body {
+            self.generate_post_init_for_statement(stmt, module_name, &mut stmts);
         }
 
         stmts
+    }
+
+    /// Helper to generate post-init attributes for a single statement
+    fn generate_post_init_for_statement(
+        &self,
+        stmt: &Stmt,
+        module_name: &str,
+        stmts: &mut Vec<Stmt>,
+    ) {
+        let Stmt::ImportFrom(import_from) = stmt else {
+            return;
+        };
+
+        let resolved_module_name = self.resolve_relative_import(import_from, module_name);
+        let Some(ref imported_module) = resolved_module_name else {
+            return;
+        };
+
+        // Check if this is an import from an inlined module
+        if !self.bundled_modules.contains(imported_module)
+            || self.module_registry.contains_key(imported_module)
+        {
+            return;
+        }
+
+        // This is an inlined module - generate attribute assignments
+        for alias in &import_from.names {
+            self.generate_attribute_assignment_for_alias(
+                alias,
+                module_name,
+                imported_module,
+                stmts,
+            );
+        }
+    }
+
+    /// Helper to generate attribute assignment for a single alias
+    fn generate_attribute_assignment_for_alias(
+        &self,
+        alias: &ruff_python_ast::Alias,
+        module_name: &str,
+        _imported_module: &str,
+        stmts: &mut Vec<Stmt>,
+    ) {
+        let imported_name = alias.name.as_str();
+        let local_name = alias.asname.as_ref().unwrap_or(&alias.name).as_str();
+
+        // Check if this symbol should be exported
+        if !self.should_export_symbol(local_name, module_name) {
+            return;
+        }
+
+        // Generate: sys.modules[module_name].local_name = imported_name
+        let attr_assignment = Stmt::Assign(StmtAssign {
+            targets: vec![Expr::Attribute(ExprAttribute {
+                value: Box::new(Expr::Subscript(ruff_python_ast::ExprSubscript {
+                    value: Box::new(Expr::Attribute(ExprAttribute {
+                        value: Box::new(Expr::Name(ExprName {
+                            id: "sys".into(),
+                            ctx: ExprContext::Load,
+                            range: TextRange::default(),
+                        })),
+                        attr: Identifier::new("modules", TextRange::default()),
+                        ctx: ExprContext::Load,
+                        range: TextRange::default(),
+                    })),
+                    slice: Box::new(self.create_string_literal(module_name)),
+                    ctx: ExprContext::Load,
+                    range: TextRange::default(),
+                })),
+                attr: Identifier::new(local_name, TextRange::default()),
+                ctx: ExprContext::Store,
+                range: TextRange::default(),
+            })],
+            value: Box::new(Expr::Name(ExprName {
+                id: imported_name.into(),
+                ctx: ExprContext::Load,
+                range: TextRange::default(),
+            })),
+            range: TextRange::default(),
+        });
+
+        stmts.push(attr_assignment);
+    }
+
+    /// Rewrite ImportFrom statements
+    fn rewrite_import_from(
+        &self,
+        import_from: StmtImportFrom,
+        current_module: &str,
+        symbol_renames: &IndexMap<String, IndexMap<String, String>>,
+    ) -> Vec<Stmt> {
+        // Resolve relative imports to absolute module names
+        let resolved_module_name = self.resolve_relative_import(&import_from, current_module);
+
+        let Some(module_name) = resolved_module_name else {
+            return vec![Stmt::ImportFrom(import_from)];
+        };
+
+        log::debug!(
+            "Checking if resolved module '{}' is in bundled modules: {:?}",
+            module_name,
+            self.bundled_modules
+        );
+
+        if !self.bundled_modules.contains(&module_name) {
+            log::debug!(
+                "Module '{}' not found in bundled modules, keeping original import",
+                module_name
+            );
+            return vec![Stmt::ImportFrom(import_from)];
+        }
+
+        log::debug!("Transforming bundled import from module: {}", module_name);
+
+        // Check if this module is in the registry (wrapper approach)
+        // or if it was inlined
+        if self.module_registry.contains_key(&module_name) {
+            // Module uses wrapper approach - transform to sys.modules access
+            self.transform_bundled_import_from_multiple(import_from, &module_name)
+        } else {
+            // Module was inlined - create assignments for imported symbols
+            log::debug!(
+                "Module '{}' was inlined, creating assignments for imported symbols",
+                module_name
+            );
+            self.create_assignments_for_inlined_imports(import_from, &module_name, symbol_renames)
+        }
+    }
+
+    /// Rewrite Import statements
+    fn rewrite_import(&self, import_stmt: StmtImport) -> Vec<Stmt> {
+        // Check each import individually
+        let mut result_stmts = Vec::new();
+        let mut handled_all = true;
+
+        for alias in &import_stmt.names {
+            let module_name = alias.name.as_str();
+            if !self.bundled_modules.contains(module_name) {
+                handled_all = false;
+                continue;
+            }
+
+            if self.module_registry.contains_key(module_name) {
+                // Module uses wrapper approach - transform to sys.modules access
+                let target_name = alias.asname.as_ref().unwrap_or(&alias.name);
+                result_stmts
+                    .push(self.create_sys_modules_assignment(target_name.as_str(), module_name));
+            } else {
+                // Module was inlined - this is problematic for direct imports
+                // We need to create a mock module object
+                log::warn!(
+                    "Direct import of inlined module '{}' detected - this pattern is not fully supported",
+                    module_name
+                );
+                // For now, skip it
+            }
+        }
+
+        if handled_all {
+            result_stmts
+        } else {
+            // Keep original import for non-bundled modules
+            vec![Stmt::Import(import_stmt)]
+        }
+    }
+
+    /// Create a sys.modules assignment for an import
+    fn create_sys_modules_assignment(&self, target_name: &str, module_name: &str) -> Stmt {
+        Stmt::Assign(StmtAssign {
+            targets: vec![Expr::Name(ExprName {
+                id: target_name.into(),
+                ctx: ExprContext::Store,
+                range: TextRange::default(),
+            })],
+            value: Box::new(Expr::Subscript(ruff_python_ast::ExprSubscript {
+                value: Box::new(Expr::Attribute(ExprAttribute {
+                    value: Box::new(Expr::Name(ExprName {
+                        id: "sys".into(),
+                        ctx: ExprContext::Load,
+                        range: TextRange::default(),
+                    })),
+                    attr: Identifier::new("modules", TextRange::default()),
+                    ctx: ExprContext::Load,
+                    range: TextRange::default(),
+                })),
+                slice: Box::new(self.create_string_literal(module_name)),
+                ctx: ExprContext::Load,
+                range: TextRange::default(),
+            })),
+            range: TextRange::default(),
+        })
+    }
+
+    /// Inline a class definition
+    fn inline_class(
+        &self,
+        class_def: &ruff_python_ast::StmtClassDef,
+        module_name: &str,
+        module_exports_map: &IndexMap<String, Option<Vec<String>>>,
+        global_symbols: &mut IndexSet<String>,
+        module_renames: &mut IndexMap<String, String>,
+        inlined_stmts: &mut Vec<Stmt>,
+    ) {
+        let class_name = class_def.name.to_string();
+        if !self.should_inline_symbol(&class_name, module_name, module_exports_map) {
+            return;
+        }
+
+        let renamed_name = self.get_unique_name(&class_name, global_symbols);
+        if renamed_name != class_name {
+            module_renames.insert(class_name.clone(), renamed_name.clone());
+            log::debug!(
+                "Renaming class '{}' to '{}' in module '{}'",
+                class_name,
+                renamed_name,
+                module_name
+            );
+        }
+        global_symbols.insert(renamed_name.clone());
+
+        // Clone and rename the class
+        let mut class_def_clone = class_def.clone();
+        class_def_clone.name = Identifier::new(renamed_name, TextRange::default());
+        inlined_stmts.push(Stmt::ClassDef(class_def_clone));
+    }
+
+    /// Inline an assignment statement
+    fn inline_assignment(
+        &self,
+        assign: &StmtAssign,
+        module_name: &str,
+        module_exports_map: &IndexMap<String, Option<Vec<String>>>,
+        global_symbols: &mut IndexSet<String>,
+        module_renames: &mut IndexMap<String, String>,
+        inlined_stmts: &mut Vec<Stmt>,
+    ) {
+        let Some(name) = self.extract_simple_assign_target(assign) else {
+            return;
+        };
+
+        if !self.should_inline_symbol(&name, module_name, module_exports_map) {
+            return;
+        }
+
+        let renamed_name = self.get_unique_name(&name, global_symbols);
+        if renamed_name != name {
+            module_renames.insert(name.clone(), renamed_name.clone());
+            log::debug!(
+                "Renaming variable '{}' to '{}' in module '{}'",
+                name,
+                renamed_name,
+                module_name
+            );
+        }
+        global_symbols.insert(renamed_name.clone());
+
+        // Clone and rename the assignment
+        let mut assign_clone = assign.clone();
+        if let Expr::Name(name_expr) = &mut assign_clone.targets[0] {
+            name_expr.id = renamed_name.into();
+        }
+        inlined_stmts.push(Stmt::Assign(assign_clone));
+    }
+
+    /// Inline an annotated assignment statement
+    fn inline_ann_assignment(
+        &self,
+        ann_assign: &ruff_python_ast::StmtAnnAssign,
+        module_name: &str,
+        module_exports_map: &IndexMap<String, Option<Vec<String>>>,
+        global_symbols: &mut IndexSet<String>,
+        module_renames: &mut IndexMap<String, String>,
+        inlined_stmts: &mut Vec<Stmt>,
+    ) {
+        let Expr::Name(name) = ann_assign.target.as_ref() else {
+            return;
+        };
+
+        let var_name = name.id.to_string();
+        if !self.should_inline_symbol(&var_name, module_name, module_exports_map) {
+            return;
+        }
+
+        let renamed_name = self.get_unique_name(&var_name, global_symbols);
+        if renamed_name != var_name {
+            module_renames.insert(var_name.clone(), renamed_name.clone());
+            log::debug!(
+                "Renaming annotated variable '{}' to '{}' in module '{}'",
+                var_name,
+                renamed_name,
+                module_name
+            );
+        }
+        global_symbols.insert(renamed_name.clone());
+
+        // Clone and rename the annotated assignment
+        let mut ann_assign_clone = ann_assign.clone();
+        if let Expr::Name(name_expr) = ann_assign_clone.target.as_mut() {
+            name_expr.id = renamed_name.into();
+        }
+        inlined_stmts.push(Stmt::AnnAssign(ann_assign_clone));
     }
 }
