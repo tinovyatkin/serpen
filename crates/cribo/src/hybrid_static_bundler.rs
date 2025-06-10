@@ -218,13 +218,54 @@ impl HybridStaticBundler {
     fn generate_module_hash(&self, module_path: &Path) -> String {
         let mut hasher = Sha256::new();
 
-        // Use the module path for hashing
-        let path_str = module_path.to_string_lossy();
+        // Create relative path for deterministic hashing across environments
+        let path_str = if let Some(entry_path) = &self.entry_path {
+            // Get the directory containing the entry point
+            let entry_dir = Path::new(entry_path).parent().unwrap_or(Path::new(""));
+
+            // Try to strip the common prefix to get relative path
+            if let Ok(relative_path) = module_path.strip_prefix(entry_dir) {
+                relative_path.to_string_lossy().to_string()
+            } else {
+                // If strip_prefix fails, find common directory structure patterns
+                self.extract_relative_path_fallback(module_path)
+            }
+        } else {
+            // No entry path available, use fallback method
+            self.extract_relative_path_fallback(module_path)
+        };
+
+        log::debug!("Hash input for path {:?}: {}", module_path, path_str);
         hasher.update(path_str.as_bytes());
 
         let hash = hasher.finalize();
         // Take first 6 characters of hex for readability
         format!("{:x}", hash)[..6].to_string()
+    }
+
+    /// Extract a relative path for hashing when common prefixes aren't available
+    fn extract_relative_path_fallback(&self, module_path: &Path) -> String {
+        // Use the last 2-3 path components to maintain some structure while being deterministic
+        // This approach works for any directory structure without hardcoding specific patterns
+        let components: Vec<_> = module_path
+            .components()
+            .rev()
+            .take(3) // Take up to 3 components from the end
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect();
+
+        if components.is_empty() {
+            // Ultimate fallback: use just the filename
+            module_path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        } else {
+            components.join("/")
+        }
     }
 
     /// Generate synthetic module name
