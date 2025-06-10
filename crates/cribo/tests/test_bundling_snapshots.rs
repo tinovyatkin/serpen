@@ -213,6 +213,23 @@ fn test_bundling_fixtures() {
             );
         }
 
+        // Check for xfail tests that are now passing
+        if python_output.status.success() && expects_failure {
+            let stdout = String::from_utf8_lossy(&python_output.stdout);
+            let stderr = String::from_utf8_lossy(&python_output.stderr);
+
+            panic!(
+                "Expected fixture '{}' to fail (marked with xfail_), but it succeeded!\n\
+                Exit code: 0\n\
+                Stdout:\n{}\n\
+                Stderr:\n{}\n\n\
+                This test is now passing. Please remove the 'xfail_' prefix from the fixture directory name.",
+                fixture_name,
+                stdout.trim(),
+                stderr.trim()
+            );
+        }
+
         // Create structured execution results
         let execution_status = if python_output.status.success() {
             ExecutionStatus::Success

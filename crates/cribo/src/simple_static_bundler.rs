@@ -91,7 +91,11 @@ impl SimpleStaticBundler {
             match stmt {
                 Stmt::ClassDef(class_def) => {
                     let original_name = class_def.name.as_str();
-                    let renamed = format!("__{}__{}", module_name.replace('.', "_"), original_name);
+                    let module_name_escaped = module_name
+                        .chars()
+                        .map(|c| if c == '.' { '_' } else { c })
+                        .collect::<String>();
+                    let renamed = format!("__{}__{}", module_name_escaped, original_name);
                     self.symbol_renames.insert(
                         (module_name.to_string(), original_name.to_string()),
                         renamed,
@@ -99,7 +103,11 @@ impl SimpleStaticBundler {
                 }
                 Stmt::FunctionDef(func_def) => {
                     let original_name = func_def.name.as_str();
-                    let renamed = format!("__{}__{}", module_name.replace('.', "_"), original_name);
+                    let module_name_escaped = module_name
+                        .chars()
+                        .map(|c| if c == '.' { '_' } else { c })
+                        .collect::<String>();
+                    let renamed = format!("__{}__{}", module_name_escaped, original_name);
                     self.symbol_renames.insert(
                         (module_name.to_string(), original_name.to_string()),
                         renamed,
@@ -209,8 +217,8 @@ impl SimpleStaticBundler {
                     self.transform_stmt_recursive(body_stmt);
                 }
                 for elif_else in &mut if_stmt.elif_else_clauses {
-                    if let Some(ref mut test) = elif_else.test {
-                        self.transform_expr_recursive(test);
+                    if let Some(ref mut elif_test) = elif_else.test {
+                        self.transform_expr_recursive(elif_test);
                     }
                     for body_stmt in &mut elif_else.body {
                         self.transform_stmt_recursive(body_stmt);

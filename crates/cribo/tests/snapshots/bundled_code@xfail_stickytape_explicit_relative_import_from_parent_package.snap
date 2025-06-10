@@ -3,24 +3,6 @@ source: crates/cribo/tests/test_bundling_snapshots.rs
 input_file: crates/cribo/tests/fixtures/bundling/xfail_stickytape_explicit_relative_import_from_parent_package/main.py
 ---
 import sys, types
-def __cribo_init___cribo_9ad99b_greetings_messages():
-    if '__cribo_9ad99b_greetings_messages' in sys.modules:
-        return sys.modules['__cribo_9ad99b_greetings_messages']
-    module = types.ModuleType('__cribo_9ad99b_greetings_messages')
-    module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/xfail_stickytape_explicit_relative_import_from_parent_package/greetings/messages.py'
-    sys.modules['__cribo_9ad99b_greetings_messages'] = module
-    sys.modules['greetings.messages'] = module
-    message = "Hello"
-    module.message = message
-    return module
-def __cribo_init___cribo_5466fc_greetings():
-    if '__cribo_5466fc_greetings' in sys.modules:
-        return sys.modules['__cribo_5466fc_greetings']
-    module = types.ModuleType('__cribo_5466fc_greetings')
-    module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/xfail_stickytape_explicit_relative_import_from_parent_package/greetings/__init__.py'
-    sys.modules['__cribo_5466fc_greetings'] = module
-    sys.modules['greetings'] = module
-    return module
 def __cribo_init___cribo_aa6ad4_greetings_greeting():
     if '__cribo_aa6ad4_greetings_greeting' in sys.modules:
         return sys.modules['__cribo_aa6ad4_greetings_greeting']
@@ -28,13 +10,12 @@ def __cribo_init___cribo_aa6ad4_greetings_greeting():
     module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/xfail_stickytape_explicit_relative_import_from_parent_package/greetings/greeting/__init__.py'
     sys.modules['__cribo_aa6ad4_greetings_greeting'] = module
     sys.modules['greetings.greeting'] = module
-    message = sys.modules['greetings.messages'].message
     module.message = message
     __all__ = ["message"]
     module.__all__ = ['message']
     return module
-__cribo_modules = {'greetings.messages': '__cribo_9ad99b_greetings_messages', 'greetings': '__cribo_5466fc_greetings', 'greetings.greeting': '__cribo_aa6ad4_greetings_greeting'}
-__cribo_init_functions = {'__cribo_9ad99b_greetings_messages': __cribo_init___cribo_9ad99b_greetings_messages, '__cribo_5466fc_greetings': __cribo_init___cribo_5466fc_greetings, '__cribo_aa6ad4_greetings_greeting': __cribo_init___cribo_aa6ad4_greetings_greeting}
+__cribo_modules = {'greetings.greeting': '__cribo_aa6ad4_greetings_greeting'}
+__cribo_init_functions = {'__cribo_aa6ad4_greetings_greeting': __cribo_init___cribo_aa6ad4_greetings_greeting}
 class CriboBundledFinder:
 
     def __init__(self, module_registry, init_functions):
@@ -52,8 +33,7 @@ class CriboBundledFinder:
             return importlib.util.find_spec(synthetic_name)
         return None
 sys.meta_path.insert(0, CriboBundledFinder(__cribo_modules, __cribo_init_functions))
-__cribo_init___cribo_9ad99b_greetings_messages()
-__cribo_init___cribo_5466fc_greetings()
 __cribo_init___cribo_aa6ad4_greetings_greeting()
+message = "Hello"
 greetings.greeting = sys.modules['greetings.greeting']
 print(greetings.greeting.message)

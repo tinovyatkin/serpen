@@ -7,5 +7,5 @@ ExecutionResults {
         1,
     ),
     stdout: "",
-    stderr: "Traceback (most recent call last):\n  File \"<TMP>/bundled.py\", line 41, in <module>\n    greetings.irrelevant = sys.modules['greetings.irrelevant']\n    ^^^^^^^^^\nNameError: name 'greetings' is not defined",
+    stderr: "Traceback (most recent call last):\n  File \"<TMP>/bundled.py\", line 31, in <module>\n    greetings.irrelevant = sys.modules['greetings.irrelevant']\n    ^^^^^^^^^\nNameError: name 'greetings' is not defined",
 }

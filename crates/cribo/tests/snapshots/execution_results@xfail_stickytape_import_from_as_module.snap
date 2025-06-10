@@ -7,5 +7,5 @@ ExecutionResults {
         1,
     ),
     stdout: "",
-    stderr: "Traceback (most recent call last):\n  File \"<TMP>/bundled.py\", line 41, in <module>\n    g = sys.modules['greetings'].greeting\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: module '__cribo_5ac33d_greetings' has no attribute 'greeting'",
+    stderr: "Traceback (most recent call last):\n  File \"<TMP>/bundled.py\", line 2, in <module>\n    g = greeting\n        ^^^^^^^^\nNameError: name 'greeting' is not defined",
 }

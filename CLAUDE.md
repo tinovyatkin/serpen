@@ -464,7 +464,7 @@ The bundling snapshot tests use Insta's glob feature for automatic fixture disco
 
 ```bash
 # Run a specific fixture using environment variable
-INSTA_GLOB_FILTER="**/stickytape_single_file/main.py" cargo test test_bundling_fixtures
+INSTA_GLOB_FILTER="**/stickytape_single_file/main.py" cargo test -p cribo --test test_bundling_snapshots test_bundling_fixtures
 
 # Or using command line flag
 cargo test test_bundling_fixtures -- --glob-filter "**/stickytape_single_file/main.py"

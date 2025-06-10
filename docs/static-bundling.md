@@ -881,6 +881,148 @@ sys.excepthook = _cribo_exception_handler
 }
 ```
 
+## PyBake Comparison
+
+### PyBake's Module Loading Approach
+
+PyBake takes a different approach to bundling Python modules, using a compressed virtual filesystem and runtime import hooks.
+
+**Key Components:**
+
+1. **DictFileSystem**: A virtual filesystem that stores modules in a nested dictionary structure
+2. **AbstractImporter**: PEP 302 compliant import hook that intercepts module imports
+3. **Compressed Storage**: Modules are stored as base64-encoded, zlib-compressed JSON blob
+4. **Runtime Module Creation**: Uses `types.ModuleType` and `exec()` to create modules dynamically
+
+**How PyBake Works:**
+
+1. **Bundle Creation**:
+   ```python
+   # PyBake stores modules in a compressed blob
+   blob = (execable_code, preload_modules, dict_filesystem_tree)
+   json_blob = json.dumps(blob, sort_keys=True)
+   zlib_blob = zlib.compress(json_blob.encode('utf-8'))
+   b64_blob = binascii.b2a_base64(zlib_blob)
+   ```
+
+2. **Runtime Loading**:
+   ```python
+   # Modules are created dynamically
+   mod = sys.modules.setdefault(fullname, types.ModuleType(fullname))
+   mod.__file__ = full_path
+   mod.__loader__ = self
+
+   # Code is executed in module namespace
+   exec(compile(source, full_path, 'exec'), mod.__dict__)
+   ```
+
+3. **Import Interception**:
+   ```python
+   # Custom finder installed in sys.meta_path
+   class AbstractImporter:
+       def find_module(self, fullname, path=None):
+           if self._full_path(fullname):
+               return self
+       
+       def load_module(self, fullname):
+           # Load from virtual filesystem
+           source = self._read_file(full_path)
+           exec(compile(source, full_path, 'exec'), mod.__dict__)
+   ```
+
+**Advantages of PyBake's Approach:**
+
+1. **Compact Storage**: Single compressed blob contains all modules
+2. **Standard Import Semantics**: Uses Python's import system directly
+3. **Dynamic Loading**: Modules loaded on-demand when imported
+4. **No AST Transformation**: Original code executed as-is
+5. **Clean Module Isolation**: Each module gets proper `__dict__` namespace
+
+**Disadvantages:**
+
+1. **Uses exec()**: The very problem we're trying to avoid in Cribo
+2. **Runtime Overhead**: Decompression and module creation at runtime
+3. **No Static Analysis**: Bundled code is compressed, not analyzable
+4. **No Tree Shaking**: All modules included in blob
+5. **Security Concerns**: Dynamic code execution
+
+### Cribo's Hybrid Static Bundler vs PyBake
+
+| Feature                | Cribo Hybrid Bundler                  | PyBake                           |
+| ---------------------- | ------------------------------------- | -------------------------------- |
+| **Storage**            | Uncompressed Python code              | Compressed JSON blob             |
+| **Module Creation**    | `sys.modules` with synthetic names    | `types.ModuleType` with exec()   |
+| **Import Handling**    | PEP 302 hooks + static transformation | PEP 302 hooks only               |
+| **Code Execution**     | Module init functions (no exec)       | Direct exec() in module.**dict** |
+| **AST Transformation** | Yes, for imports and module wrapping  | No transformation                |
+| **Debugging**          | Source maps + clear module boundaries | Limited, compressed code         |
+| **Performance**        | Faster startup (no decompression)     | Slower (decompression + exec)    |
+| **Security**           | No exec() calls                       | Uses exec() extensively          |
+| **Tree Shaking**       | Supported                             | Not supported                    |
+| **Module Conflicts**   | Hash-based naming prevents conflicts  | Relies on import path resolution |
+
+### Key Insights from PyBake
+
+1. **Virtual Filesystem Benefits**: PyBake's DictFileSystem provides clean module organization
+2. **PEP 302 Import Hooks**: Both Cribo and PyBake use this standard Python mechanism, but in different ways:
+   - **PyBake**: Uses hooks to load from compressed blob at runtime
+   - **Cribo**: Uses hooks to redirect imports to pre-initialized synthetic modules
+3. **Module Preloading**: PyBake preloads core modules for better performance
+4. **Compression Trade-offs**: Smaller file size vs runtime overhead
+
+### Similarities and Differences in PEP 302 Usage
+
+Both Cribo and PyBake implement PEP 302 import hooks, but with fundamentally different approaches:
+
+**Cribo's Implementation:**
+
+```python
+class CriboBundledFinder:
+    def find_spec(self, fullname, path, target=None):
+        if fullname in __cribo_modules:
+            # Redirect to pre-initialized synthetic module
+            synthetic_name = __cribo_modules[fullname]
+            if synthetic_name not in sys.modules:
+                # Call init function (no exec!)
+                init_func = __cribo_init_functions[synthetic_name]
+                init_func()
+            return importlib.util.find_spec(synthetic_name)
+```
+
+**PyBake's Implementation:**
+
+```python
+class AbstractImporter:
+    def load_module(self, fullname):
+        # Create module and execute code dynamically
+        mod = types.ModuleType(fullname)
+        source = self._read_file(full_path)  # From compressed blob
+        exec(compile(source, full_path, 'exec'), mod.__dict__)
+        return mod
+```
+
+The key difference is that Cribo's hooks redirect to **pre-transformed, statically bundled code**, while PyBake's hooks **dynamically execute compressed source code**.
+
+### Incorporating PyBake Ideas into Cribo
+
+While PyBake's exec-based approach doesn't align with Cribo's goals, several concepts could enhance our hybrid bundler:
+
+1. **Optional Compression**: Add opt-in compression for deployment scenarios (but decompress at build time, not runtime)
+2. **Virtual Filesystem Metadata**: Store module metadata similar to DictFileSystem for better introspection
+3. **Import Hook Optimization**: PyBake's simpler hook structure could inspire performance improvements
+4. **Preload Critical Modules**: Initialize frequently-used modules upfront like PyBake does
+
+### Why Cribo's Approach is Superior for Static Bundling
+
+1. **No exec() Required**: Compatible with restricted environments
+2. **Static Analysis Friendly**: Bundled code remains analyzable
+3. **Better Performance**: No runtime decompression or compilation
+4. **Source Map Support**: Full debugging capabilities
+5. **Tree Shaking**: Only include actually used code
+6. **Type Safety**: Preserves type hints and static typing
+
+The hybrid static bundler in Cribo represents an evolution beyond PyBake's approach, providing the benefits of bundling without sacrificing security, performance, or debuggability.
+
 ### Implementation Phases
 
 **Phase 1: Basic Mappings**
