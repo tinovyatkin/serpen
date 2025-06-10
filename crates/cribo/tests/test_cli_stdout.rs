@@ -63,6 +63,13 @@ fn get_cli_filters() -> Vec<(&'static str, &'static str)> {
         (r"(?m)^\s*Finished [^\n]*\n", ""),
         (r"(?m)^\s*Blocking waiting for file lock[^\n]*\n", ""),
         (r"(?m)^\s*warning: [^\n]*unused manifest key[^\n]*\n", ""),
+        // Normalize OS-specific error messages (keep structure, normalize message)
+        (
+            r"The system cannot find the file specified\. \(os error (\d+)\)",
+            "No such file or directory (os error $1)",
+        ),
+        // Normalize Windows executable names
+        (r"cribo\.exe", "cribo"),
         // Normalize line endings
         (r"\r\n", "\n"),
         (r"\r", "\n"),
