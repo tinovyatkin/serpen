@@ -9,6 +9,21 @@ use ruff_text_size::TextRange;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
+/// Context for module transformation operations
+struct ModuleTransformContext<'a> {
+    module_name: &'a str,
+    synthetic_name: &'a str,
+    module_path: &'a Path,
+}
+
+/// Context for inlining operations
+struct InlineContext<'a> {
+    module_exports_map: &'a IndexMap<String, Option<Vec<String>>>,
+    global_symbols: &'a mut IndexSet<String>,
+    module_renames: &'a mut IndexMap<String, IndexMap<String, String>>,
+    inlined_stmts: &'a mut Vec<Stmt>,
+}
+
 use crate::dependency_graph::ModuleNode;
 
 /// Hybrid static bundler that uses sys.modules and hash-based naming
@@ -329,12 +344,12 @@ impl HybridStaticBundler {
             // Transform wrapper modules into init functions
             for (module_name, ast, module_path) in wrapper_modules {
                 let synthetic_name = self.module_registry[&module_name].clone();
-                let init_function = self.transform_module_to_init_function(
-                    &module_name,
-                    &synthetic_name,
-                    &module_path,
-                    ast,
-                )?;
+                let ctx = ModuleTransformContext {
+                    module_name: &module_name,
+                    synthetic_name: &synthetic_name,
+                    module_path: &module_path,
+                };
+                let init_function = self.transform_module_to_init_function(ctx, ast)?;
                 final_body.push(init_function);
             }
 
@@ -350,13 +365,14 @@ impl HybridStaticBundler {
         // This ensures that any symbols referenced by wrapper modules are already defined
         for (module_name, ast, _module_path) in inlinable_modules {
             log::debug!("Inlining module '{}'", module_name);
-            let inlined_stmts = self.inline_module(
-                &module_name,
-                ast,
-                &module_exports_map,
-                &mut global_symbols,
-                &mut symbol_renames,
-            )?;
+            let mut inlined_stmts = Vec::new();
+            let mut inline_ctx = InlineContext {
+                module_exports_map: &module_exports_map,
+                global_symbols: &mut global_symbols,
+                module_renames: &mut symbol_renames,
+                inlined_stmts: &mut inlined_stmts,
+            };
+            self.inline_module(&module_name, ast, &mut inline_ctx)?;
             log::debug!(
                 "Inlined {} statements from module '{}'",
                 inlined_stmts.len(),
@@ -422,23 +438,21 @@ impl HybridStaticBundler {
     /// Transform a module into an initialization function
     fn transform_module_to_init_function(
         &self,
-        module_name: &str,
-        synthetic_name: &str,
-        module_path: &Path,
+        ctx: ModuleTransformContext,
         ast: ModModule,
     ) -> Result<Stmt> {
-        let init_func_name = &self.init_functions[synthetic_name];
+        let init_func_name = &self.init_functions[ctx.synthetic_name];
         let mut body = Vec::new();
 
         // Check if module already exists in sys.modules
-        body.push(self.create_module_exists_check(synthetic_name));
+        body.push(self.create_module_exists_check(ctx.synthetic_name));
 
         // Create module object (returns multiple statements)
-        body.extend(self.create_module_object_stmt(synthetic_name, module_path));
+        body.extend(self.create_module_object_stmt(ctx.synthetic_name, ctx.module_path));
 
         // Register in sys.modules with both synthetic and original names
-        body.push(self.create_sys_modules_registration(synthetic_name));
-        body.push(self.create_sys_modules_registration_alias(synthetic_name, module_name));
+        body.push(self.create_sys_modules_registration(ctx.synthetic_name));
+        body.push(self.create_sys_modules_registration_alias(ctx.synthetic_name, ctx.module_name));
 
         // Transform module contents
         for stmt in ast.body {
@@ -450,13 +464,13 @@ impl HybridStaticBundler {
                         let empty_renames = IndexMap::new();
                         let transformed_stmts = self.rewrite_import_in_stmt_multiple_with_context(
                             stmt.clone(),
-                            module_name,
+                            ctx.module_name,
                             &empty_renames,
                         );
                         body.extend(transformed_stmts);
 
                         // Check if any imported symbols should be re-exported as module attributes
-                        self.add_imported_symbol_attributes(&stmt, module_name, &mut body);
+                        self.add_imported_symbol_attributes(&stmt, ctx.module_name, &mut body);
                     }
                 }
                 Stmt::ClassDef(class_def) => {
@@ -464,7 +478,7 @@ impl HybridStaticBundler {
                     body.push(stmt.clone());
                     // Set as module attribute only if it should be exported
                     let symbol_name = class_def.name.to_string();
-                    if self.should_export_symbol(&symbol_name, module_name) {
+                    if self.should_export_symbol(&symbol_name, ctx.module_name) {
                         body.push(self.create_module_attr_assignment("module", &symbol_name));
                     }
                 }
@@ -473,14 +487,14 @@ impl HybridStaticBundler {
                     body.push(stmt.clone());
                     // Set as module attribute only if it should be exported
                     let symbol_name = func_def.name.to_string();
-                    if self.should_export_symbol(&symbol_name, module_name) {
+                    if self.should_export_symbol(&symbol_name, ctx.module_name) {
                         body.push(self.create_module_attr_assignment("module", &symbol_name));
                     }
                 }
                 Stmt::Assign(assign) => {
                     // For simple assignments, also set as module attribute if it should be exported
                     body.push(stmt.clone());
-                    self.add_module_attr_if_exported(assign, module_name, &mut body);
+                    self.add_module_attr_if_exported(assign, ctx.module_name, &mut body);
                 }
                 _ => {
                     // Other statements execute normally
@@ -490,8 +504,8 @@ impl HybridStaticBundler {
         }
 
         // Generate __all__ for the bundled module only if the original module had __all__
-        if let Some(Some(_)) = self.module_exports.get(module_name) {
-            body.push(self.create_all_assignment_for_module(module_name));
+        if let Some(Some(_)) = self.module_exports.get(ctx.module_name) {
+            body.push(self.create_all_assignment_for_module(ctx.module_name));
         }
 
         // Return the module object
@@ -1798,35 +1812,13 @@ impl HybridStaticBundler {
         self.generate_unique_name(base_name, existing_symbols)
     }
 
-    /// Record a rename if the new name differs from the original
-    fn record_rename_if_needed(
-        &self,
-        original_name: &str,
-        new_name: &str,
-        module_name: &str,
-        module_renames: &mut IndexMap<String, String>,
-    ) {
-        if new_name != original_name {
-            module_renames.insert(original_name.to_string(), new_name.to_string());
-            log::debug!(
-                "Renaming '{}' to '{}' in module '{}'",
-                original_name,
-                new_name,
-                module_name
-            );
-        }
-    }
-
     /// Inline a module without side effects directly into the bundle
     fn inline_module(
         &mut self,
         module_name: &str,
         ast: ModModule,
-        module_exports_map: &IndexMap<String, Option<Vec<String>>>,
-        global_symbols: &mut IndexSet<String>,
-        symbol_renames: &mut IndexMap<String, IndexMap<String, String>>,
+        ctx: &mut InlineContext,
     ) -> Result<Vec<Stmt>> {
-        let mut inlined_stmts = Vec::new();
         let mut module_renames = IndexMap::new();
 
         // Process each statement in the module
@@ -1844,67 +1836,51 @@ impl HybridStaticBundler {
                 }
                 Stmt::FunctionDef(func_def) => {
                     let func_name = func_def.name.to_string();
-                    if self.should_inline_symbol(&func_name, module_name, module_exports_map) {
-                        let renamed_name = self.get_unique_name(&func_name, global_symbols);
-                        self.record_rename_if_needed(
-                            &func_name,
-                            &renamed_name,
-                            module_name,
-                            &mut module_renames,
-                        );
-                        global_symbols.insert(renamed_name.clone());
-
-                        // Clone and rename the function
-                        let mut func_def_clone = func_def.clone();
-                        func_def_clone.name = Identifier::new(renamed_name, TextRange::default());
-                        inlined_stmts.push(Stmt::FunctionDef(func_def_clone));
+                    if !self.should_inline_symbol(&func_name, module_name, ctx.module_exports_map) {
+                        continue;
                     }
+
+                    let renamed_name = self.get_unique_name(&func_name, ctx.global_symbols);
+                    if renamed_name != func_name {
+                        module_renames.insert(func_name.clone(), renamed_name.clone());
+                        log::debug!(
+                            "Renaming '{}' to '{}' in module '{}'",
+                            func_name,
+                            renamed_name,
+                            module_name
+                        );
+                    }
+                    ctx.global_symbols.insert(renamed_name.clone());
+
+                    // Clone and rename the function
+                    let mut func_def_clone = func_def.clone();
+                    func_def_clone.name = Identifier::new(renamed_name, TextRange::default());
+                    ctx.inlined_stmts.push(Stmt::FunctionDef(func_def_clone));
                 }
                 Stmt::ClassDef(class_def) => {
-                    self.inline_class(
-                        class_def,
-                        module_name,
-                        module_exports_map,
-                        global_symbols,
-                        &mut module_renames,
-                        &mut inlined_stmts,
-                    );
+                    self.inline_class(class_def, module_name, &mut module_renames, ctx);
                 }
                 Stmt::Assign(assign) => {
-                    self.inline_assignment(
-                        assign,
-                        module_name,
-                        module_exports_map,
-                        global_symbols,
-                        &mut module_renames,
-                        &mut inlined_stmts,
-                    );
+                    self.inline_assignment(assign, module_name, &mut module_renames, ctx);
                 }
                 Stmt::AnnAssign(ann_assign) => {
-                    self.inline_ann_assignment(
-                        ann_assign,
-                        module_name,
-                        module_exports_map,
-                        global_symbols,
-                        &mut module_renames,
-                        &mut inlined_stmts,
-                    );
+                    self.inline_ann_assignment(ann_assign, module_name, &mut module_renames, ctx);
                 }
                 // TypeAlias statements are safe metadata definitions
                 Stmt::TypeAlias(_) => {
                     // Type aliases don't need renaming in Python, they're just metadata
-                    inlined_stmts.push(stmt);
+                    ctx.inlined_stmts.push(stmt);
                 }
                 // Pass statements are no-ops and safe
                 Stmt::Pass(_) => {
                     // Pass statements can be included as-is
-                    inlined_stmts.push(stmt);
+                    ctx.inlined_stmts.push(stmt);
                 }
                 // Expression statements that are string literals are docstrings
                 Stmt::Expr(expr_stmt) => {
                     if matches!(expr_stmt.value.as_ref(), Expr::StringLiteral(_)) {
                         // This is a docstring - safe to include
-                        inlined_stmts.push(stmt);
+                        ctx.inlined_stmts.push(stmt);
                     } else {
                         // Other expression statements shouldn't exist in side-effect-free modules
                         log::warn!(
@@ -1927,10 +1903,11 @@ impl HybridStaticBundler {
 
         // Store the renames for this module
         if !module_renames.is_empty() {
-            symbol_renames.insert(module_name.to_string(), module_renames);
+            ctx.module_renames
+                .insert(module_name.to_string(), module_renames);
         }
 
-        Ok(inlined_stmts)
+        Ok(Vec::new()) // Statements are accumulated in ctx.inlined_stmts
     }
 
     /// Check if a symbol should be inlined based on export rules
@@ -2051,12 +2028,7 @@ impl HybridStaticBundler {
 
         // This is an inlined module - generate attribute assignments
         for alias in &import_from.names {
-            self.generate_attribute_assignment_for_alias(
-                alias,
-                module_name,
-                imported_module,
-                stmts,
-            );
+            self.generate_attribute_assignment_for_alias(alias, module_name, stmts);
         }
     }
 
@@ -2065,7 +2037,6 @@ impl HybridStaticBundler {
         &self,
         alias: &ruff_python_ast::Alias,
         module_name: &str,
-        _imported_module: &str,
         stmts: &mut Vec<Stmt>,
     ) {
         let imported_name = alias.name.as_str();
@@ -2219,21 +2190,20 @@ impl HybridStaticBundler {
     }
 
     /// Inline a class definition
+    #[allow(clippy::too_many_arguments)]
     fn inline_class(
         &self,
         class_def: &ruff_python_ast::StmtClassDef,
         module_name: &str,
-        module_exports_map: &IndexMap<String, Option<Vec<String>>>,
-        global_symbols: &mut IndexSet<String>,
         module_renames: &mut IndexMap<String, String>,
-        inlined_stmts: &mut Vec<Stmt>,
+        ctx: &mut InlineContext,
     ) {
         let class_name = class_def.name.to_string();
-        if !self.should_inline_symbol(&class_name, module_name, module_exports_map) {
+        if !self.should_inline_symbol(&class_name, module_name, ctx.module_exports_map) {
             return;
         }
 
-        let renamed_name = self.get_unique_name(&class_name, global_symbols);
+        let renamed_name = self.get_unique_name(&class_name, ctx.global_symbols);
         if renamed_name != class_name {
             module_renames.insert(class_name.clone(), renamed_name.clone());
             log::debug!(
@@ -2243,33 +2213,32 @@ impl HybridStaticBundler {
                 module_name
             );
         }
-        global_symbols.insert(renamed_name.clone());
+        ctx.global_symbols.insert(renamed_name.clone());
 
         // Clone and rename the class
         let mut class_def_clone = class_def.clone();
         class_def_clone.name = Identifier::new(renamed_name, TextRange::default());
-        inlined_stmts.push(Stmt::ClassDef(class_def_clone));
+        ctx.inlined_stmts.push(Stmt::ClassDef(class_def_clone));
     }
 
     /// Inline an assignment statement
+    #[allow(clippy::too_many_arguments)]
     fn inline_assignment(
         &self,
         assign: &StmtAssign,
         module_name: &str,
-        module_exports_map: &IndexMap<String, Option<Vec<String>>>,
-        global_symbols: &mut IndexSet<String>,
         module_renames: &mut IndexMap<String, String>,
-        inlined_stmts: &mut Vec<Stmt>,
+        ctx: &mut InlineContext,
     ) {
         let Some(name) = self.extract_simple_assign_target(assign) else {
             return;
         };
 
-        if !self.should_inline_symbol(&name, module_name, module_exports_map) {
+        if !self.should_inline_symbol(&name, module_name, ctx.module_exports_map) {
             return;
         }
 
-        let renamed_name = self.get_unique_name(&name, global_symbols);
+        let renamed_name = self.get_unique_name(&name, ctx.global_symbols);
         if renamed_name != name {
             module_renames.insert(name.clone(), renamed_name.clone());
             log::debug!(
@@ -2279,36 +2248,35 @@ impl HybridStaticBundler {
                 module_name
             );
         }
-        global_symbols.insert(renamed_name.clone());
+        ctx.global_symbols.insert(renamed_name.clone());
 
         // Clone and rename the assignment
         let mut assign_clone = assign.clone();
         if let Expr::Name(name_expr) = &mut assign_clone.targets[0] {
             name_expr.id = renamed_name.into();
         }
-        inlined_stmts.push(Stmt::Assign(assign_clone));
+        ctx.inlined_stmts.push(Stmt::Assign(assign_clone));
     }
 
     /// Inline an annotated assignment statement
+    #[allow(clippy::too_many_arguments)]
     fn inline_ann_assignment(
         &self,
         ann_assign: &ruff_python_ast::StmtAnnAssign,
         module_name: &str,
-        module_exports_map: &IndexMap<String, Option<Vec<String>>>,
-        global_symbols: &mut IndexSet<String>,
         module_renames: &mut IndexMap<String, String>,
-        inlined_stmts: &mut Vec<Stmt>,
+        ctx: &mut InlineContext,
     ) {
         let Expr::Name(name) = ann_assign.target.as_ref() else {
             return;
         };
 
         let var_name = name.id.to_string();
-        if !self.should_inline_symbol(&var_name, module_name, module_exports_map) {
+        if !self.should_inline_symbol(&var_name, module_name, ctx.module_exports_map) {
             return;
         }
 
-        let renamed_name = self.get_unique_name(&var_name, global_symbols);
+        let renamed_name = self.get_unique_name(&var_name, ctx.global_symbols);
         if renamed_name != var_name {
             module_renames.insert(var_name.clone(), renamed_name.clone());
             log::debug!(
@@ -2318,13 +2286,13 @@ impl HybridStaticBundler {
                 module_name
             );
         }
-        global_symbols.insert(renamed_name.clone());
+        ctx.global_symbols.insert(renamed_name.clone());
 
         // Clone and rename the annotated assignment
         let mut ann_assign_clone = ann_assign.clone();
         if let Expr::Name(name_expr) = ann_assign_clone.target.as_mut() {
             name_expr.id = renamed_name.into();
         }
-        inlined_stmts.push(Stmt::AnnAssign(ann_assign_clone));
+        ctx.inlined_stmts.push(Stmt::AnnAssign(ann_assign_clone));
     }
 }
