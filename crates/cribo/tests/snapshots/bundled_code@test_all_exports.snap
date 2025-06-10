@@ -1,0 +1,72 @@
+---
+source: crates/cribo/tests/test_bundling_snapshots.rs
+input_file: crates/cribo/tests/fixtures/bundling/test_all_exports/main.py
+---
+import sys, types
+def __cribo_init___cribo_af5356_utils():
+    if '__cribo_af5356_utils' in sys.modules:
+        return sys.modules['__cribo_af5356_utils']
+    module = types.ModuleType('__cribo_af5356_utils')
+    module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/test_all_exports/utils.py'
+    sys.modules['__cribo_af5356_utils'] = module
+    sys.modules['utils'] = module
+    """\nUtility module that demonstrates __all__ handling.\nOnly exports helper_function and UtilityClass, not _internal_function.\n"""
+
+    def helper_function():
+        """A public helper function."""
+        return "helper_result"
+    module.helper_function = helper_function
+
+    def _internal_function():
+        """An internal function that should not be exposed."""
+        return "internal_result"
+
+    class UtilityClass:
+        """A utility class that should be exposed."""
+
+        def __init__(self, value):
+            self.value = value
+
+        def get_value(self):
+            return self.value
+    module.UtilityClass = UtilityClass
+
+    class _InternalClass:
+        """An internal class that should not be exposed."""
+        pass
+    __all__ = ["helper_function", "UtilityClass"]
+    module.__all__ = ['helper_function', 'UtilityClass']
+    return module
+__cribo_modules = {'utils': '__cribo_af5356_utils'}
+__cribo_init_functions = {'__cribo_af5356_utils': __cribo_init___cribo_af5356_utils}
+class CriboBundledFinder:
+
+    def __init__(self, module_registry, init_functions):
+        self.module_registry = module_registry
+        self.init_functions = init_functions
+
+    def find_spec(self, fullname, path, target=None):
+        if fullname in self.module_registry:
+            synthetic_name = self.module_registry[fullname]
+            if synthetic_name not in sys.modules:
+                init_func = self.init_functions.get(synthetic_name)
+                if init_func:
+                    init_func()
+            import importlib.util
+            return importlib.util.find_spec(synthetic_name)
+        return None
+sys.meta_path.insert(0, CriboBundledFinder(__cribo_modules, __cribo_init_functions))
+__cribo_init___cribo_af5356_utils()
+"""\nTest fixture for __all__ handling in bundled modules.\nThis tests that modules with __all__ only expose listed symbols.\n"""
+helper_function = sys.modules['utils'].helper_function
+UtilityClass = sys.modules['utils'].UtilityClass
+def main():
+    """Test that only exported symbols are accessible."""
+    result = helper_function()
+    util = UtilityClass("test")
+    print("Helper result:", result)
+    print("Utility value:", util.get_value())
+    return "test_all_exports_complete"
+if __name__ == "__main__":
+    result = main()
+    print(result)

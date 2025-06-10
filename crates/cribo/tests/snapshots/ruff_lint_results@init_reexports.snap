@@ -4,7 +4,7 @@ input_file: crates/cribo/tests/fixtures/bundling/init_reexports/main.py
 ---
 RuffLintResults {
     f401_violations: [
-        "Line 6: F401 - `os` imported but unused",
+        "Line 1: F401 - `os` imported but unused",
     ],
     f404_violations: [],
     other_violations: [],

@@ -1,0 +1,11 @@
+---
+source: crates/cribo/tests/test_bundling_snapshots.rs
+input_file: crates/cribo/tests/fixtures/bundling/xfail_stickytape_explicit_relative_import/main.py
+---
+ExecutionResults {
+    status: Failed(
+        1,
+    ),
+    stdout: "",
+    stderr: "Traceback (most recent call last):\n  File \"<TMP>/bundled.py\", line 53, in <module>\n    __cribo_init___cribo_3f3e1c_greetings_greeting()\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"<TMP>/bundled.py\", line 27, in __cribo_init___cribo_3f3e1c_greetings_greeting\n    from .messages import message\nImportError: attempted relative import with no known parent package",
+}

@@ -159,9 +159,8 @@ fn test_bundling_fixtures() {
         let temp_dir = TempDir::new().unwrap();
         let bundle_path = temp_dir.path().join("bundled.py");
 
-        // Configure bundler with static bundling enabled
-        let mut config = Config::default();
-        config.static_bundling = true;
+        // Configure bundler
+        let config = Config::default();
         let mut bundler = Bundler::new(config);
 
         // Bundle the fixture

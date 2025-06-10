@@ -31,8 +31,8 @@ pub struct Config {
     #[serde(rename = "target-version")]
     pub target_version: String,
 
-    /// Whether to use static bundling (transforms modules to classes, eliminates exec())
-    /// This is an experimental feature that improves compatibility with certain environments
+    /// Whether to use static bundling (transforms modules to init functions, eliminates exec())
+    /// This is the default behavior as it improves compatibility and security
     #[serde(rename = "static-bundling")]
     pub static_bundling: bool,
 }
@@ -46,7 +46,7 @@ impl Default for Config {
             preserve_comments: true,
             preserve_type_hints: true,
             target_version: "py310".to_owned(),
-            static_bundling: false,
+            static_bundling: true,
         }
     }
 }

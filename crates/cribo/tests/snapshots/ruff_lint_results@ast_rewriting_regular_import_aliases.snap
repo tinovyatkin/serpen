@@ -3,8 +3,12 @@ source: crates/cribo/tests/test_bundling_snapshots.rs
 input_file: crates/cribo/tests/fixtures/bundling/ast_rewriting_regular_import_aliases/main.py
 ---
 RuffLintResults {
-    f401_violations: [],
+    f401_violations: [
+        "Line 64: F401 - `os` imported but unused",
+        "Line 66: F401 - `sys` imported but unused",
+        "Line 74: F401 - `datetime` imported but unused",
+    ],
     f404_violations: [],
     other_violations: [],
-    total_violations: 0,
+    total_violations: 3,
 }

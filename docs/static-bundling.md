@@ -179,13 +179,822 @@ Or via environment variable:
 CRIBO_STATIC_BUNDLING=true cribo --entry main.py --output bundle.py
 ```
 
+## Alternative Approaches Comparison
+
+### Approach 1: Wrapper Classes (Current Implementation)
+
+**How it works:**
+
+- Each module becomes a class (`__cribo_module_foo_bar`)
+- Functions become static methods
+- Module vars stored in `__cribo_vars` dict
+- Complex initialization in `__cribo_init` method
+- Module facades created with `types.ModuleType`
+
+**Pros:**
+
+- Preserves module namespaces exactly
+- Clean separation of module initialization
+- Supports all Python module features
+- Easy debugging with clear module boundaries
+
+**Cons:**
+
+- Complex implementation
+- Forward reference issues with classes
+- Larger bundle size due to wrapper infrastructure
+- Performance overhead from attribute copying
+
+**Example:**
+
+```python
+# Original
+class User:
+    def __init__(self, name):
+        self.name = name
+
+def create_user(name):
+    return User(name)
+
+# Bundled
+class __cribo_module_models:
+    class User:
+        def __init__(self, name):
+            self.name = name
+    
+    @staticmethod
+    def create_user(name):
+        return User(name)  # NameError: User not defined
+```
+
+### Approach 2: Simple Symbol Renaming
+
+**How it works:**
+
+- All symbols get unique prefixed names
+- Direct renaming: `foo.bar.func` → `__foo_bar__func`
+- No wrapper classes or module objects
+- All code in flat global namespace
+
+**Pros:**
+
+- Simple implementation
+- No forward reference issues
+- Smaller bundle size
+- Better performance (no wrapper overhead)
+- Similar to JavaScript bundlers (Rolldown/webpack)
+
+**Cons:**
+
+- Module namespaces are flattened
+- Dynamic imports become difficult
+- `__all__` exports need special handling
+- Less Python-idiomatic
+
+**Example:**
+
+```python
+# Original
+# models.py
+class User:
+    def __init__(self, name):
+        self.name = name
+
+def create_user(name):
+    return User(name)
+
+# utils.py
+class User:  # Name collision!
+    role = "admin"
+
+# main.py
+from models import User as ModelUser
+from utils import User as UtilUser
+
+# Bundled (with renaming)
+class __models__User:
+    def __init__(self, name):
+        self.name = name
+
+def __models__create_user(name):
+    return __models__User(name)
+
+class __utils__User:
+    role = "admin"
+
+# main.py code
+ModelUser = __models__User
+UtilUser = __utils__User
+```
+
+### Approach 3: Hybrid Module Wrappers (Inspired by Rolldown)
+
+**How it works:**
+
+- Modules wrapped in initialization functions
+- Lazy initialization to handle circular dependencies
+- Module namespace objects for clean boundaries
+- Symbol renaming only for conflicts
+
+**Pros:**
+
+- Best of both approaches
+- Handles circular dependencies well
+- Supports tree shaking
+- Maintains module boundaries
+- Uses Python's native module system
+
+**Cons:**
+
+- More complex than simple renaming
+- Requires careful initialization ordering
+- Still has some wrapper overhead
+
+**Example:**
+
+```python
+# Bundled output
+import sys
+import types
+import hashlib
+
+# Module registry maps original names to synthetic names
+__cribo_modules = {
+    'models': '__cribo_7a3f9b_models',        # Hash of 'src/models.py'
+    'utils': '__cribo_4e8c12_utils',          # Hash of 'lib/utils.py'
+    'models.user': '__cribo_9d2f5a_models_user',  # Hash of 'src/models/user.py'
+}
+
+def __cribo_get_module_name(original_name):
+    """Get the synthetic module name for bundled modules."""
+    return __cribo_modules.get(original_name, original_name)
+
+def __cribo_init_7a3f9b_models():
+    # Use synthetic name to avoid conflicts
+    synthetic_name = '__cribo_7a3f9b_models'
+    
+    if synthetic_name in sys.modules:
+        return sys.modules[synthetic_name]
+    
+    # Create module with synthetic name
+    module = types.ModuleType(synthetic_name)
+    module.__file__ = 'src/models.py'  # Original path for debugging
+    module.__package__ = ''
+    module.__name__ = synthetic_name
+    
+    # Register in sys.modules immediately
+    sys.modules[synthetic_name] = module
+    
+    # Also register under original name for internal imports
+    sys.modules['models'] = module
+    
+    # Define module contents
+    class User:
+        def __init__(self, name):
+            self.name = name
+    
+    def create_user(name):
+        return User(name)
+    
+    # Set module attributes
+    module.User = User
+    module.create_user = create_user
+    module.__all__ = ['User', 'create_user']
+    
+    return module
+
+def __cribo_init_4e8c12_utils():
+    synthetic_name = '__cribo_4e8c12_utils'
+    
+    if synthetic_name in sys.modules:
+        return sys.modules[synthetic_name]
+    
+    module = types.ModuleType(synthetic_name)
+    module.__file__ = 'lib/utils.py'
+    sys.modules[synthetic_name] = module
+    sys.modules['utils'] = module
+    
+    class User:
+        role = "admin"
+    
+    module.User = User
+    module.__all__ = ['User']
+    
+    return module
+
+# Install custom import hook for bundled modules
+class CriboBundledFinder:
+    """Import hook that redirects bundled module imports to synthetic names."""
+    
+    def find_spec(self, fullname, path, target=None):
+        if fullname in __cribo_modules:
+            # This is a bundled module
+            synthetic_name = __cribo_modules[fullname]
+            if synthetic_name not in sys.modules:
+                # Initialize the module
+                init_func = globals().get(f'__cribo_init_{synthetic_name.split("_")[2]}_{fullname.replace(".", "_")}')
+                if init_func:
+                    init_func()
+            
+            # Return the spec for the synthetic module
+            import importlib.util
+            return importlib.util.find_spec(synthetic_name)
+        return None
+
+# Install the import hook
+sys.meta_path.insert(0, CriboBundledFinder())
+
+# Initialize modules
+__cribo_init_7a3f9b_models()
+__cribo_init_4e8c12_utils()
+
+# Now imports work with proper isolation
+import models  # Gets __cribo_7a3f9b_models
+import utils   # Gets __cribo_4e8c12_utils
+
+# Third-party 'models' package would still work
+import models as third_party_models  # Would bypass our finder if not in __cribo_modules
+```
+
+**Hash Generation Strategy:**
+
+```rust
+// In the bundler
+fn generate_module_hash(file_path: &Path, entry_point: &Path) -> String {
+    // Get relative path from entry point
+    let relative_path = file_path
+        .strip_prefix(entry_point.parent().unwrap())
+        .unwrap_or(file_path);
+
+    // Create stable hash from relative path
+    let mut hasher = Sha256::new();
+    hasher.update(relative_path.to_string_lossy().as_bytes());
+    let hash = hasher.finalize();
+
+    // Take first 6 chars of hex for readability
+    format!("{:x}", hash)[..6].to_string()
+}
+
+// Generate synthetic module name
+fn get_synthetic_module_name(module_name: &str, file_path: &Path, entry_point: &Path) -> String {
+    let hash = generate_module_hash(file_path, entry_point);
+    format!("__cribo_{}_{}", hash, module_name.replace('.', "_"))
+}
+```
+
+**Advanced Example with Circular Dependencies:**
+
+```python
+# Module registry with hashed names
+__cribo_modules = {
+    'models': '__cribo_7a3f9b_models',
+    'models.user': '__cribo_9d2f5a_models_user',
+    'models.post': '__cribo_3b8e7c_models_post',
+}
+
+# Handling circular imports between models.user and models.post
+def __cribo_init_9d2f5a_models_user():
+    synthetic_name = '__cribo_9d2f5a_models_user'
+    
+    if synthetic_name in sys.modules:
+        return sys.modules[synthetic_name]
+    
+    # Create and register immediately
+    module = types.ModuleType(synthetic_name)
+    module.__file__ = 'src/models/user.py'
+    module.__name__ = synthetic_name
+    sys.modules[synthetic_name] = module
+    sys.modules['models.user'] = module  # Also register original name
+    
+    # Can safely import post now - it will get partial module if circular
+    from models.post import Post  # Works even if post imports user!
+    
+    class User:
+        def __init__(self, name):
+            self.name = name
+            self.posts = []
+        
+        def add_post(self, title):
+            post = Post(title, author=self)
+            self.posts.append(post)
+            return post
+    
+    module.User = User
+    return module
+
+def __cribo_init_3b8e7c_models_post():
+    synthetic_name = '__cribo_3b8e7c_models_post'
+    
+    if synthetic_name in sys.modules:
+        return sys.modules[synthetic_name]
+    
+    module = types.ModuleType(synthetic_name)
+    module.__file__ = 'src/models/post.py'
+    module.__name__ = synthetic_name
+    sys.modules[synthetic_name] = module
+    sys.modules['models.post'] = module
+    
+    # Import User - gets partial or complete module
+    from models.user import User
+    
+    class Post:
+        def __init__(self, title, author):
+            self.title = title
+            self.author = author  # This is a User instance
+    
+    module.Post = Post
+    return module
+
+# Benefits of hash-based approach:
+# 1. No conflicts with third-party 'models' packages
+# 2. Deterministic names based on file paths
+# 3. Can bundle multiple projects without name collisions
+# 4. Import hooks ensure correct module resolution
+```
+
+**Simplified Import Hook Implementation:**
+
+```python
+class CriboBundledFinder:
+    """Minimal import hook for bundled modules."""
+    
+    def __init__(self, module_registry, init_functions):
+        self.module_registry = module_registry
+        self.init_functions = init_functions
+    
+    def find_spec(self, fullname, path, target=None):
+        if fullname in self.module_registry:
+            synthetic_name = self.module_registry[fullname]
+            
+            # Initialize if needed
+            if synthetic_name not in sys.modules:
+                init_func = self.init_functions.get(synthetic_name)
+                if init_func:
+                    init_func()
+            
+            # Return existing spec
+            import importlib.util
+            return importlib.util.find_spec(synthetic_name)
+        return None
+
+# Register all init functions
+__cribo_init_functions = {
+    '__cribo_7a3f9b_models': __cribo_init_7a3f9b_models,
+    '__cribo_4e8c12_utils': __cribo_init_4e8c12_utils,
+    '__cribo_9d2f5a_models_user': __cribo_init_9d2f5a_models_user,
+    '__cribo_3b8e7c_models_post': __cribo_init_3b8e7c_models_post,
+}
+
+# Install hook
+sys.meta_path.insert(0, CriboBundledFinder(__cribo_modules, __cribo_init_functions))
+```
+
+### Recommendation
+
+For Cribo's next iteration, consider the **Hybrid Module Wrappers** approach because:
+
+1. It solves the forward reference problem elegantly
+2. Maintains Python's module semantics
+3. Handles circular dependencies naturally
+4. Enables future optimizations (tree shaking, lazy loading)
+5. Aligns with proven JavaScript bundler architectures
+
+The simple renaming approach is tempting for its simplicity, but Python's dynamic nature and module system expectations make the hybrid approach more suitable for maintaining compatibility while achieving the goal of static bundling.
+
+## Source Map Support
+
+### Overview
+
+Source maps enable debugging of bundled code by mapping locations in the bundle back to original source files. Cribo should adopt the JavaScript Source Map v3 specification for Python bundles.
+
+### Source Map v3 Format
+
+```json
+{
+  "version": 3,
+  "file": "bundle.py",
+  "sourceRoot": "",
+  "sources": ["src/main.py", "src/utils.py", "src/models/user.py"],
+  "names": ["helper", "User", "create_user"],
+  "mappings": "AAAA,SAASA,QAAQ;AACjB...",
+  "sourcesContent": ["# Original source of main.py", "# Original source of utils.py", ...]
+}
+```
+
+### Implementation Strategy
+
+#### 1. Track Transformations During Bundling
+
+```rust
+#[derive(Debug, Clone)]
+struct SourceLocation {
+    file_path: String,
+    line: usize,
+    column: usize,
+}
+
+#[derive(Debug)]
+struct MappingSegment {
+    generated_line: usize,
+    generated_column: usize,
+    source_file_index: usize,
+    source_line: usize,
+    source_column: usize,
+    name_index: Option<usize>,
+}
+
+struct SourceMapBuilder {
+    mappings: Vec<MappingSegment>,
+    sources: Vec<String>,
+    names: Vec<String>,
+    sources_content: Vec<String>,
+}
+```
+
+#### 2. During AST Transformation
+
+When transforming AST nodes, preserve original location information:
+
+```rust
+// In the bundler
+fn transform_function(&mut self, func: &mut StmtFunctionDef, original_loc: SourceLocation) {
+    // Transform the function
+    let new_name = self.rename_symbol(&func.name);
+
+    // Record the mapping
+    self.source_map.add_mapping(MappingSegment {
+        generated_line: func.range.start.line,
+        generated_column: func.range.start.column,
+        source_file_index: self.get_source_index(&original_loc.file_path),
+        source_line: original_loc.line,
+        source_column: original_loc.column,
+        name_index: Some(self.get_name_index(&func.name.to_string())),
+    });
+}
+```
+
+#### 3. VLQ Encoding for Mappings
+
+The mappings string uses Base64 VLQ (Variable Length Quantity) encoding:
+
+```rust
+fn encode_vlq(value: i32) -> String {
+    const BASE64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::new();
+    let mut value = if value < 0 {
+        ((-value) << 1) | 1
+    } else {
+        value << 1
+    };
+
+    loop {
+        let mut digit = value & 0x1F;
+        value >>= 5;
+        if value > 0 {
+            digit |= 0x20; // Set continuation bit
+        }
+        encoded.push(BASE64_CHARS[digit as usize] as char);
+        if value == 0 {
+            break;
+        }
+    }
+    encoded
+}
+```
+
+#### 4. Python Exception Integration
+
+Add a custom exception handler that reads source maps:
+
+```python
+# At the end of bundled file
+import sys
+import json
+import traceback
+
+_SOURCE_MAP = json.loads('''
+{
+  "version": 3,
+  "file": "bundle.py",
+  "sources": ["main.py", "utils.py"],
+  "mappings": "...",
+  "sourcesContent": [...]
+}
+''')
+
+def _cribo_exception_handler(exc_type, exc_value, exc_traceback):
+    """Map bundled code locations back to original sources."""
+    tb_lines = []
+    
+    for frame in traceback.extract_tb(exc_traceback):
+        if frame.filename == __file__:  # This is bundled code
+            # Decode source map to find original location
+            orig_file, orig_line = _decode_source_location(frame.lineno, frame.col_offset)
+            if orig_file:
+                # Show original source context
+                source_line = _get_source_line(orig_file, orig_line)
+                tb_lines.append(f'  File "{orig_file}", line {orig_line}')
+                if source_line:
+                    tb_lines.append(f'    {source_line.strip()}')
+            else:
+                # Fallback to bundled location
+                tb_lines.append(f'  File "{frame.filename}", line {frame.lineno}')
+                tb_lines.append(f'    {frame.line}')
+        else:
+            # External file, show as-is
+            tb_lines.append(f'  File "{frame.filename}", line {frame.lineno}')
+            tb_lines.append(f'    {frame.line}')
+    
+    print(f"Traceback (most recent call last):")
+    print('\n'.join(tb_lines))
+    print(f"{exc_type.__name__}: {exc_value}")
+
+sys.excepthook = _cribo_exception_handler
+```
+
+#### 5. External Source Map Files
+
+For production, source maps should be in separate files:
+
+```python
+# bundle.py
+#!/usr/bin/env python3
+# sourceMappingURL=bundle.py.map
+
+# ... bundled code ...
+```
+
+The source map loader would check for:
+
+1. Inline source map comment
+2. External `.map` file
+3. HTTP header `X-SourceMap` (for web-served bundles)
+
+### Benefits of Source Maps
+
+1. **Accurate debugging** - IDEs can set breakpoints in original files
+2. **Better error messages** - Stack traces show original locations
+3. **Profiling support** - Performance tools can attribute time to original code
+4. **Code coverage** - Map coverage back to source files
+5. **Integration with existing tools** - Many tools already support Source Map v3
+
+### Source Maps with Hybrid Module Approach
+
+The hybrid module wrapper approach is particularly well-suited for source mapping because:
+
+1. **Module boundaries are preserved** - Each init function corresponds to one source file
+2. **Line numbers are mostly preserved** - Module content is copied almost verbatim
+3. **Synthetic names are traceable** - Hash-based names map back to file paths
+4. **Clean transformation** - Predictable wrapping pattern makes mapping easier
+
+**Example with Source Mapping:**
+
+```python
+# bundled.py with source map annotations
+import sys
+import types
+
+# sourceMappingURL=bundled.py.map
+
+__cribo_modules = {
+    'models': '__cribo_7a3f9b_models',  # src/models.py
+    'utils': '__cribo_4e8c12_utils',    # lib/utils.py
+}
+
+def __cribo_init_7a3f9b_models():
+    synthetic_name = '__cribo_7a3f9b_models'
+    if synthetic_name in sys.modules:
+        return sys.modules[synthetic_name]
+    
+    module = types.ModuleType(synthetic_name)
+    module.__file__ = 'src/models.py'
+    sys.modules[synthetic_name] = module
+    sys.modules['models'] = module
+    
+    # === START src/models.py line 1 ===
+    class User:
+        def __init__(self, name):  # line 2
+            self.name = name        # line 3
+    
+    def create_user(name):          # line 5
+        return User(name)           # line 6
+    # === END src/models.py ===
+    
+    module.User = User
+    module.create_user = create_user
+    return module
+```
+
+**Source Map Generation Strategy:**
+
+```rust
+impl SourceMapGenerator {
+    fn generate_for_hybrid_module(&mut self, module: &Module, wrapper_fn_start_line: usize) {
+        // Track the wrapper function overhead
+        let wrapper_overhead = 9; // Lines before module content starts
+
+        // Map each line in the original module
+        for (original_line, generated_line) in module.lines.iter().enumerate() {
+            self.add_mapping(Mapping {
+                generated_line: wrapper_fn_start_line + wrapper_overhead + original_line,
+                generated_column: 4, // Indentation inside function
+                source_file: module.file_path,
+                source_line: original_line + 1,
+                source_column: 0,
+            });
+        }
+
+        // Map the module attribute assignments
+        let attr_start = wrapper_fn_start_line + wrapper_overhead + module.lines.len();
+        for (i, attr) in module.exports.iter().enumerate() {
+            self.add_name_mapping(
+                attr_start + i,
+                module.file_path,
+                attr.original_line,
+                attr.name,
+            );
+        }
+    }
+}
+```
+
+**Enhanced Exception Handler with Source Maps:**
+
+```python
+def _cribo_exception_handler(exc_type, exc_value, exc_traceback):
+    """Enhanced handler that uses module.__file__ attributes."""
+    tb_lines = []
+    
+    for frame in traceback.extract_tb(exc_traceback):
+        # Check if this is a cribo synthetic module
+        module_name = frame.name  # e.g., '__cribo_7a3f9b_models'
+        
+        if module_name.startswith('__cribo_') and module_name in sys.modules:
+            # Get the original file from module.__file__
+            original_file = sys.modules[module_name].__file__
+            
+            # Calculate original line number
+            # The source map tells us the offset
+            original_line = _map_line_number(module_name, frame.lineno)
+            
+            tb_lines.append(f'  File "{original_file}", line {original_line}')
+            
+            # Get original source line if available
+            if original_file in _SOURCE_MAP['sourcesContent']:
+                source_lines = _SOURCE_MAP['sourcesContent'][original_file]
+                if 0 < original_line <= len(source_lines):
+                    tb_lines.append(f'    {source_lines[original_line-1].strip()}')
+        else:
+            # Regular module
+            tb_lines.append(f'  File "{frame.filename}", line {frame.lineno}')
+            if frame.line:
+                tb_lines.append(f'    {frame.line}')
+    
+    print("Traceback (most recent call last):")
+    print('\n'.join(tb_lines))
+    print(f"{exc_type.__name__}: {exc_value}")
+
+sys.excepthook = _cribo_exception_handler
+```
+
+**Advantages for Source Mapping:**
+
+1. **Clear boundaries** - Each module's code is contained within its init function
+2. **Preserved structure** - Classes, functions, and statements maintain relative positions
+3. **Traceable names** - Synthetic module names contain hash that maps to file path
+4. **Module metadata** - `module.__file__` provides original path without decoding
+5. **Minimal transformation** - Most lines map 1:1 with just indentation changes
+
+**IDE Integration Example:**
+
+```python
+# VSCode launch.json configuration
+{
+    "type": "python",
+    "request": "launch",
+    "name": "Debug Cribo Bundle",
+    "program": "${workspaceFolder}/bundle.py",
+    "sourceMaps": true,
+    "sourceMapPathOverrides": {
+        "__cribo_*": "${workspaceFolder}/${relativeFile}"
+    }
+}
+```
+
+### Implementation Phases
+
+**Phase 1: Basic Mappings**
+
+- Track line numbers only
+- Simple 1:1 mapping for unchanged lines
+- Handle basic transformations (renames, imports)
+
+**Phase 2: Column Mappings**
+
+- Add column-level precision
+- Track expression-level transformations
+- Support inline source maps
+
+**Phase 3: Advanced Features**
+
+- Name mappings for renamed symbols
+- Scope tracking for better variable resolution
+- Support for source map composition (bundling bundles)
+
+**Phase 4: Tooling Integration**
+
+- VSCode extension for debugging bundled Python
+- pytest plugin for mapped test failures
+- Coverage.py integration for mapped coverage reports
+
+### Example Source Map Generation
+
+```rust
+impl SourceMapBuilder {
+    fn generate(&self) -> SourceMap {
+        let mut mappings = String::new();
+        let mut prev_generated_line = 0;
+        let mut prev_generated_column = 0;
+        let mut prev_source_index = 0;
+        let mut prev_source_line = 0;
+        let mut prev_source_column = 0;
+
+        for segment in &self.mappings {
+            // Encode relative offsets
+            mappings.push_str(&encode_vlq(
+                segment.generated_column as i32 - prev_generated_column as i32,
+            ));
+            mappings.push_str(&encode_vlq(
+                segment.source_file_index as i32 - prev_source_index as i32,
+            ));
+            mappings.push_str(&encode_vlq(
+                segment.source_line as i32 - prev_source_line as i32,
+            ));
+            mappings.push_str(&encode_vlq(
+                segment.source_column as i32 - prev_source_column as i32,
+            ));
+
+            // Update previous values
+            prev_generated_column = segment.generated_column;
+            prev_source_index = segment.source_file_index;
+            prev_source_line = segment.source_line;
+            prev_source_column = segment.source_column;
+
+            // Add separator
+            if segment.generated_line != prev_generated_line {
+                mappings.push(';');
+                prev_generated_line = segment.generated_line;
+                prev_generated_column = 0;
+            } else {
+                mappings.push(',');
+            }
+        }
+
+        SourceMap {
+            version: 3,
+            file: "bundle.py".to_string(),
+            sources: self.sources.clone(),
+            names: self.names.clone(),
+            mappings,
+            sources_content: Some(self.sources_content.clone()),
+        }
+    }
+}
+```
+
+### Testing Source Maps
+
+```python
+# test_source_maps.py
+def test_exception_mapping():
+    # Create a bundle with known transformations
+    bundle = create_test_bundle()
+    
+    # Trigger an exception at a known location
+    with pytest.raises(ValueError) as exc_info:
+        bundle.execute()
+    
+    # Verify the mapped traceback points to original file
+    tb = exc_info.traceback
+    original_location = map_to_source(tb[-1])
+    
+    assert original_location.file == "src/utils.py"
+    assert original_location.line == 42
+    assert original_location.column == 15
+```
+
 ## Future Enhancements
 
 1. **Optimization passes** - Remove unnecessary wrapper overhead for simple modules
-2. **Source maps** - Map bundled code back to original files for debugging
+2. **Source maps** - Full implementation as described above
 3. **Lazy module loading** - Defer module initialization until first access
 4. **Tree shaking** - Remove unused module attributes from bundles
 5. **Type preservation** - Maintain type hints in transformed code
+6. **Import function transformation** - Support for `__import__()` and `importlib.import_module()`
+7. **Canonical name system** - Implement Rolldown-style symbol mapping
+8. **Module splitting** - Support for dynamic imports with code splitting
+9. **Debug mode** - Generate bundles with debugging helpers and assertions
+10. **Source map composition** - Support bundling pre-bundled code with composed maps
 
 ## Testing Strategy
 

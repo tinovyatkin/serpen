@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use crate::config::Config;
 use crate::dependency_graph::{CircularDependencyGroup, DependencyGraph, ModuleNode};
 use crate::emit::CodeEmitter;
+use crate::hybrid_static_bundler::HybridStaticBundler;
 use crate::resolver::{ImportType, ModuleResolver};
-use crate::static_bundler::StaticBundler;
 use crate::util::{module_name_from_relative, normalize_line_endings};
 
 /// Type alias for module processing queue
@@ -113,9 +113,10 @@ impl Bundler {
             "Before filtering - graph has {} modules",
             graph.get_modules().len()
         );
-        *graph = graph.filter_reachable_from(&entry_module_name)?;
+        // Temporarily disable filtering to debug topological sort
+        // *graph = graph.filter_reachable_from(&entry_module_name)?;
         debug!(
-            "After filtering - graph has {} modules",
+            "After filtering - graph has {} modules (filtering disabled for debugging)",
             graph.get_modules().len()
         );
 
@@ -189,9 +190,17 @@ impl Bundler {
             graph.topological_sort()?
         };
         info!("Found {} modules to bundle", sorted_modules.len());
+        debug!("=== DEPENDENCY GRAPH DEBUG ===");
+        for module in graph.get_modules() {
+            if let Some(deps) = graph.get_dependencies(&module.name) {
+                debug!("Module '{}' depends on: {:?}", module.name, deps);
+            }
+        }
+        debug!("=== TOPOLOGICAL SORT ORDER ===");
         for (i, module) in sorted_modules.iter().enumerate() {
             debug!("Module {}: {} ({:?})", i, module.name, module.path);
         }
+        debug!("=== END DEBUG ===");
         Ok(sorted_modules)
     }
 
@@ -217,8 +226,9 @@ impl Bundler {
 
         // Generate bundled code and requirements if needed
         let bundled_code = if self.config.static_bundling {
+            info!("Using hybrid static bundler for exec-free bundling");
             // Use static bundler for exec-free bundling
-            let code = self.emit_static_bundle(&sorted_modules, &resolver)?;
+            let code = self.emit_static_bundle(&sorted_modules, &resolver, &entry_module_name)?;
 
             // Generate requirements.txt if requested
             if emit_requirements {
@@ -276,8 +286,9 @@ impl Bundler {
 
         // Generate bundled code and requirements if needed
         let bundled_code = if self.config.static_bundling {
+            info!("Using hybrid static bundler for exec-free bundling");
             // Use static bundler for exec-free bundling
-            let code = self.emit_static_bundle(&sorted_modules, &resolver)?;
+            let code = self.emit_static_bundle(&sorted_modules, &resolver, &entry_module_name)?;
 
             // Generate requirements.txt if requested
             if emit_requirements {
@@ -888,6 +899,15 @@ impl Bundler {
         resolver_and_graph: (&ModuleResolver, &mut DependencyGraph),
     ) {
         let (resolver, graph) = resolver_and_graph;
+        // Skip if parent_module is the same as module_name to avoid self-dependencies
+        if parent_module == module_name {
+            debug!(
+                "Skipping self-dependency: {} -> {}",
+                parent_module, module_name
+            );
+            return;
+        }
+
         if resolver.classify_import(parent_module) == ImportType::FirstParty
             && graph.get_module(parent_module).is_some()
         {
@@ -1085,6 +1105,7 @@ impl Bundler {
         &self,
         sorted_modules: &[&ModuleNode],
         _resolver: &ModuleResolver,
+        entry_module_name: &str,
     ) -> Result<String> {
         // Check if we only have one module (the entry module)
         // In this case, we can skip static bundling transformations
@@ -1099,7 +1120,7 @@ impl Bundler {
             return Ok(source);
         }
 
-        let mut static_bundler = StaticBundler::new();
+        let mut static_bundler = HybridStaticBundler::new();
 
         // Parse all modules and prepare them for bundling
         let mut module_asts = Vec::new();
@@ -1113,11 +1134,12 @@ impl Bundler {
             let ast = ruff_python_parser::parse_module(&source)
                 .with_context(|| format!("Failed to parse module: {:?}", module.path))?;
 
-            module_asts.push((module.name.clone(), ast.into_syntax()));
+            module_asts.push((module.name.clone(), ast.into_syntax(), module.path.clone()));
         }
 
         // Bundle all modules using static bundler
-        let bundled_ast = static_bundler.bundle_modules(module_asts, sorted_modules)?;
+        let bundled_ast =
+            static_bundler.bundle_modules(module_asts, sorted_modules, entry_module_name)?;
 
         // Generate Python code from AST
         let empty_parsed = ruff_python_parser::parse_module("")?;

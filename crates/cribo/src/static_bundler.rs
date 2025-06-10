@@ -22,6 +22,12 @@ pub struct StaticBundler {
     module_exports: IndexMap<String, Vec<String>>,
     /// The entry module AST (handled specially, not wrapped)
     entry_module_ast: Option<(String, ModModule)>,
+    /// Collected future imports (must go at the very top)
+    future_imports: IndexSet<String>,
+    /// Collected stdlib imports that are safe to hoist (typing, collections, etc.)
+    stdlib_imports: Vec<Stmt>,
+    /// Track which modules have been bundled
+    bundled_modules: IndexSet<String>,
 }
 
 /// Represents a module that has been transformed into a wrapper class
@@ -46,6 +52,9 @@ impl StaticBundler {
             module_registry: IndexMap::new(),
             module_exports: IndexMap::new(),
             entry_module_ast: None,
+            future_imports: IndexSet::new(),
+            stdlib_imports: Vec::new(),
+            bundled_modules: IndexSet::new(),
         }
     }
 
@@ -69,7 +78,21 @@ impl StaticBundler {
             .map(|node| node.name.as_str())
             .unwrap_or("");
 
-        // First, transform all modules into wrapper classes
+        // Collect list of bundled module names
+        for (module_name, _) in &modules {
+            self.bundled_modules.insert(module_name.clone());
+        }
+
+        // First pass: collect all imports from all modules
+        debug!("Starting import collection from {} modules", modules.len());
+        for (module_name, ast) in &modules {
+            debug!("Collecting imports from module: {}", module_name);
+            self.collect_imports_from_module(ast);
+        }
+        debug!("Collected {} future imports", self.future_imports.len());
+        debug!("Collected {} stdlib imports", self.stdlib_imports.len());
+
+        // Second pass: transform all modules into wrapper classes
         for (module_name, ast) in modules {
             let is_entry_module = module_name == entry_module_name;
 
@@ -104,9 +127,47 @@ impl StaticBundler {
         let initialization_statements = self.generate_module_initialization(&non_entry_modules);
         bundle_ast.body.extend(initialization_statements);
 
-        // Process all statements to rewrite imports
+        // Build the final body with proper ordering
         let mut final_body = Vec::new();
+
+        // 1. First add hoisted imports (future imports and stdlib)
+        // Future imports must come first
+        for future_import in &self.future_imports {
+            let stmt = Stmt::ImportFrom(StmtImportFrom {
+                module: Some(Identifier::new("__future__", TextRange::default())),
+                names: vec![ruff_python_ast::Alias {
+                    name: Identifier::new(future_import, TextRange::default()),
+                    asname: None,
+                    range: TextRange::default(),
+                }],
+                level: 0,
+                range: TextRange::default(),
+            });
+            final_body.push(stmt);
+        }
+
+        // Then add safe stdlib imports
+        for import_stmt in &self.stdlib_imports {
+            final_body.push(import_stmt.clone());
+        }
+
+        // Always add import types for static bundling (needed for ModuleType)
+        final_body.push(Stmt::Import(StmtImport {
+            names: vec![ruff_python_ast::Alias {
+                name: Identifier::new("types", TextRange::default()),
+                asname: None,
+                range: TextRange::default(),
+            }],
+            range: TextRange::default(),
+        }));
+
+        // 2. Process all other statements (skipping the hoisted imports we already added)
         for stmt in bundle_ast.body {
+            // Skip import statements that have already been hoisted
+            if self.is_already_hoisted(&stmt) {
+                continue;
+            }
+
             if let Some(rewritten) = self.rewrite_imports(&stmt, &bundled_modules) {
                 final_body.extend(rewritten);
             } else if !matches!(stmt, Stmt::Import(_) | Stmt::ImportFrom(_)) {
@@ -118,12 +179,17 @@ impl StaticBundler {
             // it means the import should be completely removed (bundled import)
         }
 
-        // Finally, add the entry module's code directly (not wrapped)
+        // 3. Finally, add the entry module's code directly (not wrapped)
         if let Some((entry_name, entry_ast)) = &self.entry_module_ast {
             debug!("Adding entry module '{}' code directly", entry_name);
 
             // Process the entry module's statements
             for stmt in &entry_ast.body {
+                // Skip if this was already hoisted
+                if self.is_already_hoisted(stmt) {
+                    continue;
+                }
+
                 // Rewrite imports in the entry module too
                 if let Some(rewritten) = self.rewrite_imports(stmt, &bundled_modules) {
                     final_body.extend(rewritten);
@@ -181,17 +247,15 @@ impl StaticBundler {
 
         for stmt in ast.body {
             match stmt {
-                // Functions become static methods
-                Stmt::FunctionDef(mut func) => {
-                    // Add @staticmethod decorator
-                    func.decorator_list
-                        .push(self.create_staticmethod_decorator());
-                    class_body.push(Stmt::FunctionDef(func));
+                // Functions that might reference classes should go into __cribo_init
+                Stmt::FunctionDef(_) => {
+                    // Put all functions in __cribo_init to avoid forward reference issues
+                    module_init_statements.push(stmt);
                 }
 
-                // Classes remain as nested classes
-                Stmt::ClassDef(class_def) => {
-                    class_body.push(Stmt::ClassDef(class_def));
+                // Classes go into __cribo_init to avoid forward reference issues
+                Stmt::ClassDef(_) => {
+                    module_init_statements.push(stmt);
                 }
 
                 // Simple assignments go to __cribo_vars only if they don't reference other variables
@@ -204,9 +268,37 @@ impl StaticBundler {
                     );
                 }
 
-                // Import statements are skipped (they're hoisted)
-                Stmt::Import(_) | Stmt::ImportFrom(_) => {
-                    debug!("Skipping import statement in module transformation");
+                // Handle import statements
+                Stmt::Import(ref import_stmt) => {
+                    // Check if all imports are bundled modules
+                    let all_bundled = import_stmt
+                        .names
+                        .iter()
+                        .all(|alias| self.bundled_modules.contains(alias.name.as_str()));
+
+                    if !all_bundled {
+                        // Keep non-bundled imports in __cribo_init to preserve execution order
+                        module_init_statements.push(stmt);
+                    }
+                }
+                Stmt::ImportFrom(ref import_from) => {
+                    // Check if this is a bundled module import
+                    let is_bundled = if let Some(ref module) = import_from.module {
+                        self.bundled_modules.contains(module.as_str())
+                    } else {
+                        false
+                    };
+
+                    if !is_bundled
+                        && import_from
+                            .module
+                            .as_ref()
+                            .is_some_and(|m| m.as_str() != "__future__")
+                    {
+                        // Keep non-bundled, non-future imports in __cribo_init
+                        // (future and safe stdlib imports are already hoisted)
+                        module_init_statements.push(stmt);
+                    }
                 }
 
                 // Handle other statement types
@@ -422,6 +514,68 @@ impl StaticBundler {
 
     /// Create __cribo_init method for module initialization code
     fn create_init_method(&self, statements: Vec<Stmt>) -> Stmt {
+        // Transform statements to make classes and functions class attributes
+        let mut transformed_statements = Vec::new();
+
+        for stmt in statements {
+            match &stmt {
+                Stmt::ClassDef(class_def) => {
+                    // First define the class
+                    transformed_statements.push(stmt.clone());
+
+                    // Then assign it as a class attribute
+                    let assign = Stmt::Assign(StmtAssign {
+                        targets: vec![Expr::Attribute(ExprAttribute {
+                            value: Box::new(Expr::Name(ExprName {
+                                id: Identifier::new("cls", TextRange::default()).into(),
+                                ctx: ExprContext::Load,
+                                range: TextRange::default(),
+                            })),
+                            attr: class_def.name.clone(),
+                            ctx: ExprContext::Store,
+                            range: TextRange::default(),
+                        })],
+                        value: Box::new(Expr::Name(ExprName {
+                            id: class_def.name.clone().into(),
+                            ctx: ExprContext::Load,
+                            range: TextRange::default(),
+                        })),
+                        range: TextRange::default(),
+                    });
+                    transformed_statements.push(assign);
+                }
+                Stmt::FunctionDef(func_def) => {
+                    // First define the function
+                    transformed_statements.push(stmt.clone());
+
+                    // Then assign it as a class attribute
+                    let assign = Stmt::Assign(StmtAssign {
+                        targets: vec![Expr::Attribute(ExprAttribute {
+                            value: Box::new(Expr::Name(ExprName {
+                                id: Identifier::new("cls", TextRange::default()).into(),
+                                ctx: ExprContext::Load,
+                                range: TextRange::default(),
+                            })),
+                            attr: func_def.name.clone(),
+                            ctx: ExprContext::Store,
+                            range: TextRange::default(),
+                        })],
+                        value: Box::new(Expr::Name(ExprName {
+                            id: func_def.name.clone().into(),
+                            ctx: ExprContext::Load,
+                            range: TextRange::default(),
+                        })),
+                        range: TextRange::default(),
+                    });
+                    transformed_statements.push(assign);
+                }
+                _ => {
+                    // Other statements remain as-is
+                    transformed_statements.push(stmt.clone());
+                }
+            }
+        }
+
         let func = StmtFunctionDef {
             name: Identifier::new("__cribo_init", TextRange::default()),
             type_params: None,
@@ -442,7 +596,7 @@ impl StaticBundler {
                 range: TextRange::default(),
             }),
             returns: None,
-            body: statements,
+            body: transformed_statements,
             decorator_list: vec![self.create_classmethod_decorator()],
             is_async: false,
             range: TextRange::default(),
@@ -486,21 +640,16 @@ impl StaticBundler {
     pub fn generate_module_facade_creation(&self, sorted_modules: &[&ModuleNode]) -> Vec<Stmt> {
         let mut statements = Vec::new();
 
-        // Import types module
-        statements.push(Stmt::Import(StmtImport {
-            names: vec![ruff_python_ast::Alias {
-                name: Identifier::new("types", TextRange::default()),
-                asname: None,
-                range: TextRange::default(),
-            }],
-            range: TextRange::default(),
-        }));
+        // Track which modules have been created to avoid duplicates
+        let mut created_modules = IndexSet::new();
 
         // Create module objects for each module
         for module in sorted_modules {
             let module_name = &module.name;
             // Create module hierarchy
-            statements.extend(self.create_module_hierarchy(module_name));
+            statements.extend(
+                self.create_module_hierarchy_with_tracking(module_name, &mut created_modules),
+            );
         }
 
         statements
@@ -515,11 +664,11 @@ impl StaticBundler {
             let module_name = &module.name;
             let wrapper_name = self.generate_wrapper_name(module_name);
 
-            // Copy attributes from wrapper to module
-            statements.extend(self.create_attribute_copying(&wrapper_name, module_name));
-
-            // Call __cribo_init if it exists
+            // Call __cribo_init first to define classes and functions
             statements.extend(self.create_init_call(&wrapper_name, module_name));
+
+            // Then copy attributes from wrapper to module
+            statements.extend(self.create_attribute_copying(&wrapper_name, module_name));
         }
 
         statements
@@ -533,6 +682,27 @@ impl StaticBundler {
         for i in 1..=parts.len() {
             let partial_name = parts[..i].join(".");
             statements.extend(self.create_module_object(&partial_name, i == 1));
+        }
+
+        statements
+    }
+
+    /// Create module hierarchy with tracking to avoid duplicates
+    fn create_module_hierarchy_with_tracking(
+        &self,
+        module_name: &str,
+        created_modules: &mut IndexSet<String>,
+    ) -> Vec<Stmt> {
+        let mut statements = Vec::new();
+        let parts: Vec<&str> = module_name.split('.').collect();
+
+        for i in 1..=parts.len() {
+            let partial_name = parts[..i].join(".");
+            // Only create if not already created
+            if !created_modules.contains(&partial_name) {
+                created_modules.insert(partial_name.clone());
+                statements.extend(self.create_module_object(&partial_name, i == 1));
+            }
         }
 
         statements
@@ -1064,5 +1234,140 @@ impl StaticBundler {
 
         // Keep non-bundled imports as-is
         None
+    }
+
+    /// Collect imports from a module for hoisting
+    fn collect_imports_from_module(&mut self, ast: &ModModule) {
+        debug!(
+            "Collecting imports from module with {} statements",
+            ast.body.len()
+        );
+        let mut import_count = 0;
+        let mut future_count = 0;
+        let mut stdlib_count = 0;
+        for stmt in &ast.body {
+            match stmt {
+                Stmt::ImportFrom(import_from) => {
+                    import_count += 1;
+                    if let Some(ref module) = import_from.module {
+                        let module_name = module.as_str();
+
+                        // Collect future imports
+                        if module_name == "__future__" {
+                            for alias in &import_from.names {
+                                debug!("Collecting future import: {}", alias.name);
+                                self.future_imports.insert(alias.name.to_string());
+                                future_count += 1;
+                            }
+                        }
+                        // Collect safe stdlib imports (typing and related modules)
+                        else if Self::is_safe_stdlib_module(module_name) {
+                            debug!("Collecting stdlib import from module: {}", module_name);
+                            // Add to stdlib imports for hoisting
+                            self.stdlib_imports.push(stmt.clone());
+                            stdlib_count += 1;
+                        } else {
+                            debug!("Skipping non-hoistable import: {}", module_name);
+                        }
+                    }
+                }
+                Stmt::Import(import_stmt) => {
+                    import_count += 1;
+                    // Check if this is a safe stdlib import
+                    for alias in &import_stmt.names {
+                        if Self::is_safe_stdlib_module(alias.name.as_str()) {
+                            debug!("Collecting stdlib import: {}", alias.name);
+                            self.stdlib_imports.push(stmt.clone());
+                            stdlib_count += 1;
+                            break;
+                        } else {
+                            debug!("Skipping non-hoistable import: {}", alias.name);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        debug!(
+            "Processed {} import statements, collected {} future and {} stdlib imports",
+            import_count, future_count, stdlib_count
+        );
+    }
+
+    /// Check if an import statement has already been hoisted
+    fn is_already_hoisted(&self, stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::ImportFrom(import_from) => {
+                if let Some(ref module) = import_from.module {
+                    let module_name = module.as_str();
+                    // Check if it's a future import that was hoisted
+                    if module_name == "__future__" {
+                        return true;
+                    }
+                    // Check if it's a stdlib import that was hoisted
+                    if Self::is_safe_stdlib_module(module_name) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Stmt::Import(import_stmt) => {
+                // Check if any of the imports are stdlib modules that were hoisted
+                import_stmt
+                    .names
+                    .iter()
+                    .any(|alias| Self::is_safe_stdlib_module(alias.name.as_str()))
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if a class should be hoisted to module level
+    /// This includes Enums and other types that might be used in forward references
+    fn should_hoist_class(&self, class_def: &StmtClassDef) -> bool {
+        // Check if this class inherits from Enum
+        if let Some(ref arguments) = class_def.arguments {
+            for base in &arguments.args {
+                if let Expr::Name(name) = base {
+                    if name.id.as_str() == "Enum" {
+                        return true;
+                    }
+                } else if let Expr::Attribute(attr) = base {
+                    // Handle cases like enum.Enum
+                    if attr.attr.as_str() == "Enum" {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Could add more checks here for TypedDict, NamedTuple, etc.
+        false
+    }
+
+    /// Check if a module is a safe stdlib module that can be hoisted
+    fn is_safe_stdlib_module(module_name: &str) -> bool {
+        // For now, we use a simple check without version info
+        // TODO: Pass Python version from config for more accurate detection
+
+        // Most stdlib modules are safe to hoist as they don't have side effects
+        // We exclude modules that are known to have side effects or modify global state
+        match module_name {
+            // Modules that modify global state or have side effects - DO NOT HOIST
+            "antigravity" | "this" | "__hello__" | "__phello__" => false,
+            "site" | "sitecustomize" | "usercustomize" => false,
+            "readline" | "rlcompleter" => false, // Terminal state
+            "turtle" | "tkinter" => false,       // GUI initialization
+            "webbrowser" => false,               // May open browser
+            "platform" | "locale" => false,      // System queries that might be order-dependent
+
+            // For all other modules, check if they're stdlib
+            _ => {
+                // Use the module name's root for checking
+                let root_module = module_name.split('.').next().unwrap_or(module_name);
+                // We'll accept Python 3.10 as baseline for now
+                ruff_python_stdlib::sys::is_known_standard_library(10, root_module)
+            }
+        }
     }
 }
