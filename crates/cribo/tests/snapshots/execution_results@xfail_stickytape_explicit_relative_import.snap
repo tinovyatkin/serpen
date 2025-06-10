@@ -7,5 +7,5 @@ ExecutionResults {
         1,
     ),
     stdout: "",
-    stderr: "Traceback (most recent call last):\n  File \"<TMP>/bundled.py\", line 38, in <module>\n    __cribo_init___cribo_bc01a2_greetings_greeting()\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"<TMP>/bundled.py\", line 13, in __cribo_init___cribo_bc01a2_greetings_greeting\n    from .messages import message\nImportError: attempted relative import with no known parent package",
+    stderr: "Traceback (most recent call last):\n  File \"<stdin>\", line 38, in <module>\n  File \"<stdin>\", line 13, in __cribo_init___cribo_bc01a2_greetings_greeting\nImportError: attempted relative import with no known parent package",
 }

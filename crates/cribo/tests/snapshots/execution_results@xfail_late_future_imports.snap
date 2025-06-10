@@ -7,5 +7,5 @@ ExecutionResults {
         1,
     ),
     stdout: "",
-    stderr: "File \"<TMP>/bundled.py\", line 10\n    from __future__ import annotations\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nSyntaxError: from __future__ imports must occur at the beginning of the file",
+    stderr: "File \"<stdin>\", line 10\nSyntaxError: from __future__ imports must occur at the beginning of the file",
 }

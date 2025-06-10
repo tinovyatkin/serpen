@@ -1,6 +1,7 @@
 #![allow(clippy::disallowed_methods)] // insta macros use unwrap internally
 
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
@@ -28,19 +29,7 @@ struct ExecutionResults {
 /// Get filters for normalizing paths and Python version differences in snapshots
 fn get_path_filters() -> Vec<(&'static str, &'static str)> {
     vec![
-        // Temporary directory patterns
-        // Unix/macOS temp paths like /var/folders/xyz/abc123/T/.tmpXYZ/file.py
-        (r"/var/folders/[^/]+/[^/]+/T/\.[^/]+/", "<TMP>/"),
-        // Standard Unix temp paths like /tmp/.tmpXYZ/file.py
-        (r"/tmp/\.[^/]+/", "<TMP>/"),
-        // Windows temp paths
-        (
-            r"C:\\Users\\[^\\]+\\AppData\\Local\\Temp\\[^\\]+\\",
-            "<TMP>/",
-        ),
-        // Generic temp directory patterns
-        (r"/[Tt]emp/[^/]+/", "<TMP>/"),
-        // Python installation paths
+        // Python library paths (still present in importlib traces)
         // macOS Homebrew Python paths
         (
             r"/opt/homebrew/Cellar/python@[\d.]+/[\d._]+/Frameworks/Python\.framework/Versions/[\d.]+/lib/python[\d.]+/",
@@ -61,10 +50,8 @@ fn get_path_filters() -> Vec<(&'static str, &'static str)> {
             r"line \d+, in import_module",
             "line <LINE>, in import_module",
         ),
-        // Remove lines that only contain caret/tilde indicators as they vary between Python versions
-        (r"\n\s+[~^]+\s*\n", "\n"),
-        // Normalize Windows path separators in already-sanitized paths
-        (r"<PYTHON_LIB>/importlib\\", "<PYTHON_LIB>/importlib/"),
+        // Note: File paths eliminated by using stdin execution (shows as <stdin>)
+        // Note: Python traceback call indicators removed by using -X tracebacklimit=1
     ]
 }
 
@@ -166,33 +153,52 @@ fn test_bundling_fixtures() {
         // Bundle the fixture
         bundler.bundle(path, &bundle_path, false).unwrap();
 
+        // Read the bundled code
+        let bundled_code = fs::read_to_string(&bundle_path).unwrap();
+
         // Optionally validate Python syntax before execution
         let python_cmd = get_python_executable();
         let syntax_check = Command::new(&python_cmd)
-            .args(["-m", "py_compile"])
-            .arg(&bundle_path)
-            .output();
-        if let Ok(output) = syntax_check {
-            if !output.status.success() && std::env::var("RUST_TEST_VERBOSE").is_ok() {
-                eprintln!(
-                    "Warning: Bundled code has syntax errors for fixture {}",
-                    fixture_name
-                );
-                eprintln!("Stderr: {}", String::from_utf8_lossy(&output.stderr));
+            .args(["-m", "py_compile", "-"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn();
+
+        if let Ok(mut child) = syntax_check {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(bundled_code.as_bytes());
+            }
+            if let Ok(output) = child.wait_with_output() {
+                if !output.status.success() && std::env::var("RUST_TEST_VERBOSE").is_ok() {
+                    eprintln!(
+                        "Warning: Bundled code has syntax errors for fixture {}",
+                        fixture_name
+                    );
+                    eprintln!("Stderr: {}", String::from_utf8_lossy(&output.stderr));
+                }
             }
         }
-
-        // Read the bundled code
-        let bundled_code = fs::read_to_string(&bundle_path).unwrap();
 
         // Run ruff linting for cross-validation
         let ruff_results = run_ruff_lint_on_bundle(&bundled_code);
 
-        // Execute the bundled code
+        // Execute the bundled code via stdin with limited traceback for consistent snapshots
         let python_output = Command::new(&python_cmd)
-            .arg(&bundle_path)
+            .arg("-X")
+            .arg("tracebacklimit=1")
+            .arg("-")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .current_dir(temp_dir.path())
-            .output()
+            .spawn()
+            .and_then(|mut child| {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(bundled_code.as_bytes());
+                }
+                child.wait_with_output()
+            })
             .expect("Failed to execute Python");
 
         // Check for unexpected Python execution failures
