@@ -58,18 +58,18 @@ fn test_alias_transformation_removes_redundant_imports() -> Result<()> {
         "Bundled output should contain aliased sys import"
     );
 
-    // 2. Local module imports are transformed to use sys.modules
+    // 2. Local module imports are transformed to simple assignments since modules are inlined
     assert!(
-        bundled_output.contains("process_a = sys.modules['utils.data_processor'].process_data"),
-        "Should have process_a assignment from sys.modules"
+        bundled_output.contains("process_a = process_data"),
+        "Should have process_a assignment to inlined function"
     );
     assert!(
-        bundled_output.contains("format_a = sys.modules['utils.data_processor'].format_output"),
-        "Should have format_a assignment from sys.modules"
+        bundled_output.contains("format_a = format_output"),
+        "Should have format_a assignment to inlined function"
     );
     assert!(
-        bundled_output.contains("config_a = sys.modules['utils.config_manager'].load_config"),
-        "Should have config_a assignment from sys.modules"
+        bundled_output.contains("config_a = load_config"),
+        "Should have config_a assignment to inlined function"
     );
 
     // 2. Should NOT contain aliased from-import statements
@@ -93,14 +93,10 @@ fn test_alias_transformation_removes_redundant_imports() -> Result<()> {
     );
     // The remaining non-aliased item should still be present in some form or handled by bundling
 
-    // 4. Mixed from-import should have helper_func from sys.modules and debug_a assignment
+    // 4. Mixed from-import should have simple assignments since modules are inlined
     assert!(
-        bundled_output.contains("helper_func = sys.modules['utils.helpers'].helper_func"),
-        "Should have helper_func assignment from sys.modules"
-    );
-    assert!(
-        bundled_output.contains("debug_a = sys.modules['utils.helpers'].debug_print"),
-        "Should have debug_a assignment from sys.modules"
+        bundled_output.contains("debug_a = debug_print"),
+        "Should have debug_a assignment to inlined function"
     );
 
     // 5. Non-aliased stdlib imports remain unchanged

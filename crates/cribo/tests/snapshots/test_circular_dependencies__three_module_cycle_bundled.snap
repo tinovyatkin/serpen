@@ -14,7 +14,6 @@ def __cribo_init___cribo_1d1bea_module_a():
     module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/circular_dependencies/three_module_cycle/module_a.py'
     sys.modules['__cribo_1d1bea_module_a'] = module
     sys.modules['module_a'] = module
-    module.process_b = process_b
 
     def process_a():
         """Process A that depends on B"""
@@ -44,7 +43,6 @@ class CriboBundledFinder:
             return importlib.util.find_spec(synthetic_name)
         return None
 sys.meta_path.insert(0, CriboBundledFinder(__cribo_modules, __cribo_init_functions))
-__cribo_init___cribo_1d1bea_module_a()
 def process_b():
     """Process B that depends on C"""
     return process_c() + "->B"
@@ -56,6 +54,8 @@ def process_c():
     return f"C(using_{value})"
 def get_value_c():
     return "value_from_C"
+__cribo_init___cribo_1d1bea_module_a()
+sys.modules['module_a'].process_b = process_b
 module_a = sys.modules['module_a']
 def main():
     result = module_a.process_a()

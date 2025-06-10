@@ -73,8 +73,6 @@ class CriboBundledFinder:
             return importlib.util.find_spec(synthetic_name)
         return None
 sys.meta_path.insert(0, CriboBundledFinder(__cribo_modules, __cribo_init_functions))
-__cribo_init___cribo_e9952d_nested_package_submodule()
-__cribo_init___cribo_ee784c_simple_module()
 message = "from conflict_module"
 SHARED_NAME = "conflict_module_version"
 def helper_func():
@@ -87,6 +85,8 @@ UTILS_CONSTANT = "utils value"
 def exported_from_init():
     """Function exported from package __init__.py"""
     return f"From init, using helper: {helper_func()}"
+__cribo_init___cribo_e9952d_nested_package_submodule()
+__cribo_init___cribo_ee784c_simple_module()
 public_func = sys.modules['simple_module'].public_func
 CONSTANT = sys.modules['simple_module'].CONSTANT
 sub_function = sys.modules['nested_package.submodule'].sub_function

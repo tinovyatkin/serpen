@@ -7,5 +7,5 @@ ExecutionResults {
         1,
     ),
     stdout: "",
-    stderr: "Traceback (most recent call last):\n  File \"<TMP>/bundled.py\", line 38, in <module>\n    __cribo_init___cribo_ab2c4f_greetings_greeting()\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"<TMP>/bundled.py\", line 13, in __cribo_init___cribo_ab2c4f_greetings_greeting\n    messages = sys.modules['greetings.greeting'].messages\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: module '__cribo_ab2c4f_greetings_greeting' has no attribute 'messages'",
+    stderr: "Traceback (most recent call last):\n  File \"<TMP>/bundled.py\", line 39, in <module>\n    __cribo_init___cribo_ab2c4f_greetings_greeting()\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"<TMP>/bundled.py\", line 13, in __cribo_init___cribo_ab2c4f_greetings_greeting\n    messages = sys.modules['greetings.greeting'].messages\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: module '__cribo_ab2c4f_greetings_greeting' has no attribute 'messages'",
 }

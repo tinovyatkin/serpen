@@ -75,9 +75,22 @@ impl HybridStaticBundler {
                 // Type alias statements are safe
                 Stmt::TypeAlias(_) => continue,
 
+                // Pass statements are no-ops and safe
+                Stmt::Pass(_) => continue,
+
+                // Expression statements - check if they're docstrings
+                Stmt::Expr(expr_stmt) => {
+                    if matches!(expr_stmt.value.as_ref(), Expr::StringLiteral(_)) {
+                        // Docstring - safe
+                        continue;
+                    } else {
+                        // Other expression statements have side effects
+                        return true;
+                    }
+                }
+
                 // These are definitely side effects
-                Stmt::Expr(_)
-                | Stmt::If(_)
+                Stmt::If(_)
                 | Stmt::While(_)
                 | Stmt::For(_)
                 | Stmt::With(_)
@@ -323,23 +336,14 @@ impl HybridStaticBundler {
 
             // Now add the registries after init functions are defined
             final_body.extend(self.generate_registries_and_hook());
-
-            // Initialize wrapper modules in dependency order
-            for module_node in sorted_module_nodes {
-                if module_node.name != entry_module_name {
-                    if let Some(synthetic_name) = self.module_registry.get(&module_node.name) {
-                        let init_call = self.generate_module_init_call(synthetic_name);
-                        final_body.push(init_call);
-                    }
-                }
-            }
         }
 
         // Collect global symbols from the entry module first
         let mut global_symbols = self.collect_global_symbols(&modules, entry_module_name);
         let mut symbol_renames = IndexMap::new();
 
-        // Inline the inlinable modules
+        // Inline the inlinable modules BEFORE initializing wrapper modules
+        // This ensures that any symbols referenced by wrapper modules are already defined
         for (module_name, ast, _module_path) in inlinable_modules {
             log::debug!("Inlining module '{}'", module_name);
             let inlined_stmts = self.inline_module(
@@ -355,6 +359,31 @@ impl HybridStaticBundler {
                 module_name
             );
             final_body.extend(inlined_stmts);
+        }
+
+        // Initialize wrapper modules in dependency order AFTER inlined modules are defined
+        if need_sys_import {
+            for module_node in sorted_module_nodes {
+                if module_node.name != entry_module_name {
+                    if let Some(synthetic_name) = self.module_registry.get(&module_node.name) {
+                        let init_call = self.generate_module_init_call(synthetic_name);
+                        final_body.push(init_call);
+                    }
+                }
+            }
+
+            // After all wrapper modules are initialized, set any missing attributes
+            // for symbols imported from inlined modules
+            for module_node in sorted_module_nodes {
+                if module_node.name != entry_module_name
+                    && self.module_registry.contains_key(&module_node.name)
+                {
+                    // This is a wrapper module - check if it needs attributes from inlined modules
+                    let post_init_stmts =
+                        self.generate_post_init_attributes(&module_node.name, &modules);
+                    final_body.extend(post_init_stmts);
+                }
+            }
         }
 
         // Finally, add entry module code (it's always last in topological order)
@@ -1390,6 +1419,19 @@ impl HybridStaticBundler {
     fn add_imported_symbol_attributes(&self, stmt: &Stmt, module_name: &str, body: &mut Vec<Stmt>) {
         match stmt {
             Stmt::ImportFrom(import_from) => {
+                // First check if this is an import from an inlined module
+                let resolved_module_name = self.resolve_relative_import(import_from, module_name);
+                if let Some(ref imported_module) = resolved_module_name {
+                    // If this is an inlined module, skip module attribute assignment
+                    // The symbols will be referenced directly in the transformed import
+                    if self.bundled_modules.contains(imported_module)
+                        && !self.module_registry.contains_key(imported_module)
+                    {
+                        // This is an inlined module - skip adding module attributes
+                        return;
+                    }
+                }
+
                 // For "from module import symbol1, symbol2 as alias"
                 for alias in &import_from.names {
                     let _imported_name = alias.name.as_str();
@@ -1404,6 +1446,15 @@ impl HybridStaticBundler {
             Stmt::Import(import_stmt) => {
                 // For "import module" or "import module as alias"
                 for alias in &import_stmt.names {
+                    let imported_module = alias.name.as_str();
+
+                    // Skip if this is an inlined module
+                    if self.bundled_modules.contains(imported_module)
+                        && !self.module_registry.contains_key(imported_module)
+                    {
+                        continue;
+                    }
+
                     let local_name = alias.asname.as_ref().unwrap_or(&alias.name).as_str();
 
                     // Check if this imported module should be exported
@@ -1773,7 +1824,7 @@ impl HybridStaticBundler {
 
         // Try adding numeric suffixes
         for i in 1..1000 {
-            let candidate = format!("{}${}", base_name, i);
+            let candidate = format!("{}_{}", base_name, i);
             if !existing_symbols.contains(&candidate) {
                 return candidate;
             }
@@ -1904,8 +1955,32 @@ impl HybridStaticBundler {
                         }
                     }
                 }
+                // TypeAlias statements are safe metadata definitions
+                Stmt::TypeAlias(_) => {
+                    // Type aliases don't need renaming in Python, they're just metadata
+                    inlined_stmts.push(stmt);
+                }
+                // Pass statements are no-ops and safe
+                Stmt::Pass(_) => {
+                    // Pass statements can be included as-is
+                    inlined_stmts.push(stmt);
+                }
+                // Expression statements that are string literals are docstrings
+                Stmt::Expr(expr_stmt) => {
+                    if matches!(expr_stmt.value.as_ref(), Expr::StringLiteral(_)) {
+                        // This is a docstring - safe to include
+                        inlined_stmts.push(stmt);
+                    } else {
+                        // Other expression statements shouldn't exist in side-effect-free modules
+                        log::warn!(
+                            "Unexpected expression statement in side-effect-free module '{}': {:?}",
+                            module_name,
+                            stmt
+                        );
+                    }
+                }
                 _ => {
-                    // Other statements that shouldn't exist in side-effect-free modules
+                    // Any other statement type that we haven't explicitly handled
                     log::warn!(
                         "Unexpected statement type in side-effect-free module '{}': {:?}",
                         module_name,
@@ -1992,5 +2067,85 @@ impl HybridStaticBundler {
         }
 
         assignments
+    }
+
+    /// Generate post-initialization attribute assignments for wrapper modules
+    /// This sets module attributes for symbols imported from inlined modules
+    fn generate_post_init_attributes(
+        &self,
+        module_name: &str,
+        modules: &[(String, ModModule, PathBuf)],
+    ) -> Vec<Stmt> {
+        let mut stmts = Vec::new();
+
+        // Find the module's AST
+        if let Some((_, ast, _)) = modules.iter().find(|(name, _, _)| name == module_name) {
+            // Look for imports from inlined modules
+            for stmt in &ast.body {
+                if let Stmt::ImportFrom(import_from) = stmt {
+                    let resolved_module_name =
+                        self.resolve_relative_import(import_from, module_name);
+                    if let Some(ref imported_module) = resolved_module_name {
+                        // Check if this is an import from an inlined module
+                        if self.bundled_modules.contains(imported_module)
+                            && !self.module_registry.contains_key(imported_module)
+                        {
+                            // This is an inlined module - generate attribute assignments
+                            for alias in &import_from.names {
+                                let imported_name = alias.name.as_str();
+                                let local_name =
+                                    alias.asname.as_ref().unwrap_or(&alias.name).as_str();
+
+                                // Check if this symbol should be exported
+                                if self.should_export_symbol(local_name, module_name) {
+                                    // Generate: sys.modules[module_name].local_name = imported_name
+                                    let attr_assignment = Stmt::Assign(StmtAssign {
+                                        targets: vec![Expr::Attribute(ExprAttribute {
+                                            value: Box::new(Expr::Subscript(
+                                                ruff_python_ast::ExprSubscript {
+                                                    value: Box::new(Expr::Attribute(
+                                                        ExprAttribute {
+                                                            value: Box::new(Expr::Name(ExprName {
+                                                                id: "sys".into(),
+                                                                ctx: ExprContext::Load,
+                                                                range: TextRange::default(),
+                                                            })),
+                                                            attr: Identifier::new(
+                                                                "modules",
+                                                                TextRange::default(),
+                                                            ),
+                                                            ctx: ExprContext::Load,
+                                                            range: TextRange::default(),
+                                                        },
+                                                    )),
+                                                    slice: Box::new(
+                                                        self.create_string_literal(module_name),
+                                                    ),
+                                                    ctx: ExprContext::Load,
+                                                    range: TextRange::default(),
+                                                },
+                                            )),
+                                            attr: Identifier::new(local_name, TextRange::default()),
+                                            ctx: ExprContext::Store,
+                                            range: TextRange::default(),
+                                        })],
+                                        value: Box::new(Expr::Name(ExprName {
+                                            id: imported_name.into(),
+                                            ctx: ExprContext::Load,
+                                            range: TextRange::default(),
+                                        })),
+                                        range: TextRange::default(),
+                                    });
+
+                                    stmts.push(attr_assignment);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stmts
     }
 }

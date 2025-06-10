@@ -98,10 +98,12 @@ fn test_comprehensive_ast_rewriting() {
                 "Should have the import finder class"
             );
             // Check for proper import handling
+            // With inlining, UserModel might be assigned to a renamed User class
             assert!(
                 bundled_content.contains("UserModel = sys.modules['models.user'].User")
                     || bundled_content.contains("from models.user import User as UserModel")
-                    || bundled_content.contains("User as UserModel"),
+                    || bundled_content.contains("User as UserModel")
+                    || bundled_content.contains("UserModel = User_"), // Inlined and renamed
                 "Should handle UserModel alias in some form"
             );
 

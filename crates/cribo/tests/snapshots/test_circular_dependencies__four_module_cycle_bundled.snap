@@ -14,7 +14,6 @@ def __cribo_init___cribo_5ec493_module_a():
     module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/circular_dependencies/four_module_cycle/module_a.py'
     sys.modules['__cribo_5ec493_module_a'] = module
     sys.modules['module_a'] = module
-    module.process_in_b = process_in_b
 
     def start_process():
         """Start the processing chain A -> B -> C -> D -> A"""
@@ -45,7 +44,6 @@ class CriboBundledFinder:
             return importlib.util.find_spec(synthetic_name)
         return None
 sys.meta_path.insert(0, CriboBundledFinder(__cribo_modules, __cribo_init_functions))
-__cribo_init___cribo_5ec493_module_a()
 def process_in_b():
     """Process in B, depends on C"""
     return f"B({process_in_c()})"
@@ -61,6 +59,8 @@ def process_in_d():
     return f"D({final_step()})"
 def step_d():
     return "D_step"
+__cribo_init___cribo_5ec493_module_a()
+sys.modules['module_a'].process_in_b = process_in_b
 module_a = sys.modules['module_a']
 def main():
     result = module_a.start_process()

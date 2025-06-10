@@ -38,7 +38,7 @@ class CriboBundledFinder:
             return importlib.util.find_spec(synthetic_name)
         return None
 sys.meta_path.insert(0, CriboBundledFinder(__cribo_modules, __cribo_init_functions))
-__cribo_init___cribo_3f3e1c_greetings_greeting()
 message = "Hello"
+__cribo_init___cribo_3f3e1c_greetings_greeting()
 greetings.greeting = sys.modules['greetings.greeting']
 print(greetings.greeting.message)

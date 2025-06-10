@@ -14,7 +14,6 @@ def __cribo_init___cribo_aa6ad4_greetings_greeting():
     module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/bundling/xfail_stickytape_explicit_relative_import_from_parent_package/greetings/greeting/__init__.py'
     sys.modules['__cribo_aa6ad4_greetings_greeting'] = module
     sys.modules['greetings.greeting'] = module
-    module.message = message
     __all__ = ["message"]
     module.__all__ = ['message']
     return module
@@ -37,7 +36,8 @@ class CriboBundledFinder:
             return importlib.util.find_spec(synthetic_name)
         return None
 sys.meta_path.insert(0, CriboBundledFinder(__cribo_modules, __cribo_init_functions))
-__cribo_init___cribo_aa6ad4_greetings_greeting()
 message = "Hello"
+__cribo_init___cribo_aa6ad4_greetings_greeting()
+sys.modules['greetings.greeting'].message = message
 greetings.greeting = sys.modules['greetings.greeting']
 print(greetings.greeting.message)

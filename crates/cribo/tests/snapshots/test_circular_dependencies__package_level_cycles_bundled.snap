@@ -14,7 +14,6 @@ def __cribo_init___cribo_858e3b_pkg1():
     module.__file__ = '/Volumes/workplace/GitHub/ophidiarium/cribo/crates/cribo/tests/fixtures/circular_dependencies/package_level_cycles/pkg1/__init__.py'
     sys.modules['__cribo_858e3b_pkg1'] = module
     sys.modules['pkg1'] = module
-    module.helper_function = helper_function
 
     def main_function():
         """Main function that uses helper from pkg2"""
@@ -45,7 +44,6 @@ class CriboBundledFinder:
             return importlib.util.find_spec(synthetic_name)
         return None
 sys.meta_path.insert(0, CriboBundledFinder(__cribo_modules, __cribo_init_functions))
-__cribo_init___cribo_858e3b_pkg1()
 def helper_function():
     """Helper function that depends on pkg1"""
     util_result = utility_function()
@@ -53,6 +51,8 @@ def helper_function():
 def another_helper():
     """Another function in pkg2"""
     return "pkg2_helper"
+__cribo_init___cribo_858e3b_pkg1()
+sys.modules['pkg1'].helper_function = helper_function
 pkg1 = sys.modules['pkg1']
 def main():
     result = pkg1.main_function()
