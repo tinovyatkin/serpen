@@ -522,7 +522,7 @@ impl BundleOrchestrator {
 
         // First, add all modules to the graph
         let mut module_id_map = indexmap::IndexMap::new();
-        for (module_name, module_path, _imports) in &all_modules {
+        for (module_name, module_path, _) in &all_modules {
             let module_id = params
                 .graph
                 .add_module(module_name.clone(), module_path.clone());

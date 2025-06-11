@@ -373,11 +373,9 @@ impl ModuleDepGraph {
         for item_data in self.items.values() {
             if let ItemType::Assignment { targets } = &item_data.item_type {
                 if targets.contains(&"__all__".to_string()) {
-                    // This is an __all__ assignment, check if our name is exported
-                    // Note: In a real implementation, we'd parse the __all__ value
-                    // For now, we'll check if the name appears in eventual_read_vars
-                    // which would indicate it's referenced in the __all__ list
-                    return item_data.eventual_read_vars.contains(name);
+                    // Check if the name is in the reexported_names set
+                    // which contains the parsed __all__ list values
+                    return item_data.reexported_names.contains(name);
                 }
             }
         }
