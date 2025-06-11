@@ -209,7 +209,10 @@ impl BundleOrchestrator {
                     .iter()
                     .find(|(_, id)| **id == module_id)
                     .map(|(p, _)| p.clone())
-                    .unwrap_or_else(|| PathBuf::from(&name));
+                    .unwrap_or_else(|| {
+                        warn!("Module path not found for {}, using name as fallback", name);
+                        PathBuf::from(&name)
+                    });
 
                 // Extract imports from module items
                 let imports = self.extract_imports_from_module_items(&module.items);
