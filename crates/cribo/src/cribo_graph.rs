@@ -1005,15 +1005,15 @@ impl CriboGraph {
             }
             CircularDependencyType::ModuleConstants => {
                 ResolutionStrategy::Unresolvable {
-                    reason: "Module-level constants create temporal paradox - consider moving to a shared configuration module".to_string(),
+                    reason: "Module-level constants create temporal paradox - consider moving to a shared configuration module".into(),
                 }
             }
             CircularDependencyType::ImportTime => {
                 ResolutionStrategy::ModuleSplit {
                     suggestions: vec![
-                        "Extract shared interfaces to a separate module".to_string(),
-                        "Use dependency injection pattern".to_string(),
-                        "Reorganize module structure to eliminate circular dependencies".to_string(),
+                        "Extract shared interfaces to a separate module".into(),
+                        "Use dependency injection pattern".into(),
+                        "Reorganize module structure to eliminate circular dependencies".into(),
                     ],
                 }
             }
@@ -1056,9 +1056,9 @@ mod tests {
         // Add a function definition
         let func_item = module.add_item(ItemData {
             item_type: ItemType::FunctionDef {
-                name: "test_func".to_string(),
+                name: "test_func".into(),
             },
-            var_decls: ["test_func".to_string()].into_iter().collect(),
+            var_decls: ["test_func".into()].into_iter().collect(),
             read_vars: FxHashSet::default(),
             eventual_read_vars: FxHashSet::default(),
             write_vars: FxHashSet::default(),
@@ -1071,7 +1071,7 @@ mod tests {
         let call_item = module.add_item(ItemData {
             item_type: ItemType::Expression,
             var_decls: FxHashSet::default(),
-            read_vars: ["test_func".to_string()].into_iter().collect(),
+            read_vars: ["test_func".into()].into_iter().collect(),
             eventual_read_vars: FxHashSet::default(),
             write_vars: FxHashSet::default(),
             eventual_write_vars: FxHashSet::default(),
