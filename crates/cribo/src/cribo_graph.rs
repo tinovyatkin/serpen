@@ -436,20 +436,20 @@ impl CriboGraph {
         matches!(
             module_name,
             // Modules that modify global state - DO NOT HOIST
-            "antigravity"
-                | "this"
-                | "__hello__"
-                | "__phello__"
-                | "site"
-                | "sitecustomize"
-                | "usercustomize"
-                | "readline"
-                | "rlcompleter"
-                | "turtle"
-                | "tkinter"
-                | "webbrowser"
-                | "platform"
-                | "locale"
+            "antigravity"       // Opens web browser to xkcd comic
+                | "this"        // Prints "The Zen of Python" to stdout
+                | "__hello__"   // Prints "Hello world!" to stdout
+                | "__phello__"  // Frozen version of __hello__ that prints to stdout
+                | "site"        // Modifies sys.path and sets up site packages
+                | "sitecustomize"   // User-specific site customization
+                | "usercustomize"   // User-specific customization
+                | "readline"    // Initializes readline library and terminal settings
+                | "rlcompleter" // Configures readline tab completion
+                | "turtle"      // Initializes Tk graphics window
+                | "tkinter"     // Initializes Tk GUI framework
+                | "webbrowser"  // May launch web browser
+                | "platform"    // May execute external commands for system info
+                | "locale" // Modifies global locale settings
         )
     }
 
