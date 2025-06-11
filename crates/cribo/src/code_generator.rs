@@ -1424,8 +1424,11 @@ impl HybridStaticBundler {
             }));
         }
 
-        // Then stdlib from imports - deduplicated and sorted
-        for (module_name, imported_names) in &self.stdlib_import_from_map {
+        // Then stdlib from imports - deduplicated and sorted by module name
+        let mut sorted_modules: Vec<_> = self.stdlib_import_from_map.iter().collect();
+        sorted_modules.sort_by_key(|(module_name, _)| *module_name);
+
+        for (module_name, imported_names) in sorted_modules {
             // Sort the imported names for deterministic output
             let mut sorted_names: Vec<String> = imported_names.iter().cloned().collect();
             sorted_names.sort();
@@ -1447,9 +1450,24 @@ impl HybridStaticBundler {
             }));
         }
 
-        // Finally, regular import statements
-        for import_stmt in &self.stdlib_import_statements {
-            final_body.push(import_stmt.clone());
+        // Finally, regular import statements - sorted by module name for deterministic output
+        let mut sorted_import_statements = self.stdlib_import_statements.clone();
+        sorted_import_statements.sort_by_key(|stmt| {
+            if let Stmt::Import(import_stmt) = stmt {
+                // Sort by the first module name in the import statement
+                import_stmt
+                    .names
+                    .first()
+                    .map(|alias| alias.name.as_str())
+                    .unwrap_or("")
+                    .to_string()
+            } else {
+                String::new()
+            }
+        });
+
+        for import_stmt in sorted_import_statements {
+            final_body.push(import_stmt);
         }
     }
 
