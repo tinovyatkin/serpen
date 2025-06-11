@@ -6,7 +6,14 @@ use ruff_python_ast::{
     StmtImport, StmtImportFrom, StringLiteralValue,
 };
 use ruff_text_size::TextRange;
+use rustc_hash::FxHasher;
+use std::hash::BuildHasherDefault;
 use std::path::{Path, PathBuf};
+
+/// Type alias for IndexMap with FxHasher for better performance
+type FxIndexMap<K, V> = IndexMap<K, V, BuildHasherDefault<FxHasher>>;
+/// Type alias for IndexSet with FxHasher for better performance
+type FxIndexSet<T> = IndexSet<T, BuildHasherDefault<FxHasher>>;
 
 /// Context for module transformation operations
 struct ModuleTransformContext<'a> {
@@ -17,9 +24,9 @@ struct ModuleTransformContext<'a> {
 
 /// Context for inlining operations
 struct InlineContext<'a> {
-    module_exports_map: &'a IndexMap<String, Option<Vec<String>>>,
-    global_symbols: &'a mut IndexSet<String>,
-    module_renames: &'a mut IndexMap<String, IndexMap<String, String>>,
+    module_exports_map: &'a FxIndexMap<String, Option<Vec<String>>>,
+    global_symbols: &'a mut FxIndexSet<String>,
+    module_renames: &'a mut FxIndexMap<String, FxIndexMap<String, String>>,
     inlined_stmts: &'a mut Vec<Stmt>,
 }
 
@@ -29,22 +36,22 @@ use crate::unused_imports::AstUnusedImportTrimmer;
 /// This approach avoids forward reference issues while maintaining Python module semantics
 pub struct HybridStaticBundler {
     /// Map from original module name to synthetic module name
-    module_registry: IndexMap<String, String>,
+    module_registry: FxIndexMap<String, String>,
     /// Map from synthetic module name to init function name
-    init_functions: IndexMap<String, String>,
+    init_functions: FxIndexMap<String, String>,
     /// Collected future imports
-    future_imports: IndexSet<String>,
+    future_imports: FxIndexSet<String>,
     /// Collected stdlib imports that are safe to hoist
     /// Maps module name to set of imported names for deduplication
-    stdlib_import_from_map: IndexMap<String, IndexSet<String>>,
+    stdlib_import_from_map: FxIndexMap<String, FxIndexSet<String>>,
     /// Regular import statements (import module)
     stdlib_import_statements: Vec<Stmt>,
     /// Track which modules have been bundled
-    bundled_modules: IndexSet<String>,
+    bundled_modules: FxIndexSet<String>,
     /// Entry point path for calculating relative paths
     entry_path: Option<String>,
     /// Module export information (for __all__ handling)
-    module_exports: IndexMap<String, Option<Vec<String>>>,
+    module_exports: FxIndexMap<String, Option<Vec<String>>>,
     /// Unused import trimmer for cleaning up bundled code
     unused_import_trimmer: AstUnusedImportTrimmer,
 }
@@ -58,14 +65,14 @@ impl Default for HybridStaticBundler {
 impl HybridStaticBundler {
     pub fn new() -> Self {
         Self {
-            module_registry: IndexMap::new(),
-            init_functions: IndexMap::new(),
-            future_imports: IndexSet::new(),
-            stdlib_import_from_map: IndexMap::new(),
+            module_registry: FxIndexMap::default(),
+            init_functions: FxIndexMap::default(),
+            future_imports: FxIndexSet::default(),
+            stdlib_import_from_map: FxIndexMap::default(),
             stdlib_import_statements: Vec::new(),
-            bundled_modules: IndexSet::new(),
+            bundled_modules: FxIndexSet::default(),
             entry_path: None,
-            module_exports: IndexMap::new(),
+            module_exports: FxIndexMap::default(),
             unused_import_trimmer: AstUnusedImportTrimmer::new(),
         }
     }
@@ -331,7 +338,7 @@ impl HybridStaticBundler {
         // Separate modules into inlinable and non-inlinable
         let mut inlinable_modules = Vec::new();
         let mut wrapper_modules = Vec::new();
-        let mut module_exports_map = IndexMap::new();
+        let mut module_exports_map = FxIndexMap::default();
 
         for (module_name, ast, module_path, content_hash) in &modules {
             if module_name == entry_module_name {
@@ -440,7 +447,7 @@ impl HybridStaticBundler {
         // Collect global symbols from the entry module first
         let mut global_symbols =
             self.collect_global_symbols(&modules_normalized, entry_module_name);
-        let mut symbol_renames = IndexMap::new();
+        let mut symbol_renames = FxIndexMap::default();
 
         // Inline the inlinable modules BEFORE initializing wrapper modules
         // This ensures that any symbols referenced by wrapper modules are already defined
@@ -542,7 +549,7 @@ impl HybridStaticBundler {
                     // Transform any import statements in non-entry modules
                     if !self.is_hoisted_import(&stmt) {
                         // For wrapper modules, we don't have symbol renames
-                        let empty_renames = IndexMap::new();
+                        let empty_renames = FxIndexMap::default();
                         let transformed_stmts = self.rewrite_import_in_stmt_multiple_with_context(
                             stmt.clone(),
                             ctx.module_name,
@@ -1443,7 +1450,7 @@ impl HybridStaticBundler {
         }
 
         // Finally, regular import statements - deduplicated and sorted by module name
-        let mut seen_modules = IndexSet::new();
+        let mut seen_modules = FxIndexSet::default();
         let mut unique_imports = Vec::new();
 
         for stmt in &self.stdlib_import_statements {
@@ -1504,7 +1511,7 @@ impl HybridStaticBundler {
     fn collect_unique_imports(
         &self,
         import_stmt: &StmtImport,
-        seen_modules: &mut IndexSet<String>,
+        seen_modules: &mut FxIndexSet<String>,
         unique_imports: &mut Vec<(String, Stmt)>,
     ) {
         for alias in &import_stmt.names {
@@ -1545,7 +1552,7 @@ impl HybridStaticBundler {
     fn collect_stdlib_aliases(
         &self,
         import_stmt: &StmtImport,
-        alias_to_canonical: &mut IndexMap<String, String>,
+        alias_to_canonical: &mut FxIndexMap<String, String>,
     ) {
         for alias in &import_stmt.names {
             let module_name = alias.name.as_str();
@@ -1563,7 +1570,7 @@ impl HybridStaticBundler {
     /// Converts "import json as j" to "import json" and rewrites all "j.dumps" to "json.dumps"
     fn normalize_stdlib_import_aliases(&self, ast: &mut ModModule) {
         // Step 1: Build alias-to-canonical mapping for this file
-        let mut alias_to_canonical = IndexMap::new();
+        let mut alias_to_canonical = FxIndexMap::default();
 
         for stmt in &ast.body {
             if let Stmt::Import(import_stmt) = stmt {
@@ -1601,7 +1608,7 @@ impl HybridStaticBundler {
     fn rewrite_aliases_in_stmt(
         &self,
         stmt: &mut Stmt,
-        alias_to_canonical: &IndexMap<String, String>,
+        alias_to_canonical: &FxIndexMap<String, String>,
     ) {
         match stmt {
             Stmt::FunctionDef(func_def) => {
@@ -1650,14 +1657,14 @@ impl HybridStaticBundler {
     fn rewrite_aliases_in_expr(
         &self,
         expr: &mut Expr,
-        alias_to_canonical: &IndexMap<String, String>,
+        alias_to_canonical: &FxIndexMap<String, String>,
     ) {
         rewrite_aliases_in_expr_impl(expr, alias_to_canonical);
     }
 }
 
 /// Helper function to recursively rewrite aliases in an expression
-fn rewrite_aliases_in_expr_impl(expr: &mut Expr, alias_to_canonical: &IndexMap<String, String>) {
+fn rewrite_aliases_in_expr_impl(expr: &mut Expr, alias_to_canonical: &FxIndexMap<String, String>) {
     match expr {
         Expr::Name(name_expr) => {
             let name_str = name_expr.id.as_str();
@@ -1980,7 +1987,7 @@ impl HybridStaticBundler {
         &self,
         stmt: Stmt,
         current_module: &str,
-        symbol_renames: &IndexMap<String, IndexMap<String, String>>,
+        symbol_renames: &FxIndexMap<String, FxIndexMap<String, String>>,
     ) -> Vec<Stmt> {
         match stmt {
             Stmt::ImportFrom(import_from) => {
@@ -2067,8 +2074,8 @@ impl HybridStaticBundler {
         &self,
         modules: &[(String, ModModule, PathBuf, String)],
         _entry_module_name: &str,
-    ) -> IndexSet<String> {
-        let mut directly_imported = IndexSet::new();
+    ) -> FxIndexSet<String> {
+        let mut directly_imported = FxIndexSet::default();
 
         // Check all modules for direct imports
         for (_module_name, ast, _, _) in modules {
@@ -2085,7 +2092,7 @@ impl HybridStaticBundler {
         &self,
         stmt: &Stmt,
         modules: &[(String, ModModule, PathBuf, String)],
-        directly_imported: &mut IndexSet<String>,
+        directly_imported: &mut FxIndexSet<String>,
     ) {
         if let Stmt::Import(import_stmt) = stmt {
             for alias in &import_stmt.names {
@@ -2106,8 +2113,8 @@ impl HybridStaticBundler {
         &self,
         modules: &[(String, ModModule, PathBuf, String)],
         entry_module_name: &str,
-    ) -> IndexSet<String> {
-        let mut global_symbols = IndexSet::new();
+    ) -> FxIndexSet<String> {
+        let mut global_symbols = FxIndexSet::default();
 
         // Collect symbols from all modules that will be in the bundle
         for (module_name, ast, _, _) in modules {
@@ -2123,7 +2130,7 @@ impl HybridStaticBundler {
     }
 
     /// Helper to collect symbols from a statement
-    fn collect_symbol_from_statement(&self, stmt: &Stmt, global_symbols: &mut IndexSet<String>) {
+    fn collect_symbol_from_statement(&self, stmt: &Stmt, global_symbols: &mut FxIndexSet<String>) {
         match stmt {
             Stmt::FunctionDef(func_def) => {
                 global_symbols.insert(func_def.name.to_string());
@@ -2146,7 +2153,11 @@ impl HybridStaticBundler {
     }
 
     /// Generate a unique symbol name to avoid conflicts
-    fn generate_unique_name(&self, base_name: &str, existing_symbols: &IndexSet<String>) -> String {
+    fn generate_unique_name(
+        &self,
+        base_name: &str,
+        existing_symbols: &FxIndexSet<String>,
+    ) -> String {
         if !existing_symbols.contains(base_name) {
             return base_name.to_string();
         }
@@ -2164,7 +2175,7 @@ impl HybridStaticBundler {
     }
 
     /// Get a unique name for a symbol, using the same pattern as generate_unique_name
-    fn get_unique_name(&self, base_name: &str, existing_symbols: &IndexSet<String>) -> String {
+    fn get_unique_name(&self, base_name: &str, existing_symbols: &FxIndexSet<String>) -> String {
         self.generate_unique_name(base_name, existing_symbols)
     }
 
@@ -2175,7 +2186,7 @@ impl HybridStaticBundler {
         ast: ModModule,
         ctx: &mut InlineContext,
     ) -> Result<Vec<Stmt>> {
-        let mut module_renames = IndexMap::new();
+        let mut module_renames = FxIndexMap::default();
 
         // Process each statement in the module
         for stmt in ast.body {
@@ -2271,7 +2282,7 @@ impl HybridStaticBundler {
         &self,
         symbol_name: &str,
         module_name: &str,
-        module_exports_map: &IndexMap<String, Option<Vec<String>>>,
+        module_exports_map: &FxIndexMap<String, Option<Vec<String>>>,
     ) -> bool {
         let exports = module_exports_map.get(module_name).and_then(|e| e.as_ref());
 
@@ -2289,7 +2300,7 @@ impl HybridStaticBundler {
         &self,
         import_from: StmtImportFrom,
         module_name: &str,
-        symbol_renames: &IndexMap<String, IndexMap<String, String>>,
+        symbol_renames: &FxIndexMap<String, FxIndexMap<String, String>>,
     ) -> Vec<Stmt> {
         let mut assignments = Vec::new();
 
@@ -2442,7 +2453,7 @@ impl HybridStaticBundler {
         &self,
         import_from: StmtImportFrom,
         current_module: &str,
-        symbol_renames: &IndexMap<String, IndexMap<String, String>>,
+        symbol_renames: &FxIndexMap<String, FxIndexMap<String, String>>,
     ) -> Vec<Stmt> {
         // Resolve relative imports to absolute module names
         let resolved_module_name = self.resolve_relative_import(&import_from, current_module);
@@ -2552,7 +2563,7 @@ impl HybridStaticBundler {
         &self,
         class_def: &ruff_python_ast::StmtClassDef,
         module_name: &str,
-        module_renames: &mut IndexMap<String, String>,
+        module_renames: &mut FxIndexMap<String, String>,
         ctx: &mut InlineContext,
     ) {
         let class_name = class_def.name.to_string();
@@ -2584,7 +2595,7 @@ impl HybridStaticBundler {
         &self,
         assign: &StmtAssign,
         module_name: &str,
-        module_renames: &mut IndexMap<String, String>,
+        module_renames: &mut FxIndexMap<String, String>,
         ctx: &mut InlineContext,
     ) {
         let Some(name) = self.extract_simple_assign_target(assign) else {
@@ -2621,7 +2632,7 @@ impl HybridStaticBundler {
         &self,
         ann_assign: &ruff_python_ast::StmtAnnAssign,
         module_name: &str,
-        module_renames: &mut IndexMap<String, String>,
+        module_renames: &mut FxIndexMap<String, String>,
         ctx: &mut InlineContext,
     ) {
         let Expr::Name(name) = ann_assign.target.as_ref() else {
