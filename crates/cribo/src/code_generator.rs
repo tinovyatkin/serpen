@@ -23,7 +23,6 @@ struct InlineContext<'a> {
     inlined_stmts: &'a mut Vec<Stmt>,
 }
 
-use crate::dependency_graph::ModuleNode;
 use crate::unused_imports::AstUnusedImportTrimmer;
 
 /// Hybrid static bundler that uses sys.modules and hash-based naming
@@ -287,7 +286,7 @@ impl HybridStaticBundler {
     pub fn bundle_modules(
         &mut self,
         modules: Vec<(String, ModModule, PathBuf, String)>, // Added content hash
-        sorted_module_nodes: &[&ModuleNode],
+        sorted_modules: &[(String, PathBuf, Vec<String>)],  // Module data from CriboGraph
         entry_module_name: &str,
     ) -> Result<ModModule> {
         let mut final_body = Vec::new();
@@ -311,8 +310,8 @@ impl HybridStaticBundler {
         let modules = self.trim_unused_imports_from_modules(modules)?;
 
         // Store entry path for relative path calculation
-        if let Some(entry_node) = sorted_module_nodes.last() {
-            self.entry_path = Some(entry_node.path.to_string_lossy().to_string());
+        if let Some((_, entry_path, _)) = sorted_modules.last() {
+            self.entry_path = Some(entry_path.to_string_lossy().to_string());
         }
 
         // Track bundled modules
@@ -451,12 +450,12 @@ impl HybridStaticBundler {
 
         // Initialize wrapper modules in dependency order AFTER inlined modules are defined
         if need_sys_import {
-            for module_node in sorted_module_nodes {
-                if module_node.name == entry_module_name {
+            for (module_name, _, _) in sorted_modules {
+                if module_name == entry_module_name {
                     continue;
                 }
 
-                if let Some(synthetic_name) = self.module_registry.get(&module_node.name) {
+                if let Some(synthetic_name) = self.module_registry.get(module_name) {
                     let init_call = self.generate_module_init_call(synthetic_name);
                     final_body.push(init_call);
                 }
@@ -464,13 +463,12 @@ impl HybridStaticBundler {
 
             // After all wrapper modules are initialized, set any missing attributes
             // for symbols imported from inlined modules
-            for module_node in sorted_module_nodes {
-                if module_node.name != entry_module_name
-                    && self.module_registry.contains_key(&module_node.name)
+            for (module_name, _, _) in sorted_modules {
+                if module_name != entry_module_name
+                    && self.module_registry.contains_key(module_name)
                 {
                     // This is a wrapper module - check if it needs attributes from inlined modules
-                    let post_init_stmts =
-                        self.generate_post_init_attributes(&module_node.name, &modules);
+                    let post_init_stmts = self.generate_post_init_attributes(module_name, &modules);
                     final_body.extend(post_init_stmts);
                 }
             }
