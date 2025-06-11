@@ -341,6 +341,14 @@ struct CycleSearchState {
     cycles: Vec<Vec<NodeIndex>>,
 }
 
+/// Analysis result for cycle modules
+struct CycleAnalysisResult {
+    has_only_constants: bool,
+    has_class_definitions: bool,
+    has_module_level_imports: bool,
+    imports_used_in_functions_only: bool,
+}
+
 /// Comprehensive analysis of circular dependencies
 #[derive(Debug, Clone)]
 pub struct CircularDependencyAnalysis {
@@ -982,7 +990,31 @@ impl CriboGraph {
         module_names: &[String],
         import_chain: &[ImportEdge],
     ) -> CircularDependencyType {
-        // Check for specific patterns in module names
+        // Check if this is a parent-child package cycle
+        // These occur when a package imports from its subpackage (e.g., pkg/__init__.py imports from pkg.submodule)
+        if self.is_parent_child_package_cycle(module_names) {
+            // This is a normal Python pattern, not a problematic cycle
+            return CircularDependencyType::FunctionLevel; // Most permissive type
+        }
+
+        // Perform AST analysis on the modules in the cycle
+        let analysis_result = self.analyze_cycle_modules(module_names);
+
+        // Use AST analysis results for classification
+        if analysis_result.has_only_constants
+            && !module_names.iter().any(|name| name.ends_with("__init__"))
+        {
+            // Modules that only contain constants create unresolvable cycles
+            // Exception: __init__.py files often only have imports/exports which is normal
+            return CircularDependencyType::ModuleConstants;
+        }
+
+        if analysis_result.has_class_definitions {
+            // Classes that reference each other
+            return CircularDependencyType::ClassLevel;
+        }
+
+        // Fall back to name-based heuristics if AST analysis is inconclusive
         for module_name in module_names {
             if module_name.contains("constants") || module_name.contains("config") {
                 return CircularDependencyType::ModuleConstants;
@@ -992,17 +1024,138 @@ impl CriboGraph {
             }
         }
 
-        // Check if all imports are at module level or could be moved to functions
-        let has_module_level_usage = import_chain.iter().any(|edge| {
-            // This would need actual AST analysis to be accurate
-            edge.from_module.contains("__init__") || edge.to_module.contains("__init__")
-        });
-
-        if has_module_level_usage {
+        // Check if imports can be moved to functions
+        // Special case: if modules have NO items (empty or only imports), treat as FunctionLevel
+        // This handles simple circular import cases like stickytape tests
+        if self.all_modules_empty_or_imports_only(module_names) {
+            // Simple circular imports can often be resolved
+            CircularDependencyType::FunctionLevel
+        } else if analysis_result.imports_used_in_functions_only {
+            CircularDependencyType::FunctionLevel
+        } else if analysis_result.has_module_level_imports
+            || import_chain.iter().any(|edge| {
+                edge.from_module.contains("__init__") || edge.to_module.contains("__init__")
+            })
+        {
             CircularDependencyType::ImportTime
         } else {
             CircularDependencyType::FunctionLevel
         }
+    }
+
+    /// Analyze modules in a cycle to determine their characteristics
+    fn analyze_cycle_modules(&self, module_names: &[String]) -> CycleAnalysisResult {
+        let mut has_only_constants = true;
+        let mut has_class_definitions = false;
+        let mut has_module_level_imports = false;
+
+        for module_name in module_names {
+            let Some(&module_id) = self.module_names.get(module_name) else {
+                continue;
+            };
+
+            let Some(module) = self.modules.get(&module_id) else {
+                continue;
+            };
+
+            // Check if module only contains constant assignments
+            let module_has_only_constants = self.module_has_only_constants(module);
+            has_only_constants = has_only_constants && module_has_only_constants;
+
+            // Check for class definitions
+            if self.module_has_class_definitions(module) {
+                has_class_definitions = true;
+            }
+
+            // Check if imports are at module level
+            if self.module_has_module_level_imports(module) {
+                has_module_level_imports = true;
+            }
+        }
+
+        CycleAnalysisResult {
+            has_only_constants,
+            has_class_definitions,
+            has_module_level_imports,
+            imports_used_in_functions_only: !has_module_level_imports,
+        }
+    }
+
+    /// Check if a module only contains constant assignments
+    fn module_has_only_constants(&self, module: &ModuleDepGraph) -> bool {
+        // Empty modules (no items) should not be considered as "only constants"
+        // Modules with only imports should not be considered as "only constants"
+        !module.items.is_empty()
+            && module
+                .items
+                .values()
+                .any(|item| matches!(item.item_type, ItemType::Assignment { .. }))
+            && !module.items.values().any(|item| {
+                matches!(
+                    &item.item_type,
+                    ItemType::FunctionDef { .. }
+                        | ItemType::ClassDef { .. }
+                        | ItemType::Expression
+                        | ItemType::If { .. }
+                        | ItemType::Try
+                )
+            })
+    }
+
+    /// Check if a module has class definitions
+    fn module_has_class_definitions(&self, module: &ModuleDepGraph) -> bool {
+        module
+            .items
+            .values()
+            .any(|item| matches!(item.item_type, ItemType::ClassDef { .. }))
+    }
+
+    /// Check if a module has module-level imports
+    fn module_has_module_level_imports(&self, module: &ModuleDepGraph) -> bool {
+        module.items.values().any(|item| {
+            matches!(
+                item.item_type,
+                ItemType::Import { .. } | ItemType::FromImport { .. }
+            )
+        })
+    }
+
+    /// Check if all modules in the cycle are empty or only contain imports
+    fn all_modules_empty_or_imports_only(&self, module_names: &[String]) -> bool {
+        module_names.iter().all(|module_name| {
+            let Some(&module_id) = self.module_names.get(module_name) else {
+                return true; // Module not found, assume empty
+            };
+
+            let Some(module) = self.modules.get(&module_id) else {
+                return true; // Module not found, assume empty
+            };
+
+            // Module has no items, or only has import items
+            module.items.is_empty()
+                || module.items.values().all(|item| {
+                    matches!(
+                        item.item_type,
+                        ItemType::Import { .. } | ItemType::FromImport { .. }
+                    )
+                })
+        })
+    }
+
+    /// Check if a cycle is a parent-child package relationship
+    fn is_parent_child_package_cycle(&self, module_names: &[String]) -> bool {
+        // A parent-child cycle occurs when:
+        // 1. We have exactly 2 modules in the cycle
+        // 2. One module is a parent package of the other
+        if module_names.len() != 2 {
+            return false;
+        }
+
+        let mod1 = &module_names[0];
+        let mod2 = &module_names[1];
+
+        // Check if mod1 is parent of mod2 or vice versa
+        mod2.starts_with(&format!("{}.", mod1)) || mod1.starts_with(&format!("{}.", mod2))
     }
 
     /// Suggest resolution strategy for a circular dependency
