@@ -380,9 +380,21 @@ impl HybridStaticBundler {
             }
         }
 
-        // First pass: collect imports from ALL modules (for hoisting)
-        for (_module_name, ast, _, _) in &modules {
+        // First pass: normalize stdlib import aliases in ALL modules before collecting imports
+        let mut modules_normalized = modules;
+        for (_module_name, ast, _, _) in &mut modules_normalized {
+            self.normalize_stdlib_import_aliases(ast);
+        }
+
+        // Second pass: collect imports from ALL modules (for hoisting)
+        for (_module_name, ast, _, _) in &modules_normalized {
             self.collect_imports_from_module(ast);
+        }
+
+        // If we have wrapper modules, inject sys and types as stdlib dependencies
+        if !wrapper_modules.is_empty() {
+            self.add_stdlib_import("sys");
+            self.add_stdlib_import("types");
         }
 
         // Register wrapper modules
@@ -409,9 +421,6 @@ impl HybridStaticBundler {
         let need_sys_import = !wrapper_modules.is_empty();
 
         if need_sys_import {
-            // Add import infrastructure (sys, types imports)
-            final_body.extend(self.generate_import_infrastructure_without_registries());
-
             // Transform wrapper modules into init functions
             for (module_name, ast, module_path, _content_hash) in wrapper_modules {
                 let synthetic_name = self.module_registry[&module_name].clone();
@@ -429,7 +438,8 @@ impl HybridStaticBundler {
         }
 
         // Collect global symbols from the entry module first
-        let mut global_symbols = self.collect_global_symbols(&modules, entry_module_name);
+        let mut global_symbols =
+            self.collect_global_symbols(&modules_normalized, entry_module_name);
         let mut symbol_renames = IndexMap::new();
 
         // Inline the inlinable modules BEFORE initializing wrapper modules
@@ -472,14 +482,15 @@ impl HybridStaticBundler {
                     && self.module_registry.contains_key(module_name)
                 {
                     // This is a wrapper module - check if it needs attributes from inlined modules
-                    let post_init_stmts = self.generate_post_init_attributes(module_name, &modules);
+                    let post_init_stmts =
+                        self.generate_post_init_attributes(module_name, &modules_normalized);
                     final_body.extend(post_init_stmts);
                 }
             }
         }
 
         // Finally, add entry module code (it's always last in topological order)
-        for (module_name, ast, _, _) in modules {
+        for (module_name, ast, _, _) in modules_normalized {
             if module_name != entry_module_name {
                 continue;
             }
@@ -606,25 +617,6 @@ impl HybridStaticBundler {
             is_async: false,
             range: TextRange::default(),
         }))
-    }
-
-    /// Generate only the sys and types imports
-    fn generate_import_infrastructure_without_registries(&self) -> Vec<Stmt> {
-        vec![Stmt::Import(StmtImport {
-            names: vec![
-                ruff_python_ast::Alias {
-                    name: Identifier::new("sys", TextRange::default()),
-                    asname: None,
-                    range: TextRange::default(),
-                },
-                ruff_python_ast::Alias {
-                    name: Identifier::new("types", TextRange::default()),
-                    asname: None,
-                    range: TextRange::default(),
-                },
-            ],
-            range: TextRange::default(),
-        })]
     }
 
     /// Generate registries and import hook after init functions are defined
@@ -1450,23 +1442,37 @@ impl HybridStaticBundler {
             }));
         }
 
-        // Finally, regular import statements - sorted by module name for deterministic output
-        let mut sorted_import_statements = self.stdlib_import_statements.clone();
-        sorted_import_statements.sort_by_key(|stmt| {
-            if let Stmt::Import(import_stmt) = stmt {
-                // Sort by the first module name in the import statement
-                import_stmt
-                    .names
-                    .first()
-                    .map(|alias| alias.name.as_str())
-                    .unwrap_or("")
-                    .to_string()
-            } else {
-                String::new()
-            }
-        });
+        // Finally, regular import statements - deduplicated and sorted by module name
+        let mut seen_modules = IndexSet::new();
+        let mut unique_imports = Vec::new();
 
-        for import_stmt in sorted_import_statements {
+        for stmt in &self.stdlib_import_statements {
+            if let Stmt::Import(import_stmt) = stmt {
+                for alias in &import_stmt.names {
+                    let module_name = alias.name.as_str();
+                    if !seen_modules.contains(module_name) {
+                        seen_modules.insert(module_name.to_string());
+                        // Create canonical import statement
+                        unique_imports.push((
+                            module_name.to_string(),
+                            Stmt::Import(StmtImport {
+                                names: vec![ruff_python_ast::Alias {
+                                    name: Identifier::new(module_name, TextRange::default()),
+                                    asname: None,
+                                    range: TextRange::default(),
+                                }],
+                                range: TextRange::default(),
+                            }),
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Sort by module name for deterministic output
+        unique_imports.sort_by_key(|(module_name, _)| module_name.clone());
+
+        for (_, import_stmt) in unique_imports {
             final_body.push(import_stmt);
         }
     }
@@ -1511,6 +1517,157 @@ impl HybridStaticBundler {
         }
     }
 
+    /// Normalize stdlib import aliases within a single file
+    /// Converts "import json as j" to "import json" and rewrites all "j.dumps" to "json.dumps"
+    fn normalize_stdlib_import_aliases(&self, ast: &mut ModModule) {
+        // Step 1: Build alias-to-canonical mapping for this file
+        let mut alias_to_canonical = IndexMap::new();
+
+        for stmt in &ast.body {
+            if let Stmt::Import(import_stmt) = stmt {
+                for alias in &import_stmt.names {
+                    let module_name = alias.name.as_str();
+                    if self.is_safe_stdlib_module(module_name) {
+                        if let Some(ref alias_name) = alias.asname {
+                            // This is an aliased import: import json as j
+                            alias_to_canonical
+                                .insert(alias_name.as_str().to_string(), module_name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        if alias_to_canonical.is_empty() {
+            return; // No aliases to normalize
+        }
+
+        log::debug!("Normalizing stdlib aliases: {:?}", alias_to_canonical);
+
+        // Step 2: Transform all expressions that reference aliases
+        for stmt in &mut ast.body {
+            match stmt {
+                Stmt::Import(_) => {
+                    // We'll handle import statements separately
+                }
+                _ => {
+                    self.rewrite_aliases_in_stmt(stmt, &alias_to_canonical);
+                }
+            }
+        }
+
+        // Step 3: Transform import statements to canonical form
+        for stmt in &mut ast.body {
+            if let Stmt::Import(import_stmt) = stmt {
+                for alias in &mut import_stmt.names {
+                    let module_name = alias.name.as_str();
+                    if self.is_safe_stdlib_module(module_name) && alias.asname.is_some() {
+                        // Remove the alias, keeping only the canonical name
+                        alias.asname = None;
+                        log::debug!("Normalized import to canonical: import {}", module_name);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Recursively rewrite aliases in a statement
+    fn rewrite_aliases_in_stmt(
+        &self,
+        stmt: &mut Stmt,
+        alias_to_canonical: &IndexMap<String, String>,
+    ) {
+        match stmt {
+            Stmt::FunctionDef(func_def) => {
+                for stmt in &mut func_def.body {
+                    self.rewrite_aliases_in_stmt(stmt, alias_to_canonical);
+                }
+            }
+            Stmt::ClassDef(class_def) => {
+                for stmt in &mut class_def.body {
+                    self.rewrite_aliases_in_stmt(stmt, alias_to_canonical);
+                }
+            }
+            Stmt::If(if_stmt) => {
+                self.rewrite_aliases_in_expr(&mut if_stmt.test, alias_to_canonical);
+                for stmt in &mut if_stmt.body {
+                    self.rewrite_aliases_in_stmt(stmt, alias_to_canonical);
+                }
+                for clause in &mut if_stmt.elif_else_clauses {
+                    if let Some(ref mut test) = clause.test {
+                        self.rewrite_aliases_in_expr(test, alias_to_canonical);
+                    }
+                    for stmt in &mut clause.body {
+                        self.rewrite_aliases_in_stmt(stmt, alias_to_canonical);
+                    }
+                }
+            }
+            Stmt::Assign(assign) => {
+                self.rewrite_aliases_in_expr(&mut assign.value, alias_to_canonical);
+            }
+            Stmt::Expr(expr_stmt) => {
+                self.rewrite_aliases_in_expr(&mut expr_stmt.value, alias_to_canonical);
+            }
+            Stmt::Return(return_stmt) => {
+                if let Some(ref mut value) = return_stmt.value {
+                    self.rewrite_aliases_in_expr(value, alias_to_canonical);
+                }
+            }
+            // Add more statement types as needed
+            _ => {
+                // For now, skip other statement types
+            }
+        }
+    }
+
+    /// Recursively rewrite aliases in an expression
+    fn rewrite_aliases_in_expr(
+        &self,
+        expr: &mut Expr,
+        alias_to_canonical: &IndexMap<String, String>,
+    ) {
+        match expr {
+            Expr::Name(name_expr) => {
+                let name_str = name_expr.id.as_str();
+                if let Some(canonical) = alias_to_canonical.get(name_str) {
+                    log::debug!(
+                        "Rewriting alias '{}' to canonical '{}'",
+                        name_str,
+                        canonical
+                    );
+                    name_expr.id = canonical.clone().into();
+                }
+            }
+            Expr::Attribute(attr_expr) => {
+                // Handle cases like j.dumps -> json.dumps
+                self.rewrite_aliases_in_expr(&mut attr_expr.value, alias_to_canonical);
+            }
+            Expr::Call(call_expr) => {
+                self.rewrite_aliases_in_expr(&mut call_expr.func, alias_to_canonical);
+                for arg in &mut call_expr.arguments.args {
+                    self.rewrite_aliases_in_expr(arg, alias_to_canonical);
+                }
+            }
+            Expr::List(list_expr) => {
+                for elem in &mut list_expr.elts {
+                    self.rewrite_aliases_in_expr(elem, alias_to_canonical);
+                }
+            }
+            Expr::Dict(dict_expr) => {
+                for item in &mut dict_expr.items {
+                    if let Some(ref mut key) = item.key {
+                        self.rewrite_aliases_in_expr(key, alias_to_canonical);
+                    }
+                    self.rewrite_aliases_in_expr(&mut item.value, alias_to_canonical);
+                }
+            }
+            // Add more expression types as needed
+            _ => {
+                // For now, skip other expression types
+            }
+        }
+    }
+
     /// Collect Import statements
     fn collect_import(&mut self, import_stmt: &StmtImport, stmt: &Stmt) {
         for alias in &import_stmt.names {
@@ -1519,6 +1676,20 @@ impl HybridStaticBundler {
                 break;
             }
         }
+    }
+
+    /// Add a regular stdlib import (e.g., "sys", "types")
+    /// This creates an import statement and adds it to the tracked imports
+    fn add_stdlib_import(&mut self, module_name: &str) {
+        let import_stmt = Stmt::Import(StmtImport {
+            names: vec![ruff_python_ast::Alias {
+                name: Identifier::new(module_name, TextRange::default()),
+                asname: None,
+                range: TextRange::default(),
+            }],
+            range: TextRange::default(),
+        });
+        self.stdlib_import_statements.push(import_stmt);
     }
 
     /// Extract __all__ exports from a module
