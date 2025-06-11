@@ -23,9 +23,9 @@ def validate(data):
     return f"main_validate: {data}"
 
 
-def process():
+def process(data):
     """This process function conflicts with multiple imported process functions"""
-    return "main_process"
+    return f"main_process: {data}"
 
 
 # Class name conflicts
@@ -67,7 +67,7 @@ def main():
     # Using imported User classes vs local User class
     auth_user = User("auth_type")  # Local User class
     model_user = UserModel("model_type")  # Imported User class
-    service_user = User("service_type", "password")  # Imported User class from auth
+    service_user = User("service_type")  # Local User class (was incorrectly trying to use auth User)
 
     # Using local functions that conflict with imports
     local_validate_result = validate("local_data")  # Local function

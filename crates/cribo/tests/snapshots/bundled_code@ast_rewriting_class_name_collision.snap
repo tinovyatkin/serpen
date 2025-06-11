@@ -51,9 +51,9 @@ class Product_1:
 
     def __str__(self) -> str:
         return f"Entity Product(sku='{self.sku}', name='{self.name}')"
-def create_product(sku: str, name: str) -> Product:
+def create_product(sku: str, name: str) -> Product_1:
     """Factory function for creating products."""
-    return Product(sku, name)
+    return Product_1(sku, name)
 """\nClass name collision test.\nBoth modules define classes with the same names.\n"""
 ModelUser = User
 ModelProduct = Product

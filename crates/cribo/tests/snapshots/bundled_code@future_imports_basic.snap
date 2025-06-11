@@ -10,6 +10,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Union
 import sys
 import types
+"""Package initialization with future import."""
+"""Submodule with future imports."""
 def __cribo_init___cribo_609581_mypackage_core():
     if '__cribo_609581_mypackage_core' in sys.modules:
         return sys.modules['__cribo_609581_mypackage_core']
@@ -73,8 +75,6 @@ class CriboBundledFinder:
             return importlib.util.find_spec(synthetic_name)
         return None
 sys.meta_path.insert(0, CriboBundledFinder(__cribo_modules, __cribo_init_functions))
-"""Package initialization with future import."""
-"""Submodule with future imports."""
 __cribo_init___cribo_609581_mypackage_core()
 __cribo_init___cribo_c3d681_mypackage_submodule_utils()
 process_data = sys.modules['mypackage.core'].process_data

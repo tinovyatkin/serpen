@@ -8,6 +8,18 @@ input_file: crates/cribo/tests/fixtures/bundling/all_variable_handling/main.py
 
 import sys
 import types
+def helper_func():
+    """Helper function used by other modules"""
+    return "helper result"
+def another_helper():
+    """Another helper function"""
+    return "another helper"
+UTILS_CONSTANT = "utils value"
+def exported_from_init():
+    """Function exported from package __init__.py"""
+    return f"From init, using helper: {helper_func()}"
+message = "from conflict_module"
+SHARED_NAME = "conflict_module_version"
 def __cribo_init___cribo_8010fb_simple_module():
     if '__cribo_8010fb_simple_module' in sys.modules:
         return sys.modules['__cribo_8010fb_simple_module']
@@ -74,18 +86,6 @@ class CriboBundledFinder:
             return importlib.util.find_spec(synthetic_name)
         return None
 sys.meta_path.insert(0, CriboBundledFinder(__cribo_modules, __cribo_init_functions))
-def helper_func():
-    """Helper function used by other modules"""
-    return "helper result"
-def another_helper():
-    """Another helper function"""
-    return "another helper"
-UTILS_CONSTANT = "utils value"
-def exported_from_init():
-    """Function exported from package __init__.py"""
-    return f"From init, using helper: {helper_func()}"
-message = "from conflict_module"
-SHARED_NAME = "conflict_module_version"
 __cribo_init___cribo_8010fb_simple_module()
 __cribo_init___cribo_11029d_nested_package_submodule()
 public_func = sys.modules['simple_module'].public_func

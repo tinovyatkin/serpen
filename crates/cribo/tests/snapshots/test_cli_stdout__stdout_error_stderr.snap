@@ -2,6 +2,40 @@
 source: crates/cribo/tests/test_cli_stdout.rs
 expression: stderr
 ---
+warning: unused variable: `actual_name`
+    --> crates/cribo/src/code_generator.rs:2731:37
+     |
+2731 | ...                   let actual_name = if self.inlined_modules.contains(&resolved) {
+     |                           ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_actual_name`
+     |
+     = note: `#[warn(unused_variables)]` on by default
+
+warning: methods `generate_post_init_attributes`, `generate_post_init_for_statement`, and `generate_attribute_assignment_for_alias` are never used
+    --> crates/cribo/src/code_generator.rs:2941:8
+     |
+2222 | impl HybridStaticBundler {
+     | ------------------------ methods in this implementation
+...
+2941 |     fn generate_post_init_attributes(
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2963 |     fn generate_post_init_for_statement(
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2992 |     fn generate_attribute_assignment_for_alias(
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` on by default
+
+warning: field `source` is never read
+  --> crates/cribo/src/semantic_bundler.rs:32:5
+   |
+30 | struct SemanticModelBuilder<'a> {
+   |        -------------------- field in this struct
+31 |     semantic: SemanticModel<'a>,
+32 |     source: &'a str,
+   |     ^^^^^^
+
 Error: Failed to read file: "nonexistent_file.py"
 
 Caused by:
