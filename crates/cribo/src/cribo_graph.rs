@@ -784,9 +784,11 @@ impl CriboGraph {
             .map(|cycle| {
                 cycle
                     .into_iter()
-                    .map(|idx| {
+                    .filter_map(|idx| {
                         let module_id = self.graph[idx];
-                        self.modules[&module_id].module_name.clone()
+                        self.modules
+                            .get(&module_id)
+                            .map(|module| module.module_name.clone())
                     })
                     .collect()
             })
@@ -841,7 +843,11 @@ impl CriboGraph {
 
             let module_names: Vec<String> = scc
                 .iter()
-                .map(|&module_id| self.modules[&module_id].module_name.clone())
+                .filter_map(|&module_id| {
+                    self.modules
+                        .get(&module_id)
+                        .map(|module| module.module_name.clone())
+                })
                 .collect();
 
             // Build import chain for the SCC
@@ -886,24 +892,40 @@ impl CriboGraph {
         let mut import_chain = Vec::new();
 
         for &from_module_id in scc {
-            let from_name = &self.modules[&from_module_id].module_name;
+            let Some(from_module) = self.modules.get(&from_module_id) else {
+                log::warn!(
+                    "Module {:?} not found in build_import_chain_for_scc",
+                    from_module_id
+                );
+                continue;
+            };
+            let from_name = &from_module.module_name;
 
             // Get dependencies of this module that are also in the SCC
             let deps = self.get_dependencies(from_module_id);
             for to_module_id in deps {
-                if scc.contains(&to_module_id) {
-                    let to_name = &self.modules[&to_module_id].module_name;
-
-                    // Check module-level imports to determine import type
-                    let import_type = self.determine_import_type(from_module_id, to_module_id);
-
-                    import_chain.push(ImportEdge {
-                        from_module: from_name.clone(),
-                        to_module: to_name.clone(),
-                        import_type,
-                        line_number: None, // Would need AST info
-                    });
+                if !scc.contains(&to_module_id) {
+                    continue;
                 }
+
+                let Some(to_module) = self.modules.get(&to_module_id) else {
+                    log::warn!(
+                        "Module {:?} not found in build_import_chain_for_scc",
+                        to_module_id
+                    );
+                    continue;
+                };
+                let to_name = &to_module.module_name;
+
+                // Check module-level imports to determine import type
+                let import_type = self.determine_import_type(from_module_id, to_module_id);
+
+                import_chain.push(ImportEdge {
+                    from_module: from_name.clone(),
+                    to_module: to_name.clone(),
+                    import_type,
+                    line_number: None, // Would need AST info
+                });
             }
         }
 
