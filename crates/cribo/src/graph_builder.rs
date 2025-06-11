@@ -6,6 +6,13 @@ use rustc_hash::FxHashSet;
 
 use crate::cribo_graph::{ItemData, ItemType, ModuleDepGraph};
 
+/// Context for for statement variable collection
+struct ForStmtContext<'a, 'b> {
+    read_vars: &'a mut FxHashSet<String>,
+    write_vars: &'a mut FxHashSet<String>,
+    stack: &'a mut Vec<&'b [Stmt]>,
+}
+
 /// Builds a ModuleDepGraph from a Python AST
 pub struct GraphBuilder<'a> {
     graph: &'a mut ModuleDepGraph,
@@ -843,34 +850,21 @@ impl<'a> GraphBuilder<'a> {
                     }
                     Stmt::Assign(assign) => {
                         self.collect_vars_in_expr(&assign.value, read_vars);
-                        for target in &assign.targets {
-                            if let Some(names) = self.extract_assignment_targets(target) {
-                                write_vars.extend(names);
-                            }
-                        }
+                        self.handle_assign_targets(&assign.targets, write_vars);
                     }
                     Stmt::Return(ret) => {
-                        if let Some(value) = &ret.value {
-                            self.collect_vars_in_expr(value, read_vars);
-                        }
+                        self.handle_return_stmt(ret, read_vars);
                     }
                     Stmt::If(if_stmt) => {
-                        self.collect_vars_in_expr(&if_stmt.test, read_vars);
-                        stack.push(&if_stmt.body);
-                        for clause in &if_stmt.elif_else_clauses {
-                            if let Some(condition) = &clause.test {
-                                self.collect_vars_in_expr(condition, read_vars);
-                            }
-                            stack.push(&clause.body);
-                        }
+                        self.handle_if_stmt(if_stmt, read_vars, &mut stack);
                     }
                     Stmt::For(for_stmt) => {
-                        self.collect_vars_in_expr(&for_stmt.iter, read_vars);
-                        if let Some(names) = self.extract_assignment_targets(&for_stmt.target) {
-                            write_vars.extend(names);
-                        }
-                        stack.push(&for_stmt.body);
-                        stack.push(&for_stmt.orelse);
+                        let mut ctx = ForStmtContext {
+                            read_vars,
+                            write_vars,
+                            stack: &mut stack,
+                        };
+                        self.handle_for_stmt(for_stmt, &mut ctx);
                     }
                     Stmt::While(while_stmt) => {
                         self.collect_vars_in_expr(&while_stmt.test, read_vars);
@@ -878,10 +872,7 @@ impl<'a> GraphBuilder<'a> {
                         stack.push(&while_stmt.orelse);
                     }
                     Stmt::With(with_stmt) => {
-                        for item in &with_stmt.items {
-                            self.collect_vars_in_expr(&item.context_expr, read_vars);
-                        }
-                        stack.push(&with_stmt.body);
+                        self.handle_with_stmt(with_stmt, read_vars, &mut stack);
                     }
                     _ => {} // Other statements
                 }
@@ -915,12 +906,7 @@ impl<'a> GraphBuilder<'a> {
                     stack.extend(set.elts.iter());
                 }
                 Expr::Dict(dict) => {
-                    for item in &dict.items {
-                        if let Some(key) = &item.key {
-                            stack.push(key);
-                        }
-                        stack.push(&item.value);
-                    }
+                    self.handle_dict_expr(dict, &mut stack);
                 }
 
                 // Binary/unary ops - check their operands
@@ -998,6 +984,72 @@ impl<'a> GraphBuilder<'a> {
             Some(parts.join("."))
         } else {
             None
+        }
+    }
+
+    /// Handle return statement variable collection
+    fn handle_return_stmt(&self, ret: &ast::StmtReturn, read_vars: &mut FxHashSet<String>) {
+        if let Some(value) = &ret.value {
+            self.collect_vars_in_expr(value, read_vars);
+        }
+    }
+
+    /// Handle assignment targets
+    fn handle_assign_targets(&self, targets: &[Expr], write_vars: &mut FxHashSet<String>) {
+        for target in targets {
+            if let Some(names) = self.extract_assignment_targets(target) {
+                write_vars.extend(names);
+            }
+        }
+    }
+
+    /// Handle if statement variable collection
+    fn handle_if_stmt<'b>(
+        &self,
+        if_stmt: &'b ast::StmtIf,
+        read_vars: &mut FxHashSet<String>,
+        stack: &mut Vec<&'b [Stmt]>,
+    ) {
+        self.collect_vars_in_expr(&if_stmt.test, read_vars);
+        stack.push(&if_stmt.body);
+        for clause in &if_stmt.elif_else_clauses {
+            if let Some(condition) = &clause.test {
+                self.collect_vars_in_expr(condition, read_vars);
+            }
+            stack.push(&clause.body);
+        }
+    }
+
+    /// Handle for statement variable collection
+    fn handle_for_stmt<'b>(&self, for_stmt: &'b ast::StmtFor, ctx: &mut ForStmtContext<'_, 'b>) {
+        self.collect_vars_in_expr(&for_stmt.iter, ctx.read_vars);
+        if let Some(names) = self.extract_assignment_targets(&for_stmt.target) {
+            ctx.write_vars.extend(names);
+        }
+        ctx.stack.push(&for_stmt.body);
+        ctx.stack.push(&for_stmt.orelse);
+    }
+
+    /// Handle with statement variable collection
+    fn handle_with_stmt<'b>(
+        &self,
+        with_stmt: &'b ast::StmtWith,
+        read_vars: &mut FxHashSet<String>,
+        stack: &mut Vec<&'b [Stmt]>,
+    ) {
+        for item in &with_stmt.items {
+            self.collect_vars_in_expr(&item.context_expr, read_vars);
+        }
+        stack.push(&with_stmt.body);
+    }
+
+    /// Handle dictionary expression in side effects check
+    fn handle_dict_expr<'b>(&self, dict: &'b ast::ExprDict, stack: &mut Vec<&'b Expr>) {
+        for item in &dict.items {
+            if let Some(key) = &item.key {
+                stack.push(key);
+            }
+            stack.push(&item.value);
         }
     }
 }
