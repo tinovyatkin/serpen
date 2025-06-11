@@ -1612,11 +1612,26 @@ impl HybridStaticBundler {
     ) {
         match stmt {
             Stmt::FunctionDef(func_def) => {
+                // Rewrite in default arguments
+                let params = &mut func_def.parameters;
+                for param in &mut params.args {
+                    if let Some(ref mut default) = param.default {
+                        self.rewrite_aliases_in_expr(default, alias_to_canonical);
+                    }
+                }
+                // Rewrite in function body
                 for stmt in &mut func_def.body {
                     self.rewrite_aliases_in_stmt(stmt, alias_to_canonical);
                 }
             }
             Stmt::ClassDef(class_def) => {
+                // Rewrite in base classes
+                if let Some(ref mut arguments) = class_def.arguments {
+                    for arg in &mut arguments.args {
+                        self.rewrite_aliases_in_expr(arg, alias_to_canonical);
+                    }
+                }
+                // Rewrite in class body
                 for stmt in &mut class_def.body {
                     self.rewrite_aliases_in_stmt(stmt, alias_to_canonical);
                 }
@@ -1635,8 +1650,63 @@ impl HybridStaticBundler {
                     }
                 }
             }
+            Stmt::While(while_stmt) => {
+                self.rewrite_aliases_in_expr(&mut while_stmt.test, alias_to_canonical);
+                for stmt in &mut while_stmt.body {
+                    self.rewrite_aliases_in_stmt(stmt, alias_to_canonical);
+                }
+                for stmt in &mut while_stmt.orelse {
+                    self.rewrite_aliases_in_stmt(stmt, alias_to_canonical);
+                }
+            }
+            Stmt::For(for_stmt) => {
+                self.rewrite_aliases_in_expr(&mut for_stmt.iter, alias_to_canonical);
+                for stmt in &mut for_stmt.body {
+                    self.rewrite_aliases_in_stmt(stmt, alias_to_canonical);
+                }
+                for stmt in &mut for_stmt.orelse {
+                    self.rewrite_aliases_in_stmt(stmt, alias_to_canonical);
+                }
+            }
+            Stmt::With(with_stmt) => {
+                for item in &mut with_stmt.items {
+                    self.rewrite_aliases_in_expr(&mut item.context_expr, alias_to_canonical);
+                }
+                for stmt in &mut with_stmt.body {
+                    self.rewrite_aliases_in_stmt(stmt, alias_to_canonical);
+                }
+            }
+            Stmt::Try(try_stmt) => {
+                for stmt in &mut try_stmt.body {
+                    self.rewrite_aliases_in_stmt(stmt, alias_to_canonical);
+                }
+                for handler in &mut try_stmt.handlers {
+                    self.rewrite_aliases_in_except_handler(handler, alias_to_canonical);
+                }
+                for stmt in &mut try_stmt.orelse {
+                    self.rewrite_aliases_in_stmt(stmt, alias_to_canonical);
+                }
+                for stmt in &mut try_stmt.finalbody {
+                    self.rewrite_aliases_in_stmt(stmt, alias_to_canonical);
+                }
+            }
             Stmt::Assign(assign) => {
+                // Rewrite in targets
+                for target in &mut assign.targets {
+                    self.rewrite_aliases_in_expr(target, alias_to_canonical);
+                }
+                // Rewrite in value
                 self.rewrite_aliases_in_expr(&mut assign.value, alias_to_canonical);
+            }
+            Stmt::AugAssign(aug_assign) => {
+                self.rewrite_aliases_in_expr(&mut aug_assign.target, alias_to_canonical);
+                self.rewrite_aliases_in_expr(&mut aug_assign.value, alias_to_canonical);
+            }
+            Stmt::AnnAssign(ann_assign) => {
+                self.rewrite_aliases_in_expr(&mut ann_assign.target, alias_to_canonical);
+                if let Some(ref mut value) = ann_assign.value {
+                    self.rewrite_aliases_in_expr(value, alias_to_canonical);
+                }
             }
             Stmt::Expr(expr_stmt) => {
                 self.rewrite_aliases_in_expr(&mut expr_stmt.value, alias_to_canonical);
@@ -1646,9 +1716,52 @@ impl HybridStaticBundler {
                     self.rewrite_aliases_in_expr(value, alias_to_canonical);
                 }
             }
-            // Add more statement types as needed
+            Stmt::Raise(raise_stmt) => {
+                if let Some(ref mut exc) = raise_stmt.exc {
+                    self.rewrite_aliases_in_expr(exc, alias_to_canonical);
+                }
+                if let Some(ref mut cause) = raise_stmt.cause {
+                    self.rewrite_aliases_in_expr(cause, alias_to_canonical);
+                }
+            }
+            Stmt::Assert(assert_stmt) => {
+                self.rewrite_aliases_in_expr(&mut assert_stmt.test, alias_to_canonical);
+                if let Some(ref mut msg) = assert_stmt.msg {
+                    self.rewrite_aliases_in_expr(msg, alias_to_canonical);
+                }
+            }
+            Stmt::Delete(delete_stmt) => {
+                for target in &mut delete_stmt.targets {
+                    self.rewrite_aliases_in_expr(target, alias_to_canonical);
+                }
+            }
+            Stmt::Global(_) | Stmt::Nonlocal(_) => {
+                // These don't contain expressions that need rewriting
+            }
+            Stmt::Pass(_) | Stmt::Break(_) | Stmt::Continue(_) => {
+                // These don't contain expressions
+            }
+            Stmt::Import(_) | Stmt::ImportFrom(_) => {
+                // Import statements are handled separately and shouldn't be rewritten here
+            }
+            Stmt::TypeAlias(type_alias) => {
+                self.rewrite_aliases_in_expr(&mut type_alias.value, alias_to_canonical);
+            }
+            Stmt::Match(match_stmt) => {
+                self.rewrite_aliases_in_expr(&mut match_stmt.subject, alias_to_canonical);
+                for case in &mut match_stmt.cases {
+                    // Note: Pattern rewriting would be complex and is skipped for now
+                    if let Some(ref mut guard) = case.guard {
+                        self.rewrite_aliases_in_expr(guard, alias_to_canonical);
+                    }
+                    for stmt in &mut case.body {
+                        self.rewrite_aliases_in_stmt(stmt, alias_to_canonical);
+                    }
+                }
+            }
+            // Catch-all for any future statement types
             _ => {
-                // For now, skip other statement types
+                log::debug!("Unhandled statement type in alias rewriting: {:?}", stmt);
             }
         }
     }
@@ -1660,6 +1773,21 @@ impl HybridStaticBundler {
         alias_to_canonical: &FxIndexMap<String, String>,
     ) {
         rewrite_aliases_in_expr_impl(expr, alias_to_canonical);
+    }
+
+    /// Helper to rewrite aliases in except handlers to reduce nesting
+    fn rewrite_aliases_in_except_handler(
+        &self,
+        handler: &mut ruff_python_ast::ExceptHandler,
+        alias_to_canonical: &FxIndexMap<String, String>,
+    ) {
+        match handler {
+            ruff_python_ast::ExceptHandler::ExceptHandler(except_handler) => {
+                for stmt in &mut except_handler.body {
+                    self.rewrite_aliases_in_stmt(stmt, alias_to_canonical);
+                }
+            }
+        }
     }
 }
 
@@ -1700,9 +1828,116 @@ fn rewrite_aliases_in_expr_impl(expr: &mut Expr, alias_to_canonical: &FxIndexMap
                 rewrite_aliases_in_expr_impl(&mut item.value, alias_to_canonical);
             }
         }
-        // Add more expression types as needed
+        Expr::Tuple(tuple_expr) => {
+            for elem in &mut tuple_expr.elts {
+                rewrite_aliases_in_expr_impl(elem, alias_to_canonical);
+            }
+        }
+        Expr::Set(set_expr) => {
+            for elem in &mut set_expr.elts {
+                rewrite_aliases_in_expr_impl(elem, alias_to_canonical);
+            }
+        }
+        Expr::BinOp(binop_expr) => {
+            rewrite_aliases_in_expr_impl(&mut binop_expr.left, alias_to_canonical);
+            rewrite_aliases_in_expr_impl(&mut binop_expr.right, alias_to_canonical);
+        }
+        Expr::UnaryOp(unaryop_expr) => {
+            rewrite_aliases_in_expr_impl(&mut unaryop_expr.operand, alias_to_canonical);
+        }
+        Expr::Compare(compare_expr) => {
+            rewrite_aliases_in_expr_impl(&mut compare_expr.left, alias_to_canonical);
+            for comparator in &mut compare_expr.comparators {
+                rewrite_aliases_in_expr_impl(comparator, alias_to_canonical);
+            }
+        }
+        Expr::BoolOp(boolop_expr) => {
+            for value in &mut boolop_expr.values {
+                rewrite_aliases_in_expr_impl(value, alias_to_canonical);
+            }
+        }
+        Expr::If(if_expr) => {
+            rewrite_aliases_in_expr_impl(&mut if_expr.test, alias_to_canonical);
+            rewrite_aliases_in_expr_impl(&mut if_expr.body, alias_to_canonical);
+            rewrite_aliases_in_expr_impl(&mut if_expr.orelse, alias_to_canonical);
+        }
+        Expr::ListComp(listcomp_expr) => {
+            rewrite_aliases_in_expr_impl(&mut listcomp_expr.elt, alias_to_canonical);
+            for generator in &mut listcomp_expr.generators {
+                rewrite_aliases_in_expr_impl(&mut generator.iter, alias_to_canonical);
+                for if_clause in &mut generator.ifs {
+                    rewrite_aliases_in_expr_impl(if_clause, alias_to_canonical);
+                }
+            }
+        }
+        Expr::SetComp(setcomp_expr) => {
+            rewrite_aliases_in_expr_impl(&mut setcomp_expr.elt, alias_to_canonical);
+            for generator in &mut setcomp_expr.generators {
+                rewrite_aliases_in_expr_impl(&mut generator.iter, alias_to_canonical);
+                for if_clause in &mut generator.ifs {
+                    rewrite_aliases_in_expr_impl(if_clause, alias_to_canonical);
+                }
+            }
+        }
+        Expr::DictComp(dictcomp_expr) => {
+            rewrite_aliases_in_expr_impl(&mut dictcomp_expr.key, alias_to_canonical);
+            rewrite_aliases_in_expr_impl(&mut dictcomp_expr.value, alias_to_canonical);
+            for generator in &mut dictcomp_expr.generators {
+                rewrite_aliases_in_expr_impl(&mut generator.iter, alias_to_canonical);
+                for if_clause in &mut generator.ifs {
+                    rewrite_aliases_in_expr_impl(if_clause, alias_to_canonical);
+                }
+            }
+        }
+        Expr::Subscript(subscript_expr) => {
+            rewrite_aliases_in_expr_impl(&mut subscript_expr.value, alias_to_canonical);
+            rewrite_aliases_in_expr_impl(&mut subscript_expr.slice, alias_to_canonical);
+        }
+        Expr::Slice(slice_expr) => {
+            if let Some(ref mut lower) = slice_expr.lower {
+                rewrite_aliases_in_expr_impl(lower, alias_to_canonical);
+            }
+            if let Some(ref mut upper) = slice_expr.upper {
+                rewrite_aliases_in_expr_impl(upper, alias_to_canonical);
+            }
+            if let Some(ref mut step) = slice_expr.step {
+                rewrite_aliases_in_expr_impl(step, alias_to_canonical);
+            }
+        }
+        Expr::Lambda(lambda_expr) => {
+            rewrite_aliases_in_expr_impl(&mut lambda_expr.body, alias_to_canonical);
+        }
+        Expr::Yield(yield_expr) => {
+            if let Some(ref mut value) = yield_expr.value {
+                rewrite_aliases_in_expr_impl(value, alias_to_canonical);
+            }
+        }
+        Expr::YieldFrom(yieldfrom_expr) => {
+            rewrite_aliases_in_expr_impl(&mut yieldfrom_expr.value, alias_to_canonical);
+        }
+        Expr::Await(await_expr) => {
+            rewrite_aliases_in_expr_impl(&mut await_expr.value, alias_to_canonical);
+        }
+        Expr::Starred(starred_expr) => {
+            rewrite_aliases_in_expr_impl(&mut starred_expr.value, alias_to_canonical);
+        }
+        Expr::FString(_fstring_expr) => {
+            // FString handling is complex due to its structure
+            // For now, skip FString rewriting as it's rarely used with module aliases
+            log::debug!("FString expression rewriting not yet implemented");
+        }
+        // Constant values and other literals don't need rewriting
+        Expr::StringLiteral(_)
+        | Expr::BytesLiteral(_)
+        | Expr::NumberLiteral(_)
+        | Expr::BooleanLiteral(_)
+        | Expr::NoneLiteral(_)
+        | Expr::EllipsisLiteral(_) => {
+            // These don't contain references to aliases
+        }
         _ => {
-            // For now, skip other expression types
+            // Log unhandled expression types for future reference
+            log::trace!("Unhandled expression type in alias rewriting");
         }
     }
 }
