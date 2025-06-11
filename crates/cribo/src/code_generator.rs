@@ -30,6 +30,14 @@ struct InlineContext<'a> {
     inlined_stmts: &'a mut Vec<Stmt>,
 }
 
+/// Parameters for bundle_modules function
+pub struct BundleParams<'a> {
+    pub modules: Vec<(String, ModModule, PathBuf, String)>, // (name, ast, path, content_hash)
+    pub sorted_modules: &'a [(String, PathBuf, Vec<String>)], // Module data from CriboGraph
+    pub entry_module_name: &'a str,
+    pub graph: &'a CriboGraph, // Dependency graph for unused import detection
+}
+
 use crate::cribo_graph::CriboGraph;
 
 /// Hybrid static bundler that uses sys.modules and hash-based naming
@@ -260,9 +268,8 @@ impl HybridStaticBundler {
                         unused_imports.len(),
                         module_name
                     );
-                    for unused in &unused_imports {
-                        log::debug!("  - {} from {}", unused.name, unused.module);
-                    }
+                    // Log unused imports details
+                    Self::log_unused_imports_details(&unused_imports);
 
                     // Filter out unused imports from the AST
                     ast.body
@@ -362,19 +369,14 @@ impl HybridStaticBundler {
     }
 
     /// Bundle multiple modules using the hybrid approach
-    pub fn bundle_modules(
-        &mut self,
-        modules: Vec<(String, ModModule, PathBuf, String)>, // Added content hash
-        sorted_modules: &[(String, PathBuf, Vec<String>)],  // Module data from CriboGraph
-        entry_module_name: &str,
-        graph: &CriboGraph, // Add dependency graph for unused import detection
-    ) -> Result<ModModule> {
+    pub fn bundle_modules(&mut self, params: BundleParams<'_>) -> Result<ModModule> {
         let mut final_body = Vec::new();
 
-        log::debug!("Entry module name: {}", entry_module_name);
+        log::debug!("Entry module name: {}", params.entry_module_name);
         log::debug!(
             "Module names in modules vector: {:?}",
-            modules
+            params
+                .modules
                 .iter()
                 .map(|(name, _, _, _)| name)
                 .collect::<Vec<_>>()
@@ -382,15 +384,15 @@ impl HybridStaticBundler {
 
         // First pass: collect future imports from ALL modules before trimming
         // This ensures future imports are hoisted even if they appear late in the file
-        for (_module_name, ast, _, _) in &modules {
+        for (_module_name, ast, _, _) in &params.modules {
             self.collect_future_imports_from_ast(ast);
         }
 
         // Second pass: trim unused imports from all modules
-        let modules = self.trim_unused_imports_from_modules(modules, graph)?;
+        let modules = self.trim_unused_imports_from_modules(params.modules, params.graph)?;
 
         // Store entry path for relative path calculation
-        if let Some((_, entry_path, _)) = sorted_modules.last() {
+        if let Some((_, entry_path, _)) = params.sorted_modules.last() {
             self.entry_path = Some(entry_path.to_string_lossy().to_string());
         }
 
@@ -401,7 +403,7 @@ impl HybridStaticBundler {
 
         // Check which modules are imported directly (e.g., import module_name)
         let directly_imported_modules =
-            self.find_directly_imported_modules(&modules, entry_module_name);
+            self.find_directly_imported_modules(&modules, params.entry_module_name);
         log::debug!("Directly imported modules: {:?}", directly_imported_modules);
 
         // Separate modules into inlinable and non-inlinable
@@ -410,7 +412,7 @@ impl HybridStaticBundler {
         let mut module_exports_map = FxIndexMap::default();
 
         for (module_name, ast, module_path, content_hash) in &modules {
-            if module_name == entry_module_name {
+            if module_name == params.entry_module_name {
                 continue;
             }
 
@@ -515,7 +517,7 @@ impl HybridStaticBundler {
 
         // Collect global symbols from the entry module first
         let mut global_symbols =
-            self.collect_global_symbols(&modules_normalized, entry_module_name);
+            self.collect_global_symbols(&modules_normalized, params.entry_module_name);
         let mut symbol_renames = FxIndexMap::default();
 
         // Inline the inlinable modules BEFORE initializing wrapper modules
@@ -540,8 +542,8 @@ impl HybridStaticBundler {
 
         // Initialize wrapper modules in dependency order AFTER inlined modules are defined
         if need_sys_import {
-            for (module_name, _, _) in sorted_modules {
-                if module_name == entry_module_name {
+            for (module_name, _, _) in params.sorted_modules {
+                if module_name == params.entry_module_name {
                     continue;
                 }
 
@@ -553,8 +555,8 @@ impl HybridStaticBundler {
 
             // After all wrapper modules are initialized, set any missing attributes
             // for symbols imported from inlined modules
-            for (module_name, _, _) in sorted_modules {
-                if module_name != entry_module_name
+            for (module_name, _, _) in params.sorted_modules {
+                if module_name != params.entry_module_name
                     && self.module_registry.contains_key(module_name)
                 {
                     // This is a wrapper module - check if it needs attributes from inlined modules
@@ -567,7 +569,7 @@ impl HybridStaticBundler {
 
         // Finally, add entry module code (it's always last in topological order)
         for (module_name, ast, _, _) in modules_normalized {
-            if module_name != entry_module_name {
+            if module_name != params.entry_module_name {
                 continue;
             }
 
@@ -2966,5 +2968,14 @@ impl HybridStaticBundler {
             name_expr.id = renamed_name.into();
         }
         ctx.inlined_stmts.push(Stmt::AnnAssign(ann_assign_clone));
+    }
+
+    /// Log unused imports details if debug logging is enabled
+    fn log_unused_imports_details(unused_imports: &[crate::cribo_graph::UnusedImportInfo]) {
+        if log::log_enabled!(log::Level::Debug) {
+            for unused in unused_imports {
+                log::debug!("  - {} from {}", unused.name, unused.module);
+            }
+        }
     }
 }

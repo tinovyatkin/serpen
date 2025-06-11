@@ -109,6 +109,14 @@ pub struct UnusedImportInfo {
     pub is_reexport: bool,
 }
 
+/// Context for checking if an import is unused
+struct ImportUsageContext<'a> {
+    imported_name: &'a str,
+    import_id: ItemId,
+    is_init_py: bool,
+    import_data: &'a ItemData,
+}
+
 /// Data about a Python item (statement/definition)
 #[derive(Debug, Clone)]
 pub struct ItemData {
@@ -259,7 +267,14 @@ impl ModuleDepGraph {
         // For each imported name, check if it's used
         for (import_id, import_data) in imported_items {
             for imported_name in &import_data.imported_names {
-                if self.is_import_unused(imported_name, import_id, is_init_py, import_data) {
+                let ctx = ImportUsageContext {
+                    imported_name,
+                    import_id,
+                    is_init_py,
+                    import_data,
+                };
+
+                if self.is_import_unused(ctx) {
                     let module_name = match &import_data.item_type {
                         ItemType::Import { module, .. } => module.clone(),
                         ItemType::FromImport { module, .. } => module.clone(),
@@ -280,49 +295,43 @@ impl ModuleDepGraph {
     }
 
     /// Check if a specific imported name is unused
-    fn is_import_unused(
-        &self,
-        imported_name: &str,
-        import_id: ItemId,
-        is_init_py: bool,
-        import_data: &ItemData,
-    ) -> bool {
+    fn is_import_unused(&self, ctx: ImportUsageContext<'_>) -> bool {
         // Check for special cases where imports should be preserved
-        if is_init_py {
+        if ctx.is_init_py {
             // In __init__.py, preserve all imports as they might be part of the public API
             return false;
         }
 
         // Check if it's a star import
-        if let ItemType::FromImport { is_star: true, .. } = &import_data.item_type {
+        if let ItemType::FromImport { is_star: true, .. } = &ctx.import_data.item_type {
             // Star imports are always preserved
             return false;
         }
 
         // Check if it's explicitly re-exported
-        if import_data.reexported_names.contains(imported_name) {
+        if ctx.import_data.reexported_names.contains(ctx.imported_name) {
             return false;
         }
 
         // Check if the import has side effects (includes stdlib imports)
-        if import_data.has_side_effects {
+        if ctx.import_data.has_side_effects {
             return false;
         }
 
         // Check if the name is used anywhere in the module
         for (item_id, item_data) in &self.items {
             // Skip the import statement itself
-            if *item_id == import_id {
+            if *item_id == ctx.import_id {
                 continue;
             }
 
             // Check if the name is read by this item
-            if item_data.read_vars.contains(imported_name)
-                || item_data.eventual_read_vars.contains(imported_name)
+            if item_data.read_vars.contains(ctx.imported_name)
+                || item_data.eventual_read_vars.contains(ctx.imported_name)
             {
                 log::trace!(
                     "Import '{}' is used by item {:?} (read_vars: {:?}, eventual_read_vars: {:?})",
-                    imported_name,
+                    ctx.imported_name,
                     item_id,
                     item_data.read_vars,
                     item_data.eventual_read_vars
@@ -332,29 +341,29 @@ impl ModuleDepGraph {
 
             // For dotted imports like `import xml.etree.ElementTree`, also check if any of the
             // declared variables from that import are used
-            if let Some(import_item) = self.items.get(&import_id) {
-                for var_decl in &import_item.var_decls {
-                    if item_data.read_vars.contains(var_decl)
+            if let Some(import_item) = self.items.get(&ctx.import_id) {
+                let is_var_used = import_item.var_decls.iter().any(|var_decl| {
+                    item_data.read_vars.contains(var_decl)
                         || item_data.eventual_read_vars.contains(var_decl)
-                    {
-                        log::trace!(
-                            "Import '{}' is used via declared var '{}' by item {:?}",
-                            imported_name,
-                            var_decl,
-                            item_id
-                        );
-                        return false;
-                    }
+                });
+
+                if is_var_used {
+                    log::trace!(
+                        "Import '{}' is used via declared variables by item {:?}",
+                        ctx.imported_name,
+                        item_id
+                    );
+                    return false;
                 }
             }
         }
 
         // Check if the name is in the module's __all__ export list
-        if self.is_in_module_exports(imported_name) {
+        if self.is_in_module_exports(ctx.imported_name) {
             return false;
         }
 
-        log::trace!("Import '{}' is UNUSED", imported_name);
+        log::trace!("Import '{}' is UNUSED", ctx.imported_name);
         true
     }
 

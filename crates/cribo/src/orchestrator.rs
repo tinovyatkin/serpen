@@ -40,6 +40,14 @@ struct DiscoveryParams<'a> {
     queued_modules: &'a mut IndexSet<String>,
 }
 
+/// Parameters for static bundle emission
+struct StaticBundleParams<'a> {
+    sorted_modules: &'a [(String, PathBuf, Vec<String>)],
+    _resolver: &'a ModuleResolver, // Unused but kept for future use
+    entry_module_name: &'a str,
+    graph: &'a CriboGraph,
+}
+
 /// Context for dependency building operations
 struct DependencyContext<'a> {
     resolver: &'a ModuleResolver,
@@ -274,8 +282,12 @@ impl BundleOrchestrator {
 
         // Generate bundled code
         info!("Using hybrid static bundler");
-        let bundled_code =
-            self.emit_static_bundle(&module_data, &resolver, &entry_module_name, &graph)?;
+        let bundled_code = self.emit_static_bundle(StaticBundleParams {
+            sorted_modules: &module_data,
+            _resolver: &resolver,
+            entry_module_name: &entry_module_name,
+            graph: &graph,
+        })?;
 
         // Generate requirements.txt if requested
         if emit_requirements {
@@ -308,8 +320,12 @@ impl BundleOrchestrator {
 
         // Generate bundled code
         info!("Using hybrid static bundler");
-        let bundled_code =
-            self.emit_static_bundle(&sorted_modules, &resolver, &entry_module_name, &graph)?;
+        let bundled_code = self.emit_static_bundle(StaticBundleParams {
+            sorted_modules: &sorted_modules,
+            _resolver: &resolver,
+            entry_module_name: &entry_module_name,
+            graph: &graph,
+        })?;
 
         // Generate requirements.txt if requested
         if emit_requirements {
@@ -1131,19 +1147,13 @@ impl BundleOrchestrator {
     }
 
     /// Emit bundle using static bundler (no exec calls)
-    fn emit_static_bundle(
-        &self,
-        sorted_modules: &[(String, PathBuf, Vec<String>)],
-        _resolver: &ModuleResolver,
-        entry_module_name: &str,
-        graph: &CriboGraph,
-    ) -> Result<String> {
+    fn emit_static_bundle(&self, params: StaticBundleParams<'_>) -> Result<String> {
         let mut static_bundler = HybridStaticBundler::new();
 
         // Parse all modules and prepare them for bundling
         let mut module_asts = Vec::new();
 
-        for (module_name, module_path, _imports) in sorted_modules {
+        for (module_name, module_path, _imports) in params.sorted_modules {
             let source = fs::read_to_string(module_path)
                 .with_context(|| format!("Failed to read module file: {:?}", module_path))?;
             let source = crate::util::normalize_line_endings(source);
@@ -1167,8 +1177,12 @@ impl BundleOrchestrator {
         }
 
         // Bundle all modules using static bundler
-        let bundled_ast =
-            static_bundler.bundle_modules(module_asts, sorted_modules, entry_module_name, graph)?;
+        let bundled_ast = static_bundler.bundle_modules(crate::code_generator::BundleParams {
+            modules: module_asts,
+            sorted_modules: params.sorted_modules,
+            entry_module_name: params.entry_module_name,
+            graph: params.graph,
+        })?;
 
         // Generate Python code from AST
         let empty_parsed = ruff_python_parser::parse_module("")?;

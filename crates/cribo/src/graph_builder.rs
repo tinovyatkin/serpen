@@ -353,11 +353,12 @@ impl<'a> GraphBuilder<'a> {
         if is_all_assignment {
             // Extract names from __all__ value
             if let Expr::List(list_expr) = assign.value.as_ref() {
-                for element in &list_expr.elts {
-                    if let Expr::StringLiteral(string_lit) = element {
-                        reexported_names.insert(string_lit.value.to_string());
-                    }
-                }
+                reexported_names.extend(list_expr.elts.iter().filter_map(
+                    |element| match element {
+                        Expr::StringLiteral(string_lit) => Some(string_lit.value.to_string()),
+                        _ => None,
+                    },
+                ));
             }
         }
 
@@ -654,28 +655,25 @@ impl<'a> GraphBuilder<'a> {
 
     /// Extract assignment target names
     fn extract_assignment_targets(&self, expr: &Expr) -> Option<Vec<String>> {
-        match expr {
-            Expr::Name(name) => Some(vec![name.id.to_string()]),
-            Expr::Tuple(tuple) => {
-                let mut names = Vec::new();
-                for elt in &tuple.elts {
-                    if let Some(mut elt_names) = self.extract_assignment_targets(elt) {
-                        names.append(&mut elt_names);
-                    }
+        let mut names = Vec::new();
+        let mut stack = vec![expr];
+
+        while let Some(current_expr) = stack.pop() {
+            match current_expr {
+                Expr::Name(name) => {
+                    names.push(name.id.to_string());
                 }
-                Some(names)
-            }
-            Expr::List(list) => {
-                let mut names = Vec::new();
-                for elt in &list.elts {
-                    if let Some(mut elt_names) = self.extract_assignment_targets(elt) {
-                        names.append(&mut elt_names);
-                    }
+                Expr::Tuple(tuple) => {
+                    stack.extend(tuple.elts.iter());
                 }
-                Some(names)
+                Expr::List(list) => {
+                    stack.extend(list.elts.iter());
+                }
+                _ => return None, // Unsupported target type
             }
-            _ => None,
         }
+
+        if names.is_empty() { None } else { Some(names) }
     }
 
     /// Collect variables used in an expression
@@ -835,106 +833,121 @@ impl<'a> GraphBuilder<'a> {
         read_vars: &mut FxHashSet<String>,
         write_vars: &mut FxHashSet<String>,
     ) {
-        for stmt in body {
-            match stmt {
-                Stmt::Expr(expr_stmt) => {
-                    self.collect_vars_in_expr(&expr_stmt.value, read_vars);
-                }
-                Stmt::Assign(assign) => {
-                    self.collect_vars_in_expr(&assign.value, read_vars);
-                    for target in &assign.targets {
-                        if let Some(names) = self.extract_assignment_targets(target) {
+        let mut stack: Vec<&[Stmt]> = vec![body];
+
+        while let Some(current_body) = stack.pop() {
+            for stmt in current_body {
+                match stmt {
+                    Stmt::Expr(expr_stmt) => {
+                        self.collect_vars_in_expr(&expr_stmt.value, read_vars);
+                    }
+                    Stmt::Assign(assign) => {
+                        self.collect_vars_in_expr(&assign.value, read_vars);
+                        for target in &assign.targets {
+                            if let Some(names) = self.extract_assignment_targets(target) {
+                                write_vars.extend(names);
+                            }
+                        }
+                    }
+                    Stmt::Return(ret) => {
+                        if let Some(value) = &ret.value {
+                            self.collect_vars_in_expr(value, read_vars);
+                        }
+                    }
+                    Stmt::If(if_stmt) => {
+                        self.collect_vars_in_expr(&if_stmt.test, read_vars);
+                        stack.push(&if_stmt.body);
+                        for clause in &if_stmt.elif_else_clauses {
+                            if let Some(condition) = &clause.test {
+                                self.collect_vars_in_expr(condition, read_vars);
+                            }
+                            stack.push(&clause.body);
+                        }
+                    }
+                    Stmt::For(for_stmt) => {
+                        self.collect_vars_in_expr(&for_stmt.iter, read_vars);
+                        if let Some(names) = self.extract_assignment_targets(&for_stmt.target) {
                             write_vars.extend(names);
                         }
+                        stack.push(&for_stmt.body);
+                        stack.push(&for_stmt.orelse);
                     }
-                }
-                Stmt::Return(ret) => {
-                    if let Some(value) = &ret.value {
-                        self.collect_vars_in_expr(value, read_vars);
+                    Stmt::While(while_stmt) => {
+                        self.collect_vars_in_expr(&while_stmt.test, read_vars);
+                        stack.push(&while_stmt.body);
+                        stack.push(&while_stmt.orelse);
                     }
-                }
-                Stmt::If(if_stmt) => {
-                    self.collect_vars_in_expr(&if_stmt.test, read_vars);
-                    self.collect_vars_in_body(&if_stmt.body, read_vars, write_vars);
-                    for clause in &if_stmt.elif_else_clauses {
-                        if let Some(condition) = &clause.test {
-                            self.collect_vars_in_expr(condition, read_vars);
+                    Stmt::With(with_stmt) => {
+                        for item in &with_stmt.items {
+                            self.collect_vars_in_expr(&item.context_expr, read_vars);
                         }
-                        self.collect_vars_in_body(&clause.body, read_vars, write_vars);
+                        stack.push(&with_stmt.body);
                     }
+                    _ => {} // Other statements
                 }
-                Stmt::For(for_stmt) => {
-                    self.collect_vars_in_expr(&for_stmt.iter, read_vars);
-                    if let Some(names) = self.extract_assignment_targets(&for_stmt.target) {
-                        write_vars.extend(names);
-                    }
-                    self.collect_vars_in_body(&for_stmt.body, read_vars, write_vars);
-                    self.collect_vars_in_body(&for_stmt.orelse, read_vars, write_vars);
-                }
-                Stmt::While(while_stmt) => {
-                    self.collect_vars_in_expr(&while_stmt.test, read_vars);
-                    self.collect_vars_in_body(&while_stmt.body, read_vars, write_vars);
-                    self.collect_vars_in_body(&while_stmt.orelse, read_vars, write_vars);
-                }
-                Stmt::With(with_stmt) => {
-                    for item in &with_stmt.items {
-                        self.collect_vars_in_expr(&item.context_expr, read_vars);
-                    }
-                    self.collect_vars_in_body(&with_stmt.body, read_vars, write_vars);
-                }
-                _ => {} // Other statements
             }
         }
     }
 
     /// Check if an expression has side effects
     fn expression_has_side_effects(&self, expr: &Expr) -> bool {
-        match expr {
-            // Literals and names are safe
-            Expr::NumberLiteral(_)
-            | Expr::StringLiteral(_)
-            | Expr::BytesLiteral(_)
-            | Expr::BooleanLiteral(_)
-            | Expr::NoneLiteral(_)
-            | Expr::EllipsisLiteral(_)
-            | Expr::Name(_) => false,
+        let mut stack = vec![expr];
 
-            // Container literals are safe if their elements are
-            Expr::List(list) => list
-                .elts
-                .iter()
-                .any(|e| self.expression_has_side_effects(e)),
-            Expr::Tuple(tuple) => tuple
-                .elts
-                .iter()
-                .any(|e| self.expression_has_side_effects(e)),
-            Expr::Set(set) => set.elts.iter().any(|e| self.expression_has_side_effects(e)),
-            Expr::Dict(dict) => dict.items.iter().any(|item| {
-                item.key
-                    .as_ref()
-                    .is_some_and(|k| self.expression_has_side_effects(k))
-                    || self.expression_has_side_effects(&item.value)
-            }),
+        while let Some(current_expr) = stack.pop() {
+            match current_expr {
+                // Literals and names are safe
+                Expr::NumberLiteral(_)
+                | Expr::StringLiteral(_)
+                | Expr::BytesLiteral(_)
+                | Expr::BooleanLiteral(_)
+                | Expr::NoneLiteral(_)
+                | Expr::EllipsisLiteral(_)
+                | Expr::Name(_) => continue,
 
-            // Function calls have side effects
-            Expr::Call(_) => true,
+                // Container literals - check their elements
+                Expr::List(list) => {
+                    stack.extend(list.elts.iter());
+                }
+                Expr::Tuple(tuple) => {
+                    stack.extend(tuple.elts.iter());
+                }
+                Expr::Set(set) => {
+                    stack.extend(set.elts.iter());
+                }
+                Expr::Dict(dict) => {
+                    for item in &dict.items {
+                        if let Some(key) = &item.key {
+                            stack.push(key);
+                        }
+                        stack.push(&item.value);
+                    }
+                }
 
-            // Attribute access might trigger __getattr__
-            Expr::Attribute(_) => true,
+                // Binary/unary ops - check their operands
+                Expr::BinOp(binop) => {
+                    stack.push(&binop.left);
+                    stack.push(&binop.right);
+                }
+                Expr::UnaryOp(unaryop) => {
+                    stack.push(&unaryop.operand);
+                }
 
-            // Subscripts might trigger __getitem__
-            Expr::Subscript(_) => true,
+                // Function calls have side effects
+                Expr::Call(_) => return true,
 
-            // Binary/unary ops are safe if operands are
-            Expr::BinOp(binop) => {
-                self.expression_has_side_effects(&binop.left)
-                    || self.expression_has_side_effects(&binop.right)
+                // Attribute access might trigger __getattr__
+                Expr::Attribute(_) => return true,
+
+                // Subscripts might trigger __getitem__
+                Expr::Subscript(_) => return true,
+
+                // Other expressions are considered to have side effects
+                _ => return true,
             }
-            Expr::UnaryOp(unaryop) => self.expression_has_side_effects(&unaryop.operand),
-
-            // Other expressions are considered to have side effects
-            _ => true,
         }
+
+        // If we got through all expressions without finding side effects
+        false
     }
 
     /// Check if an import is for side effects
