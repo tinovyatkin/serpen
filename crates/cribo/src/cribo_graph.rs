@@ -48,12 +48,16 @@ pub enum ItemType {
     /// Variable assignment
     Assignment { targets: Vec<String> },
     /// Import statement
-    Import { module: String },
+    Import {
+        module: String,
+        alias: Option<String>, // import module as alias
+    },
     /// From import statement
     FromImport {
         module: String,
         names: Vec<(String, Option<String>)>, // (name, alias)
         level: u32,                           // relative import level
+        is_star: bool,                        // from module import *
     },
     /// Module-level expression (side effect)
     Expression,
@@ -92,6 +96,19 @@ pub struct VarState {
     pub readers: Vec<ItemId>,
 }
 
+/// Information about an unused import
+#[derive(Debug, Clone)]
+pub struct UnusedImportInfo {
+    /// The item ID of the import statement
+    pub item_id: ItemId,
+    /// The imported name that is unused
+    pub name: String,
+    /// The module it was imported from
+    pub module: String,
+    /// Whether this is an explicit re-export
+    pub is_reexport: bool,
+}
+
 /// Data about a Python item (statement/definition)
 #[derive(Debug, Clone)]
 pub struct ItemData {
@@ -111,6 +128,10 @@ pub struct ItemData {
     pub has_side_effects: bool,
     /// Source span for error reporting
     pub span: Option<(usize, usize)>, // (start_line, end_line)
+    /// For imports: the local names introduced by this import
+    pub imported_names: FxHashSet<String>,
+    /// For re-exports: names that are explicitly re-exported
+    pub reexported_names: FxHashSet<String>,
 }
 
 /// Fine-grained dependency graph for a single module
@@ -150,6 +171,17 @@ impl ModuleDepGraph {
     pub fn add_item(&mut self, data: ItemData) -> ItemId {
         let id = ItemId::new(self.next_item_id);
         self.next_item_id += 1;
+
+        // Track imported names as variable declarations
+        for imported_name in &data.imported_names {
+            self.var_states
+                .entry(imported_name.clone())
+                .or_insert_with(|| VarState {
+                    declarator: Some(id),
+                    writers: Vec::new(),
+                    readers: Vec::new(),
+                });
+        }
 
         // Track variable declarations
         for var in &data.var_decls {
@@ -206,6 +238,141 @@ impl ModuleDepGraph {
 
         visited.remove(&item); // Don't include the starting item
         visited
+    }
+
+    /// Find unused imports in the module
+    pub fn find_unused_imports(&self, is_init_py: bool) -> Vec<UnusedImportInfo> {
+        let mut unused_imports = Vec::new();
+
+        // First, collect all imported names
+        let mut imported_items: Vec<(ItemId, &ItemData)> = Vec::new();
+        for (id, data) in &self.items {
+            if matches!(
+                data.item_type,
+                ItemType::Import { .. } | ItemType::FromImport { .. }
+            ) && !data.imported_names.is_empty()
+            {
+                imported_items.push((*id, data));
+            }
+        }
+
+        // For each imported name, check if it's used
+        for (import_id, import_data) in imported_items {
+            for imported_name in &import_data.imported_names {
+                if self.is_import_unused(imported_name, import_id, is_init_py, import_data) {
+                    let module_name = match &import_data.item_type {
+                        ItemType::Import { module, .. } => module.clone(),
+                        ItemType::FromImport { module, .. } => module.clone(),
+                        _ => continue,
+                    };
+
+                    unused_imports.push(UnusedImportInfo {
+                        item_id: import_id,
+                        name: imported_name.clone(),
+                        module: module_name,
+                        is_reexport: import_data.reexported_names.contains(imported_name),
+                    });
+                }
+            }
+        }
+
+        unused_imports
+    }
+
+    /// Check if a specific imported name is unused
+    fn is_import_unused(
+        &self,
+        imported_name: &str,
+        import_id: ItemId,
+        is_init_py: bool,
+        import_data: &ItemData,
+    ) -> bool {
+        // Check for special cases where imports should be preserved
+        if is_init_py {
+            // In __init__.py, preserve all imports as they might be part of the public API
+            return false;
+        }
+
+        // Check if it's a star import
+        if let ItemType::FromImport { is_star: true, .. } = &import_data.item_type {
+            // Star imports are always preserved
+            return false;
+        }
+
+        // Check if it's explicitly re-exported
+        if import_data.reexported_names.contains(imported_name) {
+            return false;
+        }
+
+        // Check if the import has side effects (includes stdlib imports)
+        if import_data.has_side_effects {
+            return false;
+        }
+
+        // Check if the name is used anywhere in the module
+        for (item_id, item_data) in &self.items {
+            // Skip the import statement itself
+            if *item_id == import_id {
+                continue;
+            }
+
+            // Check if the name is read by this item
+            if item_data.read_vars.contains(imported_name)
+                || item_data.eventual_read_vars.contains(imported_name)
+            {
+                log::trace!(
+                    "Import '{}' is used by item {:?} (read_vars: {:?}, eventual_read_vars: {:?})",
+                    imported_name,
+                    item_id,
+                    item_data.read_vars,
+                    item_data.eventual_read_vars
+                );
+                return false;
+            }
+
+            // For dotted imports like `import xml.etree.ElementTree`, also check if any of the
+            // declared variables from that import are used
+            if let Some(import_item) = self.items.get(&import_id) {
+                for var_decl in &import_item.var_decls {
+                    if item_data.read_vars.contains(var_decl)
+                        || item_data.eventual_read_vars.contains(var_decl)
+                    {
+                        log::trace!(
+                            "Import '{}' is used via declared var '{}' by item {:?}",
+                            imported_name,
+                            var_decl,
+                            item_id
+                        );
+                        return false;
+                    }
+                }
+            }
+        }
+
+        // Check if the name is in the module's __all__ export list
+        if self.is_in_module_exports(imported_name) {
+            return false;
+        }
+
+        log::trace!("Import '{}' is UNUSED", imported_name);
+        true
+    }
+
+    /// Check if a name is in the module's __all__ export list
+    fn is_in_module_exports(&self, name: &str) -> bool {
+        // Look for __all__ assignment
+        for item_data in self.items.values() {
+            if let ItemType::Assignment { targets } = &item_data.item_type {
+                if targets.contains(&"__all__".to_string()) {
+                    // This is an __all__ assignment, check if our name is exported
+                    // Note: In a real implementation, we'd parse the __all__ value
+                    // For now, we'll check if the name appears in eventual_read_vars
+                    // which would indicate it's referenced in the __all__ list
+                    return item_data.eventual_read_vars.contains(name);
+                }
+            }
+        }
+        false
     }
 
     /// Helper method to add dependencies to stack
@@ -962,9 +1129,13 @@ impl CriboGraph {
         to_id: ModuleId,
     ) -> Option<ImportType> {
         match item_type {
-            ItemType::Import { module } => {
+            ItemType::Import { module, alias } => {
                 if self.module_names.get(module) == Some(&to_id) {
-                    Some(ImportType::Direct)
+                    if alias.is_some() {
+                        Some(ImportType::AliasedImport)
+                    } else {
+                        Some(ImportType::Direct)
+                    }
                 } else {
                     None
                 }
@@ -1240,6 +1411,8 @@ mod tests {
             eventual_write_vars: FxHashSet::default(),
             has_side_effects: false,
             span: Some((1, 3)),
+            imported_names: FxHashSet::default(),
+            reexported_names: FxHashSet::default(),
         });
 
         // Add a call to the function
@@ -1252,6 +1425,8 @@ mod tests {
             eventual_write_vars: FxHashSet::default(),
             has_side_effects: true,
             span: Some((5, 5)),
+            imported_names: FxHashSet::default(),
+            reexported_names: FxHashSet::default(),
         });
 
         // Add dependency

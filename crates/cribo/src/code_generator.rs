@@ -30,7 +30,7 @@ struct InlineContext<'a> {
     inlined_stmts: &'a mut Vec<Stmt>,
 }
 
-use crate::unused_imports::AstUnusedImportTrimmer;
+use crate::cribo_graph::CriboGraph;
 
 /// Hybrid static bundler that uses sys.modules and hash-based naming
 /// This approach avoids forward reference issues while maintaining Python module semantics
@@ -52,8 +52,6 @@ pub struct HybridStaticBundler {
     entry_path: Option<String>,
     /// Module export information (for __all__ handling)
     module_exports: FxIndexMap<String, Option<Vec<String>>>,
-    /// Unused import trimmer for cleaning up bundled code
-    unused_import_trimmer: AstUnusedImportTrimmer,
 }
 
 impl Default for HybridStaticBundler {
@@ -73,7 +71,6 @@ impl HybridStaticBundler {
             bundled_modules: FxIndexSet::default(),
             entry_path: None,
             module_exports: FxIndexMap::default(),
-            unused_import_trimmer: AstUnusedImportTrimmer::new(),
         }
     }
 
@@ -238,33 +235,42 @@ impl HybridStaticBundler {
         format!("__cribo_{}_{}", short_hash, module_name_escaped)
     }
 
-    /// Trim unused imports from all modules before bundling
+    /// Trim unused imports from all modules before bundling using graph information
     fn trim_unused_imports_from_modules(
         &mut self,
         modules: Vec<(String, ModModule, PathBuf, String)>,
+        graph: &CriboGraph,
     ) -> Result<Vec<(String, ModModule, PathBuf, String)>> {
         let mut trimmed_modules = Vec::new();
 
-        for (module_name, ast, module_path, content_hash) in modules {
+        for (module_name, mut ast, module_path, content_hash) in modules {
             log::debug!("Trimming unused imports from module: {}", module_name);
 
             // Check if this is an __init__.py file
             let is_init_py =
                 module_path.file_name().and_then(|name| name.to_str()) == Some("__init__.py");
 
-            // Trim unused imports from the AST
-            let trimmed_ast = self
-                .unused_import_trimmer
-                .trim_unused_imports(ast, is_init_py)
-                .map_err(|e| {
-                    anyhow::anyhow!(
-                        "Failed to trim unused imports from module '{}': {}",
-                        module_name,
-                        e
-                    )
-                })?;
+            // Get unused imports from the graph
+            if let Some(module_dep_graph) = graph.get_module_by_name(&module_name) {
+                let unused_imports = module_dep_graph.find_unused_imports(is_init_py);
 
-            trimmed_modules.push((module_name, trimmed_ast, module_path, content_hash));
+                if !unused_imports.is_empty() {
+                    log::debug!(
+                        "Found {} unused imports in {}",
+                        unused_imports.len(),
+                        module_name
+                    );
+                    for unused in &unused_imports {
+                        log::debug!("  - {} from {}", unused.name, unused.module);
+                    }
+
+                    // Filter out unused imports from the AST
+                    ast.body
+                        .retain(|stmt| !self.should_remove_import_stmt(stmt, &unused_imports));
+                }
+            }
+
+            trimmed_modules.push((module_name, ast, module_path, content_hash));
         }
 
         log::debug!(
@@ -272,6 +278,68 @@ impl HybridStaticBundler {
             trimmed_modules.len()
         );
         Ok(trimmed_modules)
+    }
+
+    /// Check if an import statement should be removed based on unused imports
+    fn should_remove_import_stmt(
+        &self,
+        stmt: &Stmt,
+        unused_imports: &[crate::cribo_graph::UnusedImportInfo],
+    ) -> bool {
+        match stmt {
+            Stmt::Import(import_stmt) => {
+                // Check if all names in this import are unused
+                let should_remove = import_stmt.names.iter().all(|alias| {
+                    let local_name = alias
+                        .asname
+                        .as_ref()
+                        .map(|n| n.as_str())
+                        .unwrap_or(alias.name.as_str());
+
+                    unused_imports.iter().any(|unused| {
+                        log::trace!(
+                            "Checking if import '{}' matches unused '{}' from '{}'",
+                            local_name,
+                            unused.name,
+                            unused.module
+                        );
+                        unused.name == local_name
+                    })
+                });
+
+                if should_remove {
+                    log::debug!(
+                        "Removing import statement: {:?}",
+                        import_stmt
+                            .names
+                            .iter()
+                            .map(|a| a.name.as_str())
+                            .collect::<Vec<_>>()
+                    );
+                }
+                should_remove
+            }
+            Stmt::ImportFrom(import_from) => {
+                // Skip __future__ imports - they're handled separately
+                if import_from.module.as_ref().map(|m| m.as_str()) == Some("__future__") {
+                    return false;
+                }
+
+                // Check if all names in this from-import are unused
+                import_from.names.iter().all(|alias| {
+                    let local_name = alias
+                        .asname
+                        .as_ref()
+                        .map(|n| n.as_str())
+                        .unwrap_or(alias.name.as_str());
+
+                    unused_imports
+                        .iter()
+                        .any(|unused| unused.name == local_name)
+                })
+            }
+            _ => false,
+        }
     }
 
     /// Collect future imports from an AST
@@ -299,6 +367,7 @@ impl HybridStaticBundler {
         modules: Vec<(String, ModModule, PathBuf, String)>, // Added content hash
         sorted_modules: &[(String, PathBuf, Vec<String>)],  // Module data from CriboGraph
         entry_module_name: &str,
+        graph: &CriboGraph, // Add dependency graph for unused import detection
     ) -> Result<ModModule> {
         let mut final_body = Vec::new();
 
@@ -318,7 +387,7 @@ impl HybridStaticBundler {
         }
 
         // Second pass: trim unused imports from all modules
-        let modules = self.trim_unused_imports_from_modules(modules)?;
+        let modules = self.trim_unused_imports_from_modules(modules, graph)?;
 
         // Store entry path for relative path calculation
         if let Some((_, entry_path, _)) = sorted_modules.last() {
