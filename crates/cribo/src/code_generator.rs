@@ -35,7 +35,10 @@ pub struct HybridStaticBundler {
     /// Collected future imports
     future_imports: IndexSet<String>,
     /// Collected stdlib imports that are safe to hoist
-    stdlib_imports: Vec<Stmt>,
+    /// Maps module name to set of imported names for deduplication
+    stdlib_import_from_map: IndexMap<String, IndexSet<String>>,
+    /// Regular import statements (import module)
+    stdlib_import_statements: Vec<Stmt>,
     /// Track which modules have been bundled
     bundled_modules: IndexSet<String>,
     /// Entry point path for calculating relative paths
@@ -58,7 +61,8 @@ impl HybridStaticBundler {
             module_registry: IndexMap::new(),
             init_functions: IndexMap::new(),
             future_imports: IndexSet::new(),
-            stdlib_imports: Vec::new(),
+            stdlib_import_from_map: IndexMap::new(),
+            stdlib_import_statements: Vec::new(),
             bundled_modules: IndexSet::new(),
             entry_path: None,
             module_exports: IndexMap::new(),
@@ -1420,8 +1424,31 @@ impl HybridStaticBundler {
             }));
         }
 
-        // Then stdlib imports
-        for import_stmt in &self.stdlib_imports {
+        // Then stdlib from imports - deduplicated and sorted
+        for (module_name, imported_names) in &self.stdlib_import_from_map {
+            // Sort the imported names for deterministic output
+            let mut sorted_names: Vec<String> = imported_names.iter().cloned().collect();
+            sorted_names.sort();
+
+            let aliases: Vec<ruff_python_ast::Alias> = sorted_names
+                .into_iter()
+                .map(|name| ruff_python_ast::Alias {
+                    name: Identifier::new(&name, TextRange::default()),
+                    asname: None,
+                    range: TextRange::default(),
+                })
+                .collect();
+
+            final_body.push(Stmt::ImportFrom(StmtImportFrom {
+                module: Some(Identifier::new(module_name, TextRange::default())),
+                names: aliases,
+                level: 0,
+                range: TextRange::default(),
+            }));
+        }
+
+        // Finally, regular import statements
+        for import_stmt in &self.stdlib_import_statements {
             final_body.push(import_stmt.clone());
         }
     }
@@ -1442,7 +1469,7 @@ impl HybridStaticBundler {
     }
 
     /// Collect ImportFrom statements
-    fn collect_import_from(&mut self, import_from: &StmtImportFrom, stmt: &Stmt) {
+    fn collect_import_from(&mut self, import_from: &StmtImportFrom, _stmt: &Stmt) {
         let Some(ref module) = import_from.module else {
             return;
         };
@@ -1453,7 +1480,16 @@ impl HybridStaticBundler {
                 self.future_imports.insert(alias.name.to_string());
             }
         } else if self.is_safe_stdlib_module(module_name) {
-            self.stdlib_imports.push(stmt.clone());
+            // Get or create the set of imported names for this module
+            let imported_names = self
+                .stdlib_import_from_map
+                .entry(module_name.to_string())
+                .or_default();
+
+            // Add all imported names to the set (this automatically deduplicates)
+            for alias in &import_from.names {
+                imported_names.insert(alias.name.to_string());
+            }
         }
     }
 
@@ -1461,7 +1497,7 @@ impl HybridStaticBundler {
     fn collect_import(&mut self, import_stmt: &StmtImport, stmt: &Stmt) {
         for alias in &import_stmt.names {
             if self.is_safe_stdlib_module(alias.name.as_str()) {
-                self.stdlib_imports.push(stmt.clone());
+                self.stdlib_import_statements.push(stmt.clone());
                 break;
             }
         }
@@ -1627,9 +1663,15 @@ impl HybridStaticBundler {
 
     /// Check if a specific module is in our hoisted stdlib imports
     fn is_import_in_hoisted_stdlib(&self, module_name: &str) -> bool {
-        self.stdlib_imports.iter().any(|hoisted| {
-            matches!(hoisted, Stmt::ImportFrom(hoisted_import)
-                if hoisted_import.module.as_ref().map(|m| m.as_str()) == Some(module_name))
+        // Check if module is in our from imports map
+        if self.stdlib_import_from_map.contains_key(module_name) {
+            return true;
+        }
+
+        // Check if module is in our regular import statements
+        self.stdlib_import_statements.iter().any(|hoisted| {
+            matches!(hoisted, Stmt::Import(hoisted_import)
+                if hoisted_import.names.iter().any(|alias| alias.name.as_str() == module_name))
         })
     }
 
@@ -1655,7 +1697,7 @@ impl HybridStaticBundler {
                 // Check if any of the imported modules are stdlib modules we've hoisted
                 import_stmt.names.iter().any(|alias| {
                     self.is_safe_stdlib_module(alias.name.as_str())
-                        && self.stdlib_imports.iter().any(|hoisted| {
+                        && self.stdlib_import_statements.iter().any(|hoisted| {
                             matches!(hoisted, Stmt::Import(hoisted_import)
                                 if hoisted_import.names.iter().any(|h| h.name == alias.name))
                         })
