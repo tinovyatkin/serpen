@@ -18,6 +18,8 @@ use crate::util::{module_name_from_relative, normalize_line_endings};
 type ModuleQueue = Vec<(String, PathBuf)>;
 /// Type alias for processed modules set
 type ProcessedModules = IndexSet<String>;
+/// Type alias for parsed module data with AST and source
+type ParsedModuleData = (String, PathBuf, Vec<String>, ModModule, String);
 
 /// Context for import extraction operations
 struct ImportExtractionContext<'a> {
@@ -44,8 +46,8 @@ struct DiscoveryParams<'a> {
 /// Parameters for static bundle emission
 struct StaticBundleParams<'a> {
     sorted_modules: &'a [(String, PathBuf, Vec<String>)],
-    parsed_modules: Option<&'a [(String, PathBuf, Vec<String>, ModModule, String)]>, // Optional pre-parsed modules
-    _resolver: &'a ModuleResolver, // Unused but kept for future use
+    parsed_modules: Option<&'a [ParsedModuleData]>, // Optional pre-parsed modules
+    _resolver: &'a ModuleResolver,                  // Unused but kept for future use
     entry_module_name: &'a str,
     graph: &'a CriboGraph,
 }
@@ -104,10 +106,7 @@ impl BundleOrchestrator {
         entry_path: &Path,
         graph: &mut CriboGraph,
         resolver_opt: &mut Option<ModuleResolver>,
-    ) -> Result<(
-        String,
-        Vec<(String, PathBuf, Vec<String>, ModModule, String)>,
-    )> {
+    ) -> Result<(String, Vec<ParsedModuleData>)> {
         debug!("Entry: {:?}", entry_path);
         debug!(
             "Using target Python version: {} (Python 3.{})",
@@ -489,7 +488,7 @@ impl BundleOrchestrator {
     fn build_dependency_graph(
         &mut self,
         params: &mut GraphBuildParams<'_>,
-    ) -> Result<Vec<(String, PathBuf, Vec<String>, ModModule, String)>> {
+    ) -> Result<Vec<ParsedModuleData>> {
         let mut processed_modules = ProcessedModules::new();
         let mut queued_modules = IndexSet::new();
         let mut modules_to_process = ModuleQueue::new();
@@ -501,7 +500,6 @@ impl BundleOrchestrator {
 
         // Store module data for phase 2
         type DiscoveryData = (String, PathBuf, Vec<String>); // (name, path, imports) for discovery phase
-        type ParsedModuleData = (String, PathBuf, Vec<String>, ModModule, String); // Full data with AST and source
         let mut discovered_modules: Vec<DiscoveryData> = Vec::new();
 
         // PHASE 1: Discover and collect all modules

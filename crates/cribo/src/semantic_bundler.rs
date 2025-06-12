@@ -578,7 +578,6 @@ impl SemanticBundler {
 pub struct GlobalUsageVisitor<'a> {
     info: &'a mut ModuleGlobalInfo,
     current_function: Option<String>,
-    in_global_statement: bool,
 }
 
 impl<'a> GlobalUsageVisitor<'a> {
@@ -586,7 +585,6 @@ impl<'a> GlobalUsageVisitor<'a> {
         Self {
             info,
             current_function: None,
-            in_global_statement: false,
         }
     }
 
@@ -637,11 +635,6 @@ impl<'a> GlobalUsageVisitor<'a> {
                             .push(global_stmt.range());
                     }
                 }
-
-                // Visit the statement itself to track usage
-                self.in_global_statement = true;
-                // Statement processed
-                self.in_global_statement = false;
             }
             Stmt::ClassDef(class) => {
                 // Visit methods within the class
