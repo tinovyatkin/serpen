@@ -2916,68 +2916,13 @@ impl HybridStaticBundler {
                     in_function_with_globals,
                 );
             }
-            Expr::FString(fstring) => {
-                // We need to check if any expressions in the f-string need transformation
-                let mut transformed_elements = Vec::new();
-                let mut any_transformed = false;
-
-                for element in fstring.value.elements() {
-                    match element {
-                        FStringElement::Literal(lit_elem) => {
-                            // Literal elements stay the same
-                            transformed_elements.push(FStringElement::Literal(lit_elem.clone()));
-                        }
-                        FStringElement::Expression(expr_elem) => {
-                            // Clone and transform the expression
-                            let mut new_expr = (*expr_elem.expression).clone();
-                            let old_expr_str = format!("{:?}", new_expr);
-
-                            self.transform_expr_for_lifted_globals(
-                                &mut new_expr,
-                                lifted_names,
-                                global_info,
-                                in_function_with_globals,
-                            );
-
-                            let new_expr_str = format!("{:?}", new_expr);
-                            if old_expr_str != new_expr_str {
-                                any_transformed = true;
-                            }
-
-                            // Create a new expression element with the transformed expression
-                            transformed_elements.push(FStringElement::Expression(
-                                FStringExpressionElement {
-                                    expression: Box::new(new_expr),
-                                    debug_text: expr_elem.debug_text.clone(),
-                                    conversion: expr_elem.conversion,
-                                    format_spec: expr_elem.format_spec.clone(),
-                                    range: expr_elem.range,
-                                },
-                            ));
-                        }
-                    }
-                }
-
-                // If any expressions were transformed, we need to rebuild the f-string
-                if any_transformed {
-                    // Create a new FString with our transformed elements
-                    let new_fstring = FString {
-                        elements: FStringElements::from(transformed_elements),
-                        range: TextRange::default(),
-                        flags: FStringFlags::empty(),
-                    };
-
-                    // Create a new FStringValue containing our FString
-                    let new_value = FStringValue::single(new_fstring);
-
-                    // Replace the entire expression with the new f-string
-                    *expr = Expr::FString(ExprFString {
-                        value: new_value,
-                        range: fstring.range,
-                    });
-
-                    log::debug!("Transformed f-string expressions for lifted globals");
-                }
+            Expr::FString(_) => {
+                self.transform_fstring_for_lifted_globals(
+                    expr,
+                    lifted_names,
+                    global_info,
+                    in_function_with_globals,
+                );
             }
             Expr::BinOp(binop) => {
                 self.transform_expr_for_lifted_globals(
@@ -4284,6 +4229,97 @@ impl HybridStaticBundler {
 
         // Replace function body with new body
         func_def.body = new_body;
+    }
+
+    /// Transform f-string expressions for lifted globals
+    fn transform_fstring_for_lifted_globals(
+        &self,
+        expr: &mut Expr,
+        lifted_names: &FxIndexMap<String, String>,
+        global_info: &ModuleGlobalInfo,
+        in_function_with_globals: Option<&FxIndexSet<String>>,
+    ) {
+        if let Expr::FString(fstring) = expr {
+            let fstring_range = fstring.range;
+            let mut transformed_elements = Vec::new();
+            let mut any_transformed = false;
+
+            for element in fstring.value.elements() {
+                match element {
+                    FStringElement::Literal(lit_elem) => {
+                        // Literal elements stay the same
+                        transformed_elements.push(FStringElement::Literal(lit_elem.clone()));
+                    }
+                    FStringElement::Expression(expr_elem) => {
+                        let (new_element, was_transformed) = self.transform_fstring_expression(
+                            expr_elem,
+                            lifted_names,
+                            global_info,
+                            in_function_with_globals,
+                        );
+                        transformed_elements.push(FStringElement::Expression(new_element));
+                        if was_transformed {
+                            any_transformed = true;
+                        }
+                    }
+                }
+            }
+
+            // If any expressions were transformed, we need to rebuild the f-string
+            if any_transformed {
+                // Create a new FString with our transformed elements
+                let new_fstring = FString {
+                    elements: FStringElements::from(transformed_elements),
+                    range: TextRange::default(),
+                    flags: FStringFlags::empty(),
+                };
+
+                // Create a new FStringValue containing our FString
+                let new_value = FStringValue::single(new_fstring);
+
+                // Replace the entire expression with the new f-string
+                *expr = Expr::FString(ExprFString {
+                    value: new_value,
+                    range: fstring_range,
+                });
+
+                log::debug!("Transformed f-string expressions for lifted globals");
+            }
+        }
+    }
+
+    /// Transform a single f-string expression element
+    fn transform_fstring_expression(
+        &self,
+        expr_elem: &FStringExpressionElement,
+        lifted_names: &FxIndexMap<String, String>,
+        global_info: &ModuleGlobalInfo,
+        in_function_with_globals: Option<&FxIndexSet<String>>,
+    ) -> (FStringExpressionElement, bool) {
+        // Clone and transform the expression
+        let mut new_expr = (*expr_elem.expression).clone();
+        let old_expr_str = format!("{:?}", new_expr);
+
+        self.transform_expr_for_lifted_globals(
+            &mut new_expr,
+            lifted_names,
+            global_info,
+            in_function_with_globals,
+        );
+
+        let new_expr_str = format!("{:?}", new_expr);
+        let was_transformed = old_expr_str != new_expr_str;
+
+        // Create a new expression element with the transformed expression
+        let new_element = FStringExpressionElement {
+            expression: Box::new(new_expr),
+            debug_text: expr_elem.debug_text.clone(),
+            conversion: expr_elem.conversion,
+            format_spec: expr_elem.format_spec.clone(),
+            range: expr_elem.range,
+        };
+
+        (new_element, was_transformed)
     }
 
     /// Check if a symbol should be inlined based on export rules
