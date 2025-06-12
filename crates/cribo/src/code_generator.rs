@@ -41,6 +41,57 @@ struct InlineContext<'a> {
     import_aliases: FxIndexMap<String, String>,
 }
 
+/// Context for semantic analysis operations
+struct SemanticContext<'a> {
+    graph: &'a DependencyGraph,
+    symbol_registry: &'a SymbolRegistry,
+    semantic_bundler: &'a SemanticBundler,
+}
+
+/// Parameters for namespace import operations
+struct NamespaceImportParams<'a> {
+    local_name: &'a str,
+    imported_name: &'a str,
+    resolved_module: &'a str,
+    full_module_path: &'a str,
+}
+
+/// Parameters for processing module globals
+struct ProcessGlobalsParams<'a> {
+    module_name: &'a str,
+    ast: &'a ModModule,
+    semantic_ctx: &'a SemanticContext<'a>,
+}
+
+/// Parameters for handling inlined module imports
+struct InlinedImportParams<'a> {
+    import_from: &'a StmtImportFrom,
+    resolved_module: &'a str,
+    ctx: &'a ModuleTransformContext<'a>,
+}
+
+/// Parameters for adding symbols to namespace
+struct AddSymbolsParams<'a> {
+    local_name: &'a str,
+    imported_name: &'a str,
+    inlined_module_key: &'a str,
+}
+
+/// Parameters for handling symbol imports from inlined modules
+struct SymbolImportParams<'a> {
+    imported_name: &'a str,
+    local_name: &'a str,
+    resolved_module: &'a str,
+    ctx: &'a ModuleTransformContext<'a>,
+}
+
+/// Parameters for transforming function body for lifted globals
+struct TransformFunctionParams<'a> {
+    lifted_names: &'a FxIndexMap<String, String>,
+    global_info: &'a ModuleGlobalInfo,
+    function_globals: &'a FxIndexSet<String>,
+}
+
 /// Parameters for bundle_modules function
 pub struct BundleParams<'a> {
     pub modules: Vec<(String, ModModule, PathBuf, String)>, // (name, ast, path, content_hash)
@@ -830,15 +881,16 @@ impl HybridStaticBundler {
         let symbol_registry = params.semantic_bundler.symbol_registry();
         let mut symbol_renames = FxIndexMap::default();
 
+        // Create semantic context
+        let semantic_ctx = SemanticContext {
+            graph: params.graph,
+            symbol_registry,
+            semantic_bundler: params.semantic_bundler,
+        };
+
         // Convert ModuleId-based renames to module name-based renames
         for (module_name, _, _, _) in &modules_normalized {
-            self.collect_module_renames(
-                module_name,
-                params.graph,
-                symbol_registry,
-                params.semantic_bundler,
-                &mut symbol_renames,
-            );
+            self.collect_module_renames(module_name, &semantic_ctx, &mut symbol_renames);
         }
 
         // Collect global symbols from the entry module first (for compatibility)
@@ -897,11 +949,13 @@ impl HybridStaticBundler {
             let mut all_lifted_declarations = Vec::new();
 
             for (module_name, ast, _, _) in &wrapper_modules_saved {
-                self.process_wrapper_module_globals(
+                let params = ProcessGlobalsParams {
                     module_name,
                     ast,
-                    params.graph,
-                    params.semantic_bundler,
+                    semantic_ctx: &semantic_ctx,
+                };
+                self.process_wrapper_module_globals(
+                    &params,
                     &mut module_globals,
                     &mut all_lifted_declarations,
                 );
@@ -2822,13 +2876,12 @@ impl HybridStaticBundler {
                         self.create_global_init_statements(&function_globals, lifted_names);
 
                     // Transform the function body
-                    self.transform_function_body_for_lifted_globals(
-                        func_def,
+                    let params = TransformFunctionParams {
                         lifted_names,
                         global_info,
-                        &function_globals,
-                        init_stmts,
-                    );
+                        function_globals: &function_globals,
+                    };
+                    self.transform_function_body_for_lifted_globals(func_def, &params, init_stmts);
                 }
             }
             Stmt::Assign(assign) => {
@@ -3097,9 +3150,7 @@ impl HybridStaticBundler {
     fn collect_module_renames(
         &self,
         module_name: &str,
-        graph: &DependencyGraph,
-        symbol_registry: &SymbolRegistry,
-        semantic_bundler: &SemanticBundler,
+        semantic_ctx: &SemanticContext,
         symbol_renames: &mut FxIndexMap<String, FxIndexMap<String, String>>,
     ) {
         log::info!(
@@ -3108,7 +3159,7 @@ impl HybridStaticBundler {
         );
 
         // Find the module ID for this module name
-        let module_id = match graph.get_module_by_name(module_name) {
+        let module_id = match semantic_ctx.graph.get_module_by_name(module_name) {
             Some(module) => module.module_id,
             None => {
                 log::warn!("Module '{}' not found in graph", module_name);
@@ -3122,7 +3173,7 @@ impl HybridStaticBundler {
         let mut module_renames = FxIndexMap::default();
 
         // Use ModuleSemanticInfo to get ALL exported symbols from the module
-        if let Some(module_info) = semantic_bundler.get_module_info(&module_id) {
+        if let Some(module_info) = semantic_ctx.semantic_bundler.get_module_info(&module_id) {
             log::info!(
                 "Module '{}' exports {} symbols: {:?}",
                 module_name,
@@ -3132,8 +3183,9 @@ impl HybridStaticBundler {
 
             // Process all exported symbols from the module
             for symbol in &module_info.exported_symbols {
-                if let Some(new_name) = symbol_registry.get_rename(&module_id, symbol) {
-                    module_renames.insert(symbol.clone(), new_name.to_string());
+                if let Some(new_name) = semantic_ctx.symbol_registry.get_rename(&module_id, symbol)
+                {
+                    module_renames.insert(symbol.to_string(), new_name.to_string());
                     log::debug!(
                         "Module '{}': symbol '{}' renamed to '{}'",
                         module_name,
@@ -3142,7 +3194,7 @@ impl HybridStaticBundler {
                     );
                 } else {
                     // Include non-renamed symbols too - they still need to be in the namespace
-                    module_renames.insert(symbol.clone(), symbol.clone());
+                    module_renames.insert(symbol.to_string(), symbol.to_string());
                     log::debug!(
                         "Module '{}': symbol '{}' has no rename, using original name",
                         module_name,
@@ -3175,21 +3227,26 @@ impl HybridStaticBundler {
     /// Process wrapper module for global analysis and lifting
     fn process_wrapper_module_globals(
         &self,
-        module_name: &str,
-        ast: &ModModule,
-        graph: &DependencyGraph,
-        semantic_bundler: &SemanticBundler,
+        params: &ProcessGlobalsParams,
         module_globals: &mut FxIndexMap<String, ModuleGlobalInfo>,
         all_lifted_declarations: &mut Vec<Stmt>,
     ) {
         // Get module ID from graph
-        let module = match graph.get_module_by_name(module_name) {
+        let module = match params
+            .semantic_ctx
+            .graph
+            .get_module_by_name(params.module_name)
+        {
             Some(m) => m,
             None => return,
         };
 
         let module_id = module.module_id;
-        let global_info = semantic_bundler.analyze_module_globals(module_id, ast, module_name);
+        let global_info = params.semantic_ctx.semantic_bundler.analyze_module_globals(
+            module_id,
+            params.ast,
+            params.module_name,
+        );
 
         // Create GlobalsLifter and collect declarations
         if !global_info.global_declarations.is_empty() {
@@ -3197,7 +3254,7 @@ impl HybridStaticBundler {
             all_lifted_declarations.extend(globals_lifter.get_lifted_declarations());
         }
 
-        module_globals.insert(module_name.to_string(), global_info);
+        module_globals.insert(params.module_name.to_string(), global_info);
     }
 }
 
@@ -3535,39 +3592,44 @@ impl HybridStaticBundler {
     /// Handle imports from inlined modules in wrapper functions
     fn handle_inlined_module_import(
         &self,
-        import_from: &StmtImportFrom,
-        resolved_module: &str,
-        ctx: &ModuleTransformContext,
+        params: &InlinedImportParams,
         symbol_renames: &FxIndexMap<String, FxIndexMap<String, String>>,
         body: &mut Vec<Stmt>,
     ) -> bool {
         // Check if this module is inlined
-        let is_inlined = if self.inlined_modules.contains(resolved_module) {
+        let is_inlined = if self.inlined_modules.contains(params.resolved_module) {
             true
         } else {
             // Try removing the first component if it exists
-            if let Some(dot_pos) = resolved_module.find('.') {
-                let without_prefix = &resolved_module[dot_pos + 1..];
+            if let Some(dot_pos) = params.resolved_module.find('.') {
+                let without_prefix = &params.resolved_module[dot_pos + 1..];
                 self.inlined_modules.contains(without_prefix)
             } else {
                 false
             }
         };
 
-        log::debug!("Is {} in inlined_modules? {}", resolved_module, is_inlined);
+        log::debug!(
+            "Is {} in inlined_modules? {}",
+            params.resolved_module,
+            is_inlined
+        );
         if !is_inlined {
             return false;
         }
 
         // Handle each imported name from the inlined module
-        for alias in &import_from.names {
+        for alias in &params.import_from.names {
             let imported_name = alias.name.as_str();
             let local_name = alias.asname.as_ref().unwrap_or(&alias.name).as_str();
 
             // Check if we're importing a module itself (not a symbol from it)
-            let full_module_path = format!("{}.{}", resolved_module, imported_name);
-            let importing_module =
-                self.check_if_importing_module(resolved_module, imported_name, &full_module_path);
+            let full_module_path = format!("{}.{}", params.resolved_module, imported_name);
+            let importing_module = self.check_if_importing_module(
+                params.resolved_module,
+                imported_name,
+                &full_module_path,
+            );
 
             log::debug!(
                 "Checking if '{}' is a module import: full_path='{}', importing_module={}",
@@ -3577,26 +3639,24 @@ impl HybridStaticBundler {
             );
 
             if importing_module {
-                self.create_namespace_for_inlined_module(
+                let namespace_params = NamespaceImportParams {
                     local_name,
                     imported_name,
-                    resolved_module,
-                    &full_module_path,
-                    symbol_renames,
-                    body,
-                );
+                    resolved_module: params.resolved_module,
+                    full_module_path: &full_module_path,
+                };
+                self.create_namespace_for_inlined_module(&namespace_params, symbol_renames, body);
                 continue;
             }
 
             // Handle regular symbol import from inlined module
-            self.handle_symbol_import_from_inlined_module(
+            let symbol_params = SymbolImportParams {
                 imported_name,
                 local_name,
-                resolved_module,
-                symbol_renames,
-                ctx,
-                body,
-            );
+                resolved_module: params.resolved_module,
+                ctx: params.ctx,
+            };
+            self.handle_symbol_import_from_inlined_module(&symbol_params, symbol_renames, body);
         }
 
         true
@@ -3628,33 +3688,30 @@ impl HybridStaticBundler {
     /// Create a namespace object for an inlined module
     fn create_namespace_for_inlined_module(
         &self,
-        local_name: &str,
-        imported_name: &str,
-        resolved_module: &str,
-        full_module_path: &str,
+        params: &NamespaceImportParams,
         symbol_renames: &FxIndexMap<String, FxIndexMap<String, String>>,
         body: &mut Vec<Stmt>,
     ) {
         log::debug!(
             "Creating namespace object for module '{}' imported from '{}' - module was inlined",
-            imported_name,
-            resolved_module
+            params.imported_name,
+            params.resolved_module
         );
 
         // Find the actual module path that was inlined
-        let inlined_module_key = if self.inlined_modules.contains(full_module_path) {
-            full_module_path.to_string()
-        } else if let Some(dot_pos) = resolved_module.find('.') {
-            let without_prefix = &resolved_module[dot_pos + 1..];
-            format!("{}.{}", without_prefix, imported_name)
+        let inlined_module_key = if self.inlined_modules.contains(params.full_module_path) {
+            params.full_module_path.to_string()
+        } else if let Some(dot_pos) = params.resolved_module.find('.') {
+            let without_prefix = &params.resolved_module[dot_pos + 1..];
+            format!("{}.{}", without_prefix, params.imported_name)
         } else {
-            full_module_path.to_string()
+            params.full_module_path.to_string()
         };
 
         // Create a SimpleNamespace-like object
         body.push(Stmt::Assign(StmtAssign {
             targets: vec![Expr::Name(ExprName {
-                id: local_name.into(),
+                id: params.local_name.into(),
                 ctx: ExprContext::Store,
                 range: TextRange::default(),
             })],
@@ -3680,29 +3737,26 @@ impl HybridStaticBundler {
         }));
 
         // Add symbols to the namespace
-        self.add_symbols_to_namespace(
-            local_name,
-            imported_name,
-            &inlined_module_key,
-            symbol_renames,
-            body,
-        );
+        let add_params = AddSymbolsParams {
+            local_name: params.local_name,
+            imported_name: params.imported_name,
+            inlined_module_key: &inlined_module_key,
+        };
+        self.add_symbols_to_namespace(&add_params, symbol_renames, body);
     }
 
     /// Add symbols from an inlined module to a namespace object
     fn add_symbols_to_namespace(
         &self,
-        local_name: &str,
-        imported_name: &str,
-        inlined_module_key: &str,
+        params: &AddSymbolsParams,
         symbol_renames: &FxIndexMap<String, FxIndexMap<String, String>>,
         body: &mut Vec<Stmt>,
     ) {
         log::debug!(
             "add_symbols_to_namespace: local_name='{}', imported_name='{}', inlined_module_key='{}'",
-            local_name,
-            imported_name,
-            inlined_module_key
+            params.local_name,
+            params.imported_name,
+            params.inlined_module_key
         );
         log::debug!(
             "Available keys in symbol_renames: {:?}",
@@ -3710,10 +3764,10 @@ impl HybridStaticBundler {
         );
 
         // Get the renames from the symbol registry
-        if let Some(module_renames) = symbol_renames.get(inlined_module_key).or_else(|| {
+        if let Some(module_renames) = symbol_renames.get(params.inlined_module_key).or_else(|| {
             // Try without prefix
-            if let Some(dot_pos) = inlined_module_key.find('.') {
-                let without_prefix = &inlined_module_key[dot_pos + 1..];
+            if let Some(dot_pos) = params.inlined_module_key.find('.') {
+                let without_prefix = &params.inlined_module_key[dot_pos + 1..];
                 log::debug!("Trying without prefix: '{}'", without_prefix);
                 symbol_renames.get(without_prefix)
             } else {
@@ -3722,13 +3776,13 @@ impl HybridStaticBundler {
         }) {
             // Add each symbol from the module to the namespace
             for (original_name, renamed_name) in module_renames {
-                self.add_symbol_to_namespace(local_name, original_name, renamed_name, body);
+                self.add_symbol_to_namespace(params.local_name, original_name, renamed_name, body);
             }
         } else {
             log::warn!(
                 "No renames found for module '{}' when creating namespace '{}'",
-                inlined_module_key,
-                local_name
+                params.inlined_module_key,
+                params.local_name
             );
         }
     }
@@ -3764,46 +3818,43 @@ impl HybridStaticBundler {
     /// Handle symbol import from an inlined module
     fn handle_symbol_import_from_inlined_module(
         &self,
-        imported_name: &str,
-        local_name: &str,
-        resolved_module: &str,
+        params: &SymbolImportParams,
         symbol_renames: &FxIndexMap<String, FxIndexMap<String, String>>,
-        ctx: &ModuleTransformContext,
         body: &mut Vec<Stmt>,
     ) {
         // Look up the renamed symbol in symbol_renames
-        let module_key = if symbol_renames.contains_key(resolved_module) {
-            resolved_module.to_string()
-        } else if let Some(dot_pos) = resolved_module.find('.') {
-            let without_prefix = &resolved_module[dot_pos + 1..];
+        let module_key = if symbol_renames.contains_key(params.resolved_module) {
+            params.resolved_module.to_string()
+        } else if let Some(dot_pos) = params.resolved_module.find('.') {
+            let without_prefix = &params.resolved_module[dot_pos + 1..];
             if symbol_renames.contains_key(without_prefix) {
                 without_prefix.to_string()
             } else {
-                resolved_module.to_string()
+                params.resolved_module.to_string()
             }
         } else {
-            resolved_module.to_string()
+            params.resolved_module.to_string()
         };
 
         // Get the renamed symbol name
         let renamed_symbol = symbol_renames
             .get(&module_key)
-            .and_then(|renames| renames.get(imported_name))
+            .and_then(|renames| renames.get(params.imported_name))
             .cloned()
             .unwrap_or_else(|| {
                 log::warn!(
                     "Symbol '{}' from module '{}' not found in renames, using original name",
-                    imported_name,
+                    params.imported_name,
                     module_key
                 );
-                imported_name.to_string()
+                params.imported_name.to_string()
             });
 
         // Only create assignment if local name differs from the symbol
-        if local_name != renamed_symbol {
+        if params.local_name != renamed_symbol {
             body.push(Stmt::Assign(StmtAssign {
                 targets: vec![Expr::Name(ExprName {
-                    id: local_name.into(),
+                    id: params.local_name.into(),
                     ctx: ExprContext::Store,
                     range: TextRange::default(),
                 })],
@@ -3817,15 +3868,15 @@ impl HybridStaticBundler {
         }
 
         // Always set as module attribute
-        body.push(self.create_module_attr_assignment("module", local_name));
+        body.push(self.create_module_attr_assignment("module", params.local_name));
 
         log::debug!(
             "Import '{}' as '{}' from inlined module '{}' resolved to '{}' in wrapper '{}'",
-            imported_name,
-            local_name,
-            resolved_module,
+            params.imported_name,
+            params.local_name,
+            params.resolved_module,
             renamed_symbol,
-            ctx.module_name
+            params.ctx.module_name
         );
     }
 
@@ -4779,13 +4830,13 @@ impl HybridStaticBundler {
                 resolved_module
             );
             if let Some(ref resolved) = resolved_module {
-                handled_inlined_import = self.handle_inlined_module_import(
+                let params = InlinedImportParams {
                     import_from,
-                    resolved,
+                    resolved_module: resolved,
                     ctx,
-                    symbol_renames,
-                    body,
-                );
+                };
+                handled_inlined_import =
+                    self.handle_inlined_module_import(&params, symbol_renames, body);
             }
         }
 
@@ -4859,9 +4910,7 @@ impl HybridStaticBundler {
     fn transform_function_body_for_lifted_globals(
         &self,
         func_def: &mut StmtFunctionDef,
-        lifted_names: &FxIndexMap<String, String>,
-        global_info: &ModuleGlobalInfo,
-        function_globals: &FxIndexSet<String>,
+        params: &TransformFunctionParams,
         init_stmts: Vec<Stmt>,
     ) {
         let mut new_body = Vec::new();
@@ -4872,7 +4921,7 @@ impl HybridStaticBundler {
                 Stmt::Global(global_stmt) => {
                     // Rewrite global statement to use lifted names
                     for name in &mut global_stmt.names {
-                        if let Some(lifted_name) = lifted_names.get(name.as_str()) {
+                        if let Some(lifted_name) = params.lifted_names.get(name.as_str()) {
                             *name = Identifier::new(lifted_name, TextRange::default());
                         }
                     }
@@ -4888,9 +4937,9 @@ impl HybridStaticBundler {
                     // Transform other statements recursively with function context
                     self.transform_stmt_for_lifted_globals(
                         body_stmt,
-                        lifted_names,
-                        global_info,
-                        Some(function_globals),
+                        params.lifted_names,
+                        params.global_info,
+                        Some(params.function_globals),
                     );
                     new_body.push(body_stmt.clone());
                 }
