@@ -41,6 +41,7 @@ path = "src/main.rs"
 [dev-dependencies]
 criterion = { workspace = true }
 insta = { workspace = true }
+pretty_assertions = { workspace = true }
 ruff_linter = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
