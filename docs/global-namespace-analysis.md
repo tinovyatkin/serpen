@@ -295,6 +295,151 @@ Use semantic analysis to eliminate globals entirely:
            raise AttributeError(name)
    ```
 
+## LLM Readability Analysis
+
+### Use Case: Bundled Code for LLM Consumption
+
+One of the key use cases for cribo is producing bundled Python code that is easier for LLM agents to understand and analyze. This is critical because:
+
+1. **Context Window Efficiency**: LLMs have limited context windows, so having all code in one file maximizes understanding
+2. **Reduced Navigation**: LLMs don't need to follow import chains across multiple files
+3. **Self-Contained Analysis**: All dependencies and logic are visible in a single pass
+
+### Evaluation of Solutions for LLM Readability
+
+#### Solution 1: Global Proxy Pattern
+
+```python
+def __cribo_init_module():
+    __module_globals__ = {'result': "base_result"}
+    
+    def initialize():
+        __module_globals__['result'] = f"initialized_{value}"
+        return __module_globals__['result']
+```
+
+**LLM Readability Score: 6/10**
+
+- ❌ Dictionary access obscures variable flow
+- ❌ Requires understanding the proxy pattern
+- ❌ Harder to trace data mutations
+- ✅ Consistent pattern throughout
+- ✅ Clear separation of module state
+
+#### Solution 2: Module Globals Lifting (BEST FOR LLMs)
+
+```python
+# Clear module-level state at the top
+__cribo_base_result = "base_result"
+__cribo_base_counter = 0
+
+def __cribo_init_module():
+    def initialize():
+        global __cribo_base_result
+        __cribo_base_result = f"initialized_{__cribo_base_counter}"
+        return __cribo_base_result
+```
+
+**LLM Readability Score: 9/10**
+
+- ✅ Standard Python global semantics - no new patterns to understand
+- ✅ Variable state clearly visible at module level
+- ✅ Direct variable access - easy to trace
+- ✅ Familiar Python idioms throughout
+- ✅ Static analysis friendly
+- ⚠️ Unique prefixes prevent confusion but add slight noise
+
+#### Solution 3: Semantic-Aware Rewriting
+
+```python
+class ModuleState:
+    def __init__(self):
+        self.result = "base_result"
+
+def __cribo_init_module():
+    state = ModuleState()
+    
+    def initialize(state=state):
+        state.result = f"initialized_{value}"
+        return state.result
+```
+
+**LLM Readability Score: 7/10**
+
+- ✅ Explicit state management
+- ✅ Object-oriented patterns are familiar
+- ❌ Function signatures become complex
+- ❌ Requires understanding closure patterns
+- ❌ More boilerplate code
+
+### Why Module Globals Lifting is Best for LLM Consumption
+
+1. **Minimal Cognitive Load**
+   - LLMs trained on vast Python corpora understand `global` statements natively
+   - No need to understand bundler-specific patterns or transformations
+   - Direct variable access without indirection
+
+2. **Clear Data Flow**
+   ```python
+   # LLM can easily trace:
+   __cribo_module_counter = 0  # Initial state
+
+   def increment():
+       global __cribo_module_counter
+       __cribo_module_counter += 1  # Direct mutation
+       return __cribo_module_counter
+   ```
+
+3. **Static Analysis Compatibility**
+   - LLMs can leverage their training on Python static analysis
+   - Variable usage is explicit and traceable
+   - No dynamic dictionary lookups to reason about
+
+4. **Debugging and Reasoning**
+   - Clear stack traces with actual variable names
+   - State inspection is straightforward
+   - Modifications are explicit with `global` declarations
+
+5. **Context Efficiency**
+   - All module state visible at the top of the file
+   - No need to trace through dictionary initializations
+   - Reduces cognitive jumps when understanding code
+
+### Implementation Recommendation for LLM Use Case
+
+For the specific use case of generating LLM-readable bundled code, we should:
+
+1. **Use Solution 2 (Module Globals Lifting)** as the primary approach
+2. **Apply consistent naming conventions**:
+   ```python
+   # Pattern: __cribo_<module_name>_<variable_name>
+   __cribo_auth_user_count = 0
+   __cribo_auth_session_data = {}
+   ```
+3. **Add clear module boundaries**:
+   ```python
+   # ========== Module: auth.manager ==========
+   __cribo_auth_manager_state = "initialized"
+
+   def __cribo_init_auth_manager():
+       # Module code here
+   ```
+
+4. **Include docstring annotations**:
+   ```python
+   def process():
+       """Process data using module state.
+       
+       Module globals used:
+       - __cribo_auth_result (read/write)
+       - __cribo_auth_counter (read)
+       """
+       global __cribo_auth_result
+       # ...
+   ```
+
+This approach maximizes LLM comprehension while maintaining correct Python semantics.
+
 ## Implementation Roadmap
 
 1. **Immediate (Fix current test)**
@@ -302,7 +447,8 @@ Use semantic analysis to eliminate globals entirely:
    - Document limitations
 
 2. **Short-term (Full solution)**
-   - Implement Solution 1 (Global Proxy Pattern)
+   - Implement Solution 2 (Module Globals Lifting) for LLM use case
+   - Add configuration option to choose transformation strategy
    - Comprehensive test suite
    - Performance benchmarks
 
@@ -310,7 +456,8 @@ Use semantic analysis to eliminate globals entirely:
    - Semantic-based optimization
    - Dead global elimination
    - Cross-module global analysis
+   - LLM-specific output formatting options
 
 ## Conclusion
 
-The global namespace problem in module bundling is solvable with proper architectural changes. The recommended Global Proxy Pattern provides the best balance of correctness, performance, and implementation complexity. Both ruff AST and semantic crates provide sufficient capabilities to implement this solution, though some extensions to semantic analysis would improve the robustness of the implementation.
+The global namespace problem in module bundling is solvable with proper architectural changes. While the Global Proxy Pattern provides good encapsulation, **Module Globals Lifting is the optimal solution for LLM readability**, offering the best balance of comprehension, standard Python semantics, and minimal cognitive overhead. Both ruff AST and semantic crates provide sufficient capabilities to implement any of these solutions, with the choice depending on the primary use case of the bundled output.
