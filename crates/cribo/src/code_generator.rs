@@ -788,6 +788,7 @@ impl HybridStaticBundler {
                 module_name,
                 params.graph,
                 symbol_registry,
+                params.semantic_bundler,
                 &mut symbol_renames,
             );
         }
@@ -3030,9 +3031,10 @@ impl HybridStaticBundler {
         module_name: &str,
         graph: &DependencyGraph,
         symbol_registry: &SymbolRegistry,
+        semantic_bundler: &SemanticBundler,
         symbol_renames: &mut FxIndexMap<String, FxIndexMap<String, String>>,
     ) {
-        log::debug!(
+        log::info!(
             "collect_module_renames: Processing module '{}'",
             module_name
         );
@@ -3051,33 +3053,45 @@ impl HybridStaticBundler {
         // Get all renames for this module from semantic analysis
         let mut module_renames = FxIndexMap::default();
 
-        // Check each symbol in the registry to see if it has a rename for this module
-        for (symbol, modules) in symbol_registry.symbols.iter() {
-            if !modules.contains(&module_id) {
-                continue;
-            }
+        // Use ModuleSemanticInfo to get ALL exported symbols from the module
+        if let Some(module_info) = semantic_bundler.get_module_info(&module_id) {
+            log::info!(
+                "Module '{}' exports {} symbols: {:?}",
+                module_name,
+                module_info.exported_symbols.len(),
+                module_info.exported_symbols.iter().collect::<Vec<_>>()
+            );
 
-            if let Some(new_name) = symbol_registry.get_rename(&module_id, symbol) {
-                module_renames.insert(symbol.clone(), new_name.to_string());
-                log::debug!(
-                    "Module '{}': symbol '{}' renamed to '{}'",
-                    module_name,
-                    symbol,
-                    new_name
-                );
-            } else {
-                // Include non-renamed symbols too - they still need to be in the namespace
-                module_renames.insert(symbol.clone(), symbol.clone());
-                log::debug!(
-                    "Module '{}': symbol '{}' has no rename, using original name",
-                    module_name,
-                    symbol
-                );
+            // Process all exported symbols from the module
+            for symbol in &module_info.exported_symbols {
+                if let Some(new_name) = symbol_registry.get_rename(&module_id, symbol) {
+                    module_renames.insert(symbol.clone(), new_name.to_string());
+                    log::debug!(
+                        "Module '{}': symbol '{}' renamed to '{}'",
+                        module_name,
+                        symbol,
+                        new_name
+                    );
+                } else {
+                    // Include non-renamed symbols too - they still need to be in the namespace
+                    module_renames.insert(symbol.clone(), symbol.clone());
+                    log::debug!(
+                        "Module '{}': symbol '{}' has no rename, using original name",
+                        module_name,
+                        symbol
+                    );
+                }
             }
+        } else {
+            log::warn!(
+                "No semantic info found for module '{}' with ID {:?}",
+                module_name,
+                module_id
+            );
         }
 
         if !module_renames.is_empty() {
-            log::debug!(
+            log::info!(
                 "Inserting {} renames for module '{}' with key '{}': {:?}",
                 module_renames.len(),
                 module_name,
@@ -3086,7 +3100,7 @@ impl HybridStaticBundler {
             );
             symbol_renames.insert(module_name.to_string(), module_renames);
         } else {
-            log::debug!("No renames to insert for module '{}'", module_name);
+            log::info!("No renames to insert for module '{}'", module_name);
         }
     }
 
@@ -3838,12 +3852,18 @@ impl HybridStaticBundler {
         let mut directly_imported = FxIndexSet::default();
 
         // Check all modules for direct imports
-        for (_module_name, ast, _, _) in modules {
+        for (module_name, ast, _, _) in modules {
+            log::debug!("Checking module '{}' for direct imports", module_name);
             for stmt in &ast.body {
                 self.collect_direct_imports(stmt, modules, &mut directly_imported);
             }
         }
 
+        log::info!(
+            "Found {} directly imported modules: {:?}",
+            directly_imported.len(),
+            directly_imported
+        );
         directly_imported
     }
 
@@ -3854,17 +3874,52 @@ impl HybridStaticBundler {
         modules: &[(String, ModModule, PathBuf, String)],
         directly_imported: &mut FxIndexSet<String>,
     ) {
-        if let Stmt::Import(import_stmt) = stmt {
-            for alias in &import_stmt.names {
-                let imported_module = alias.name.as_str();
-                // Check if this is a bundled module
-                if modules
-                    .iter()
-                    .any(|(name, _, _, _)| name == imported_module)
-                {
-                    directly_imported.insert(imported_module.to_string());
+        match stmt {
+            Stmt::Import(import_stmt) => {
+                for alias in &import_stmt.names {
+                    let imported_module = alias.name.as_str();
+                    // Check if this is a bundled module
+                    if modules
+                        .iter()
+                        .any(|(name, _, _, _)| name == imported_module)
+                    {
+                        directly_imported.insert(imported_module.to_string());
+                    }
                 }
             }
+            Stmt::ImportFrom(import_from) => {
+                if let Some(module) = &import_from.module {
+                    let module_name = module.as_str();
+                    // Check if any imported name is actually a submodule
+                    for alias in &import_from.names {
+                        let imported_name = alias.name.as_str();
+                        let full_module_path = format!("{}.{}", module_name, imported_name);
+
+                        log::debug!(
+                            "Checking if '{}' (from {} import {}) is a bundled module",
+                            full_module_path,
+                            module_name,
+                            imported_name
+                        );
+
+                        // Check if this full path matches a bundled module
+                        if modules
+                            .iter()
+                            .any(|(name, _, _, _)| name == &full_module_path)
+                        {
+                            // This is importing a submodule directly
+                            log::info!(
+                                "Found direct submodule import: from {} import {} -> {}",
+                                module_name,
+                                imported_name,
+                                full_module_path
+                            );
+                            directly_imported.insert(full_module_path);
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
