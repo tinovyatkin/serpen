@@ -28,7 +28,8 @@ impl ModuleId {
     }
 
     /// Returns the underlying u32 value of the ModuleId
-    pub fn as_u32(&self) -> u32 {
+    #[inline]
+    pub const fn as_u32(&self) -> u32 {
         self.0
     }
 }
