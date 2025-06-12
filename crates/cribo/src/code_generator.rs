@@ -1,18 +1,22 @@
 use anyhow::Result;
+#[allow(unused_imports)] // CowUtils trait is used for the replace method
+use cow_utils::CowUtils;
 use indexmap::{IndexMap, IndexSet};
 use log::debug;
 use ruff_python_ast::{
     CmpOp, Comprehension, ExceptHandler, Expr, ExprAttribute, ExprCall, ExprCompare, ExprContext,
-    ExprIf, ExprList, ExprName, ExprNoneLiteral, ExprStringLiteral, Identifier, ModModule, Stmt,
-    StmtAssign, StmtFunctionDef, StmtIf, StmtImport, StmtImportFrom, StringLiteral,
-    StringLiteralFlags, StringLiteralValue,
+    ExprFString, ExprIf, ExprList, ExprName, ExprNoneLiteral, ExprStringLiteral, FString,
+    FStringElement, FStringElements, FStringExpressionElement, FStringFlags, FStringValue,
+    Identifier, ModModule, Stmt, StmtAssign, StmtClassDef, StmtFunctionDef, StmtIf, StmtImport,
+    StmtImportFrom, StringLiteral, StringLiteralFlags, StringLiteralValue,
 };
 use ruff_text_size::TextRange;
 use rustc_hash::FxHasher;
 use std::hash::BuildHasherDefault;
 use std::path::{Path, PathBuf};
 
-use crate::semantic_bundler::{ModuleGlobalInfo, SemanticBundler};
+use crate::cribo_graph::CriboGraph as DependencyGraph;
+use crate::semantic_bundler::{ModuleGlobalInfo, SemanticBundler, SymbolRegistry};
 
 /// Type alias for IndexMap with FxHasher for better performance
 type FxIndexMap<K, V> = IndexMap<K, V, BuildHasherDefault<FxHasher>>;
@@ -42,11 +46,9 @@ pub struct BundleParams<'a> {
     pub modules: Vec<(String, ModModule, PathBuf, String)>, // (name, ast, path, content_hash)
     pub sorted_modules: &'a [(String, PathBuf, Vec<String>)], // Module data from CriboGraph
     pub entry_module_name: &'a str,
-    pub graph: &'a CriboGraph, // Dependency graph for unused import detection
+    pub graph: &'a DependencyGraph, // Dependency graph for unused import detection
     pub semantic_bundler: &'a SemanticBundler, // Semantic analysis results
 }
-
-use crate::cribo_graph::CriboGraph;
 
 /// Transformer that lifts module-level globals to true global scope
 struct GlobalsLifter {
@@ -140,8 +142,8 @@ fn transform_globals_in_stmt(stmt: &mut Stmt) {
                 transform_globals_in_stmt(stmt);
             }
             for clause in &mut if_stmt.elif_else_clauses {
-                if let Some(ref mut test) = clause.test {
-                    transform_globals_in_expr(test);
+                if let Some(ref mut test_expr) = clause.test {
+                    transform_globals_in_expr(test_expr);
                 }
                 for stmt in &mut clause.body {
                     transform_globals_in_stmt(stmt);
@@ -176,11 +178,9 @@ impl GlobalsLifter {
         for var_name in &global_info.module_level_vars {
             // Only lift variables that are actually used with global statements
             if global_info.global_declarations.contains_key(var_name) {
-                let lifted_name = format!(
-                    "__cribo_{}_{}",
-                    global_info.module_name.replace(['.', '-'], "_"),
-                    var_name
-                );
+                let module_name_sanitized = global_info.module_name.cow_replace(".", "_");
+                let module_name_sanitized = module_name_sanitized.cow_replace("-", "_");
+                let lifted_name = format!("__cribo_{}_{}", module_name_sanitized, var_name);
 
                 debug!(
                     "Creating lifted declaration for {} -> {}",
@@ -522,7 +522,7 @@ impl HybridStaticBundler {
     fn trim_unused_imports_from_modules(
         &mut self,
         modules: Vec<(String, ModModule, PathBuf, String)>,
-        graph: &CriboGraph,
+        graph: &DependencyGraph,
     ) -> Result<Vec<(String, ModModule, PathBuf, String)>> {
         let mut trimmed_modules = Vec::new();
 
@@ -784,34 +784,12 @@ impl HybridStaticBundler {
 
         // Convert ModuleId-based renames to module name-based renames
         for (module_name, _, _, _) in &modules_normalized {
-            // Find the module ID for this module name
-            if let Some(module_id) = params
-                .graph
-                .get_module_by_name(module_name)
-                .map(|m| m.module_id)
-            {
-                // Get all renames for this module from semantic analysis
-                let mut module_renames = FxIndexMap::default();
-
-                // Check each symbol in the registry to see if it has a rename for this module
-                for (symbol, modules) in symbol_registry.symbols.iter() {
-                    if modules.contains(&module_id) {
-                        if let Some(new_name) = symbol_registry.get_rename(&module_id, symbol) {
-                            module_renames.insert(symbol.clone(), new_name.to_string());
-                            log::debug!(
-                                "Module '{}': symbol '{}' renamed to '{}'",
-                                module_name,
-                                symbol,
-                                new_name
-                            );
-                        }
-                    }
-                }
-
-                if !module_renames.is_empty() {
-                    symbol_renames.insert(module_name.clone(), module_renames);
-                }
-            }
+            self.collect_module_renames(
+                module_name,
+                params.graph,
+                symbol_registry,
+                &mut symbol_renames,
+            );
         }
 
         // Collect global symbols from the entry module first (for compatibility)
@@ -823,7 +801,7 @@ impl HybridStaticBundler {
 
         // Inline the inlinable modules FIRST to populate symbol_renames
         // This ensures we know what symbols have been renamed before processing wrapper modules
-        for (module_name, ast, _module_path, _content_hash) in inlinable_modules {
+        for (module_name, ast, _module_path, _content_hash) in &inlinable_modules {
             log::debug!("Inlining module '{}'", module_name);
             let mut inlined_stmts = Vec::new();
             let mut inline_ctx = InlineContext {
@@ -833,7 +811,7 @@ impl HybridStaticBundler {
                 inlined_stmts: &mut inlined_stmts,
                 import_aliases: FxIndexMap::default(),
             };
-            self.inline_module(&module_name, ast, &mut inline_ctx)?;
+            self.inline_module(module_name, ast.clone(), &mut inline_ctx)?;
             log::debug!(
                 "Inlined {} statements from module '{}'",
                 inlined_stmts.len(),
@@ -850,22 +828,14 @@ impl HybridStaticBundler {
             let mut all_lifted_declarations = Vec::new();
 
             for (module_name, ast, _, _) in &wrapper_modules_saved {
-                // Get module ID from graph
-                if let Some(module) = params.graph.get_module_by_name(module_name) {
-                    let module_id = module.module_id;
-                    let global_info =
-                        params
-                            .semantic_bundler
-                            .analyze_module_globals(module_id, ast, module_name);
-
-                    // Create GlobalsLifter and collect declarations
-                    if !global_info.global_declarations.is_empty() {
-                        let globals_lifter = GlobalsLifter::new(&global_info);
-                        all_lifted_declarations.extend(globals_lifter.get_lifted_declarations());
-                    }
-
-                    module_globals.insert(module_name.clone(), global_info);
-                }
+                self.process_wrapper_module_globals(
+                    module_name,
+                    ast,
+                    params.graph,
+                    params.semantic_bundler,
+                    &mut module_globals,
+                    &mut all_lifted_declarations,
+                );
             }
 
             // Store all lifted declarations
@@ -885,17 +855,17 @@ impl HybridStaticBundler {
             }
 
             // Second pass: transform modules with global info
-            for (module_name, ast, module_path, _content_hash) in wrapper_modules_saved {
-                let synthetic_name = self.module_registry[&module_name].clone();
-                let global_info = module_globals.get(&module_name).cloned();
+            for (module_name, ast, module_path, _content_hash) in &wrapper_modules_saved {
+                let synthetic_name = self.module_registry[module_name].clone();
+                let global_info = module_globals.get(module_name).cloned();
                 let ctx = ModuleTransformContext {
-                    module_name: &module_name,
+                    module_name,
                     synthetic_name: &synthetic_name,
-                    module_path: &module_path,
+                    module_path,
                     global_info,
                 };
                 let init_function =
-                    self.transform_module_to_init_function(ctx, ast, &symbol_renames)?;
+                    self.transform_module_to_init_function(ctx, ast.clone(), &symbol_renames)?;
                 final_body.push(init_function);
             }
 
@@ -921,17 +891,14 @@ impl HybridStaticBundler {
         }
 
         // Finally, add entry module code (it's always last in topological order)
-        for (module_name, ast, _, _) in modules_normalized {
+        for (module_name, ast, _, _) in &modules_normalized {
             if module_name != params.entry_module_name {
                 continue;
             }
 
             // Entry module - add its code directly at the end
             // The entry module needs special handling for symbol conflicts
-            let entry_module_renames = symbol_renames
-                .get(&module_name)
-                .cloned()
-                .unwrap_or_default();
+            let entry_module_renames = symbol_renames.get(module_name).cloned().unwrap_or_default();
 
             log::debug!(
                 "Entry module '{}' renames: {:?}",
@@ -939,7 +906,7 @@ impl HybridStaticBundler {
                 entry_module_renames
             );
 
-            for mut stmt in ast.body {
+            for mut stmt in ast.body.clone() {
                 if self.is_hoisted_import(&stmt) {
                     continue;
                 }
@@ -950,122 +917,162 @@ impl HybridStaticBundler {
                         // Handle imports with renaming
                         let rewritten_stmts = self.rewrite_import_in_stmt_multiple_with_context(
                             stmt,
-                            &module_name,
+                            module_name,
                             &symbol_renames,
                         );
                         final_body.extend(rewritten_stmts);
                     }
                     _ => {
-                        // For non-import statements in the entry module, apply symbol renames
-                        let handled = false;
-                        let mut pending_reassignment: Option<(String, String)> = None;
-                        if !entry_module_renames.is_empty() {
-                            // We need special handling for different statement types
-                            match &mut stmt {
-                                Stmt::FunctionDef(func_def) => {
-                                    // Check if this function name needs renaming
-                                    let func_name = func_def.name.to_string();
-                                    let needs_reassignment = if let Some(new_name) =
-                                        entry_module_renames.get(&func_name)
-                                    {
-                                        log::debug!(
-                                            "Renaming function '{}' to '{}' in entry module",
-                                            func_name,
-                                            new_name
-                                        );
-                                        func_def.name =
-                                            Identifier::new(new_name, TextRange::default());
-                                        true
-                                    } else {
-                                        false
-                                    };
-                                    // For function bodies, we need special handling:
-                                    // - Global statements must be renamed to match module-level renames
-                                    // - But other references should NOT be renamed (Python resolves at runtime)
-                                    self.rewrite_global_statements_in_function(
-                                        func_def,
-                                        &entry_module_renames,
-                                    );
-
-                                    // Mark that we need to add a reassignment after this statement
-                                    if needs_reassignment {
-                                        pending_reassignment = Some((
-                                            func_name.clone(),
-                                            entry_module_renames[&func_name].clone(),
-                                        ));
-                                    }
-                                }
-                                Stmt::ClassDef(class_def) => {
-                                    // Check if this class name needs renaming
-                                    let class_name = class_def.name.to_string();
-                                    let needs_reassignment = if let Some(new_name) =
-                                        entry_module_renames.get(&class_name)
-                                    {
-                                        log::debug!(
-                                            "Renaming class '{}' to '{}' in entry module",
-                                            class_name,
-                                            new_name
-                                        );
-                                        class_def.name =
-                                            Identifier::new(new_name, TextRange::default());
-                                        true
-                                    } else {
-                                        false
-                                    };
-                                    // Apply renames to class body - classes don't create new scopes for globals
-                                    self.rewrite_aliases_in_stmt(&mut stmt, &entry_module_renames);
-
-                                    // Mark that we need to add a reassignment after this statement
-                                    if needs_reassignment {
-                                        pending_reassignment = Some((
-                                            class_name.clone(),
-                                            entry_module_renames[&class_name].clone(),
-                                        ));
-                                    }
-                                }
-                                _ => {
-                                    // For other statements, use the existing rewrite method
-                                    self.rewrite_aliases_in_stmt(&mut stmt, &entry_module_renames);
-
-                                    // Check if this is an assignment that was renamed
-                                    if let Stmt::Assign(assign) = &stmt {
-                                        if assign.targets.len() == 1 {
-                                            if let Expr::Name(name_expr) = &assign.targets[0] {
-                                                let assigned_name = name_expr.id.as_str();
-                                                // Check if this is a renamed variable (e.g., Logger_1)
-                                                for (original, renamed) in &entry_module_renames {
-                                                    if assigned_name == renamed {
-                                                        // This is a renamed assignment, mark for reassignment
-                                                        pending_reassignment = Some((
-                                                            original.clone(),
-                                                            renamed.clone(),
-                                                        ));
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if !handled {
-                            final_body.push(stmt);
-                            // Add reassignment if needed
-                            if let Some((original, renamed)) = pending_reassignment {
-                                let reassign = self.create_reassignment(&original, &renamed);
-                                final_body.push(reassign);
-                            }
-                        }
+                        self.process_entry_module_statement(
+                            &mut stmt,
+                            &entry_module_renames,
+                            &mut final_body,
+                        );
                     }
                 }
             }
         }
 
         Ok(ModModule {
-            body: final_body,
             range: TextRange::default(),
+            body: final_body,
         })
+    }
+
+    /// Process a statement in the entry module, handling renames and reassignments
+    fn process_entry_module_statement(
+        &mut self,
+        stmt: &mut Stmt,
+        entry_module_renames: &FxIndexMap<String, String>,
+        final_body: &mut Vec<Stmt>,
+    ) {
+        // For non-import statements in the entry module, apply symbol renames
+        let mut pending_reassignment: Option<(String, String)> = None;
+
+        if !entry_module_renames.is_empty() {
+            // We need special handling for different statement types
+            match stmt {
+                Stmt::FunctionDef(func_def) => {
+                    pending_reassignment =
+                        self.process_entry_module_function(func_def, entry_module_renames);
+                }
+                Stmt::ClassDef(class_def) => {
+                    pending_reassignment =
+                        self.process_entry_module_class(class_def, entry_module_renames);
+                }
+                _ => {
+                    // For other statements, use the existing rewrite method
+                    self.rewrite_aliases_in_stmt(stmt, entry_module_renames);
+
+                    // Check if this is an assignment that was renamed
+                    if let Stmt::Assign(assign) = &stmt {
+                        pending_reassignment =
+                            self.check_renamed_assignment(assign, entry_module_renames);
+                    }
+                }
+            }
+        }
+
+        final_body.push(stmt.clone());
+
+        // Add reassignment if needed
+        if let Some((original, renamed)) = pending_reassignment {
+            let reassign = self.create_reassignment(&original, &renamed);
+            final_body.push(reassign);
+        }
+    }
+
+    /// Process a function definition in the entry module
+    fn process_entry_module_function(
+        &self,
+        func_def: &mut StmtFunctionDef,
+        entry_module_renames: &FxIndexMap<String, String>,
+    ) -> Option<(String, String)> {
+        let func_name = func_def.name.to_string();
+        let needs_reassignment = if let Some(new_name) = entry_module_renames.get(&func_name) {
+            log::debug!(
+                "Renaming function '{}' to '{}' in entry module",
+                func_name,
+                new_name
+            );
+            func_def.name = Identifier::new(new_name, TextRange::default());
+            true
+        } else {
+            false
+        };
+
+        // For function bodies, we need special handling:
+        // - Global statements must be renamed to match module-level renames
+        // - But other references should NOT be renamed (Python resolves at runtime)
+        self.rewrite_global_statements_in_function(func_def, entry_module_renames);
+
+        if needs_reassignment {
+            Some((func_name.clone(), entry_module_renames[&func_name].clone()))
+        } else {
+            None
+        }
+    }
+
+    /// Process a class definition in the entry module
+    fn process_entry_module_class(
+        &self,
+        class_def: &mut StmtClassDef,
+        entry_module_renames: &FxIndexMap<String, String>,
+    ) -> Option<(String, String)> {
+        let class_name = class_def.name.to_string();
+        let needs_reassignment = if let Some(new_name) = entry_module_renames.get(&class_name) {
+            log::debug!(
+                "Renaming class '{}' to '{}' in entry module",
+                class_name,
+                new_name
+            );
+            class_def.name = Identifier::new(new_name, TextRange::default());
+            true
+        } else {
+            false
+        };
+
+        // Apply renames to class body - classes don't create new scopes for globals
+        // We need to create a temporary Stmt to pass to rewrite_aliases_in_stmt
+        let mut temp_stmt = Stmt::ClassDef(class_def.clone());
+        self.rewrite_aliases_in_stmt(&mut temp_stmt, entry_module_renames);
+        if let Stmt::ClassDef(updated_class) = temp_stmt {
+            *class_def = updated_class;
+        }
+
+        if needs_reassignment {
+            Some((
+                class_name.clone(),
+                entry_module_renames[&class_name].clone(),
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Check if an assignment statement has been renamed
+    fn check_renamed_assignment(
+        &self,
+        assign: &StmtAssign,
+        entry_module_renames: &FxIndexMap<String, String>,
+    ) -> Option<(String, String)> {
+        if assign.targets.len() != 1 {
+            return None;
+        }
+
+        let Expr::Name(name_expr) = &assign.targets[0] else {
+            return None;
+        };
+
+        let assigned_name = name_expr.id.as_str();
+        // Check if this is a renamed variable (e.g., Logger_1)
+        for (original, renamed) in entry_module_renames {
+            if assigned_name == renamed {
+                // This is a renamed assignment, mark for reassignment
+                return Some((original.clone(), renamed.clone()));
+            }
+        }
+        None
     }
 
     /// Transform a module into an initialization function
@@ -3152,9 +3159,9 @@ impl HybridStaticBundler {
                     );
                 }
                 for clause in &mut if_stmt.elif_else_clauses {
-                    if let Some(test) = &mut clause.test {
+                    if let Some(test_expr) = &mut clause.test {
                         self.transform_expr_for_lifted_globals(
-                            test,
+                            test_expr,
                             lifted_names,
                             global_info,
                             current_function_globals,
@@ -3267,11 +3274,68 @@ impl HybridStaticBundler {
                     in_function_with_globals,
                 );
             }
-            Expr::FString(_fstring) => {
-                // Transform f-string values
-                // Note: FString handling is complex due to immutable structure
-                // For now, we'll skip f-string transformation as it requires rebuilding the entire structure
-                // TODO: Implement proper f-string transformation
+            Expr::FString(fstring) => {
+                // We need to check if any expressions in the f-string need transformation
+                let mut transformed_elements = Vec::new();
+                let mut any_transformed = false;
+
+                for element in fstring.value.elements() {
+                    match element {
+                        FStringElement::Literal(lit_elem) => {
+                            // Literal elements stay the same
+                            transformed_elements.push(FStringElement::Literal(lit_elem.clone()));
+                        }
+                        FStringElement::Expression(expr_elem) => {
+                            // Clone and transform the expression
+                            let mut new_expr = (*expr_elem.expression).clone();
+                            let old_expr_str = format!("{:?}", new_expr);
+
+                            self.transform_expr_for_lifted_globals(
+                                &mut new_expr,
+                                lifted_names,
+                                global_info,
+                                in_function_with_globals,
+                            );
+
+                            let new_expr_str = format!("{:?}", new_expr);
+                            if old_expr_str != new_expr_str {
+                                any_transformed = true;
+                            }
+
+                            // Create a new expression element with the transformed expression
+                            transformed_elements.push(FStringElement::Expression(
+                                FStringExpressionElement {
+                                    expression: Box::new(new_expr),
+                                    debug_text: expr_elem.debug_text.clone(),
+                                    conversion: expr_elem.conversion,
+                                    format_spec: expr_elem.format_spec.clone(),
+                                    range: expr_elem.range,
+                                },
+                            ));
+                        }
+                    }
+                }
+
+                // If any expressions were transformed, we need to rebuild the f-string
+                if any_transformed {
+                    // Create a new FString with our transformed elements
+                    let new_fstring = FString {
+                        elements: FStringElements::from(transformed_elements),
+                        range: TextRange::default(),
+                        flags: FStringFlags::empty(),
+                    };
+
+                    // Create a new FStringValue containing our FString
+                    let new_value = FStringValue::single(new_fstring);
+
+                    // Replace the entire expression with the new f-string
+                    *expr = Expr::FString(ExprFString {
+                        value: new_value,
+                        range: fstring.range,
+                    });
+
+                    log::debug!("Transformed f-string expressions for lifted globals");
+                }
             }
             Expr::BinOp(binop) => {
                 self.transform_expr_for_lifted_globals(
@@ -3367,6 +3431,75 @@ impl HybridStaticBundler {
                 // Other expressions handled as needed
             }
         }
+    }
+}
+
+impl HybridStaticBundler {
+    /// Collect module renames from semantic analysis
+    fn collect_module_renames(
+        &self,
+        module_name: &str,
+        graph: &DependencyGraph,
+        symbol_registry: &SymbolRegistry,
+        symbol_renames: &mut FxIndexMap<String, FxIndexMap<String, String>>,
+    ) {
+        // Find the module ID for this module name
+        let module_id = match graph.get_module_by_name(module_name) {
+            Some(module) => module.module_id,
+            None => return,
+        };
+
+        // Get all renames for this module from semantic analysis
+        let mut module_renames = FxIndexMap::default();
+
+        // Check each symbol in the registry to see if it has a rename for this module
+        for (symbol, modules) in symbol_registry.symbols.iter() {
+            if !modules.contains(&module_id) {
+                continue;
+            }
+
+            if let Some(new_name) = symbol_registry.get_rename(&module_id, symbol) {
+                module_renames.insert(symbol.clone(), new_name.to_string());
+                log::debug!(
+                    "Module '{}': symbol '{}' renamed to '{}'",
+                    module_name,
+                    symbol,
+                    new_name
+                );
+            }
+        }
+
+        if !module_renames.is_empty() {
+            symbol_renames.insert(module_name.to_string(), module_renames);
+        }
+    }
+
+    /// Process wrapper module for global analysis and lifting
+    fn process_wrapper_module_globals(
+        &self,
+        module_name: &str,
+        ast: &ModModule,
+        graph: &DependencyGraph,
+        semantic_bundler: &SemanticBundler,
+        module_globals: &mut FxIndexMap<String, ModuleGlobalInfo>,
+        all_lifted_declarations: &mut Vec<Stmt>,
+    ) {
+        // Get module ID from graph
+        let module = match graph.get_module_by_name(module_name) {
+            Some(m) => m,
+            None => return,
+        };
+
+        let module_id = module.module_id;
+        let global_info = semantic_bundler.analyze_module_globals(module_id, ast, module_name);
+
+        // Create GlobalsLifter and collect declarations
+        if !global_info.global_declarations.is_empty() {
+            let globals_lifter = GlobalsLifter::new(&global_info);
+            all_lifted_declarations.extend(globals_lifter.get_lifted_declarations());
+        }
+
+        module_globals.insert(module_name.to_string(), global_info);
     }
 }
 

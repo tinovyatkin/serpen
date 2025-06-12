@@ -409,7 +409,7 @@ def __cribo_init___cribo_49b92c_services_auth_manager():
             processed = f"auth_str_{data}" if validated else f"invalid_auth_{data}"
         else:
             processed = f"auth_other_{data}"
-        __cribo_services_auth_manager_result = f"{result}_processed"
+        __cribo_services_auth_manager_result = f'{__cribo_services_auth_manager_result}_processed'
         return f"auth_processed: {processed}, base: {base_init}"
     module.process = process
 
