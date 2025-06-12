@@ -2311,15 +2311,7 @@ impl HybridStaticBundler {
                 for stmt in &mut try_stmt.body {
                     self.rewrite_global_statements_only(stmt, alias_to_canonical);
                 }
-                for handler in &mut try_stmt.handlers {
-                    match handler {
-                        ExceptHandler::ExceptHandler(except_handler) => {
-                            for stmt in &mut except_handler.body {
-                                self.rewrite_global_statements_only(stmt, alias_to_canonical);
-                            }
-                        }
-                    }
-                }
+                self.process_exception_handlers(&mut try_stmt.handlers, alias_to_canonical);
                 for stmt in &mut try_stmt.orelse {
                     self.rewrite_global_statements_only(stmt, alias_to_canonical);
                 }
@@ -2333,6 +2325,23 @@ impl HybridStaticBundler {
             }
             // For other statements, do nothing - we don't want to rewrite name references
             _ => {}
+        }
+    }
+
+    /// Process exception handlers to rewrite global statements
+    fn process_exception_handlers(
+        &self,
+        handlers: &mut [ExceptHandler],
+        alias_to_canonical: &FxIndexMap<String, String>,
+    ) {
+        for handler in handlers {
+            match handler {
+                ExceptHandler::ExceptHandler(except_handler) => {
+                    for stmt in &mut except_handler.body {
+                        self.rewrite_global_statements_only(stmt, alias_to_canonical);
+                    }
+                }
+            }
         }
     }
 
