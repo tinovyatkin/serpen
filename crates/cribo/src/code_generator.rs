@@ -4335,51 +4335,50 @@ impl HybridStaticBundler {
                 }
                 Stmt::Assign(assign) => {
                     // Handle module-level assignments
-                    if assign.targets.len() == 1 {
-                        if let Expr::Name(name_expr) = &assign.targets[0] {
-                            let var_name = name_expr.id.to_string();
-                            if !self.should_inline_symbol(
-                                &var_name,
-                                module_name,
-                                ctx.module_exports_map,
-                            ) {
-                                continue;
-                            }
-
-                            // Check for self-referential assignment and existing rename
-                            let is_self_ref = matches!(&*assign.value, Expr::Name(value_name) if value_name.id.as_str() == var_name);
-                            if is_self_ref {
-                                if let Some(existing_renamed) = module_renames.get(&var_name) {
-                                    // Create assignment with the renamed symbol
-                                    // e.g., validate_models_base = validate_models_base
-                                    log::debug!(
-                                        "Handling self-referential assignment '{}' in namespace module '{}' -> '{}' = '{}'",
-                                        var_name,
-                                        module_name,
-                                        existing_renamed,
-                                        existing_renamed
-                                    );
-                                    // Skip this - it's redundant after renaming
-                                    continue;
-                                }
-                            }
-
-                            // Generate module-qualified name
-                            let module_suffix = module_name.cow_replace('.', "_").into_owned();
-                            let base_name = format!("{}_{}", var_name, module_suffix);
-                            let renamed = self.get_unique_name(&base_name, ctx.global_symbols);
-
-                            log::debug!(
-                                "Collecting rename for variable '{}' from namespace module '{}' as '{}'",
-                                var_name,
-                                module_name,
-                                renamed
-                            );
-
-                            ctx.global_symbols.insert(renamed.clone());
-                            module_renames.insert(var_name.clone(), renamed);
-                        }
+                    if assign.targets.len() != 1 {
+                        continue;
                     }
+
+                    let Expr::Name(name_expr) = &assign.targets[0] else {
+                        continue;
+                    };
+
+                    let var_name = name_expr.id.to_string();
+                    if !self.should_inline_symbol(&var_name, module_name, ctx.module_exports_map) {
+                        continue;
+                    }
+
+                    // Check for self-referential assignment and existing rename
+                    let is_self_ref = matches!(&*assign.value, Expr::Name(value_name) if value_name.id.as_str() == var_name);
+                    if is_self_ref && module_renames.contains_key(&var_name) {
+                        let existing_renamed = module_renames.get(&var_name).expect(
+                            "module_renames should contain var_name after contains_key check",
+                        );
+                        log::debug!(
+                            "Handling self-referential assignment '{}' in namespace module '{}' -> '{}' = '{}'",
+                            var_name,
+                            module_name,
+                            existing_renamed,
+                            existing_renamed
+                        );
+                        // Skip this - it's redundant after renaming
+                        continue;
+                    }
+
+                    // Generate module-qualified name
+                    let module_suffix = module_name.cow_replace('.', "_").into_owned();
+                    let base_name = format!("{}_{}", var_name, module_suffix);
+                    let renamed = self.get_unique_name(&base_name, ctx.global_symbols);
+
+                    log::debug!(
+                        "Collecting rename for variable '{}' from namespace module '{}' as '{}'",
+                        var_name,
+                        module_name,
+                        renamed
+                    );
+
+                    ctx.global_symbols.insert(renamed.clone());
+                    module_renames.insert(var_name.clone(), renamed);
                 }
                 _ => {}
             }
@@ -4439,56 +4438,51 @@ impl HybridStaticBundler {
                     }
                 }
                 Stmt::Assign(assign) => {
-                    if assign.targets.len() == 1 {
-                        if let Expr::Name(name_expr) = &assign.targets[0] {
-                            let var_name = name_expr.id.to_string();
-
-                            if !self.should_inline_symbol(
-                                &var_name,
-                                module_name,
-                                ctx.module_exports_map,
-                            ) {
-                                continue;
-                            }
-
-                            // Skip if not in renames or is self-referential
-                            if !module_renames.contains_key(&var_name) {
-                                continue;
-                            }
-
-                            let is_self_ref = matches!(&*assign.value, Expr::Name(value_name) if value_name.id.as_str() == var_name);
-                            if is_self_ref {
-                                continue;
-                            }
-
-                            if let Some(renamed) = module_renames.get(&var_name) {
-                                log::debug!(
-                                    "Inlining variable '{}' from namespace module '{}' as '{}'",
-                                    var_name,
-                                    module_name,
-                                    renamed
-                                );
-
-                                let mut renamed_assign = assign.clone();
-                                renamed_assign.targets = vec![Expr::Name(ExprName {
-                                    id: renamed.clone().into(),
-                                    ctx: ExprContext::Store,
-                                    range: TextRange::default(),
-                                })];
-
-                                // Transform the value expression to use renamed symbols and resolve imports
-                                let mut value = (*assign.value).clone();
-                                self.resolve_import_aliases_in_expr(
-                                    &mut value,
-                                    &ctx.import_aliases,
-                                );
-                                Self::rename_references_in_expr(&mut value, &module_renames);
-                                renamed_assign.value = Box::new(value);
-
-                                ctx.inlined_stmts.push(Stmt::Assign(renamed_assign));
-                            }
-                        }
+                    if assign.targets.len() != 1 {
+                        continue;
                     }
+
+                    let Expr::Name(name_expr) = &assign.targets[0] else {
+                        continue;
+                    };
+
+                    let var_name = name_expr.id.to_string();
+                    if !self.should_inline_symbol(&var_name, module_name, ctx.module_exports_map) {
+                        continue;
+                    }
+
+                    // Skip if not in renames
+                    let Some(renamed) = module_renames.get(&var_name) else {
+                        continue;
+                    };
+
+                    // Skip self-referential assignments
+                    let is_self_ref = matches!(&*assign.value, Expr::Name(value_name) if value_name.id.as_str() == var_name);
+                    if is_self_ref {
+                        continue;
+                    }
+
+                    log::debug!(
+                        "Inlining variable '{}' from namespace module '{}' as '{}'",
+                        var_name,
+                        module_name,
+                        renamed
+                    );
+
+                    let mut renamed_assign = assign.clone();
+                    renamed_assign.targets = vec![Expr::Name(ExprName {
+                        id: renamed.clone().into(),
+                        ctx: ExprContext::Store,
+                        range: TextRange::default(),
+                    })];
+
+                    // Transform the value expression to use renamed symbols and resolve imports
+                    let mut value = (*assign.value).clone();
+                    self.resolve_import_aliases_in_expr(&mut value, &ctx.import_aliases);
+                    Self::rename_references_in_expr(&mut value, &module_renames);
+                    renamed_assign.value = Box::new(value);
+
+                    ctx.inlined_stmts.push(Stmt::Assign(renamed_assign));
                 }
                 _ => {
                     log::debug!(
