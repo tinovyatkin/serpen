@@ -4039,16 +4039,7 @@ impl HybridStaticBundler {
 
                     // Check if this full path matches a bundled module
                     let is_namespace_import = modules.iter().any(|(name, _, _, _)| {
-                        // Check exact match
-                        if name == &full_module_path {
-                            return true;
-                        }
-                        // Also check if the module name ends with the expected pattern
-                        // This handles cases where module names have prefixes like "tests.fixtures.bundling..."
-                        if name.ends_with(&full_module_path) {
-                            return true;
-                        }
-                        false
+                        name == &full_module_path || name.ends_with(&full_module_path)
                     });
 
                     if is_namespace_import {
@@ -4355,24 +4346,21 @@ impl HybridStaticBundler {
                                 continue;
                             }
 
-                            // Check if this is a self-referential assignment (e.g., validate = validate)
-                            if let Expr::Name(value_name) = &*assign.value {
-                                if value_name.id.as_str() == var_name {
-                                    // This is a self-referential assignment
-                                    // Check if we already have a renamed version of this symbol
-                                    if let Some(existing_renamed) = module_renames.get(&var_name) {
-                                        // Create assignment with the renamed symbol
-                                        // e.g., validate_models_base = validate_models_base
-                                        log::debug!(
-                                            "Handling self-referential assignment '{}' in namespace module '{}' -> '{}' = '{}'",
-                                            var_name,
-                                            module_name,
-                                            existing_renamed,
-                                            existing_renamed
-                                        );
-                                        // Skip this - it's redundant after renaming
-                                        continue;
-                                    }
+                            // Check for self-referential assignment and existing rename
+                            let is_self_ref = matches!(&*assign.value, Expr::Name(value_name) if value_name.id.as_str() == var_name);
+                            if is_self_ref {
+                                if let Some(existing_renamed) = module_renames.get(&var_name) {
+                                    // Create assignment with the renamed symbol
+                                    // e.g., validate_models_base = validate_models_base
+                                    log::debug!(
+                                        "Handling self-referential assignment '{}' in namespace module '{}' -> '{}' = '{}'",
+                                        var_name,
+                                        module_name,
+                                        existing_renamed,
+                                        existing_renamed
+                                    );
+                                    // Skip this - it's redundant after renaming
+                                    continue;
                                 }
                             }
 
@@ -4463,41 +4451,41 @@ impl HybridStaticBundler {
                                 continue;
                             }
 
-                            if module_renames.contains_key(&var_name) {
-                                // Check if this is a self-referential assignment
-                                if let Expr::Name(value_name) = &*assign.value {
-                                    if value_name.id.as_str() == var_name {
-                                        // Skip self-referential assignments
-                                        continue;
-                                    }
-                                }
+                            // Skip if not in renames or is self-referential
+                            if !module_renames.contains_key(&var_name) {
+                                continue;
+                            }
 
-                                if let Some(renamed) = module_renames.get(&var_name) {
-                                    log::debug!(
-                                        "Inlining variable '{}' from namespace module '{}' as '{}'",
-                                        var_name,
-                                        module_name,
-                                        renamed
-                                    );
+                            let is_self_ref = matches!(&*assign.value, Expr::Name(value_name) if value_name.id.as_str() == var_name);
+                            if is_self_ref {
+                                continue;
+                            }
 
-                                    let mut renamed_assign = assign.clone();
-                                    renamed_assign.targets = vec![Expr::Name(ExprName {
-                                        id: renamed.clone().into(),
-                                        ctx: ExprContext::Store,
-                                        range: TextRange::default(),
-                                    })];
+                            if let Some(renamed) = module_renames.get(&var_name) {
+                                log::debug!(
+                                    "Inlining variable '{}' from namespace module '{}' as '{}'",
+                                    var_name,
+                                    module_name,
+                                    renamed
+                                );
 
-                                    // Transform the value expression to use renamed symbols and resolve imports
-                                    let mut value = (*assign.value).clone();
-                                    self.resolve_import_aliases_in_expr(
-                                        &mut value,
-                                        &ctx.import_aliases,
-                                    );
-                                    self.rename_references_in_expr(&mut value, &module_renames);
-                                    renamed_assign.value = Box::new(value);
+                                let mut renamed_assign = assign.clone();
+                                renamed_assign.targets = vec![Expr::Name(ExprName {
+                                    id: renamed.clone().into(),
+                                    ctx: ExprContext::Store,
+                                    range: TextRange::default(),
+                                })];
 
-                                    ctx.inlined_stmts.push(Stmt::Assign(renamed_assign));
-                                }
+                                // Transform the value expression to use renamed symbols and resolve imports
+                                let mut value = (*assign.value).clone();
+                                self.resolve_import_aliases_in_expr(
+                                    &mut value,
+                                    &ctx.import_aliases,
+                                );
+                                Self::rename_references_in_expr(&mut value, &module_renames);
+                                renamed_assign.value = Box::new(value);
+
+                                ctx.inlined_stmts.push(Stmt::Assign(renamed_assign));
                             }
                         }
                     }
@@ -4539,7 +4527,7 @@ impl HybridStaticBundler {
     ) {
         match stmt {
             Stmt::Expr(expr_stmt) => {
-                self.rename_references_in_expr(&mut expr_stmt.value, module_renames);
+                Self::rename_references_in_expr(&mut expr_stmt.value, module_renames);
             }
             Stmt::Assign(assign) => {
                 // Rename assignment targets if they're renamed globals
@@ -4551,21 +4539,21 @@ impl HybridStaticBundler {
                     }
                 }
                 // Also rename values (RHS)
-                self.rename_references_in_expr(&mut assign.value, module_renames);
+                Self::rename_references_in_expr(&mut assign.value, module_renames);
             }
             Stmt::Return(ret_stmt) => {
                 if let Some(value) = &mut ret_stmt.value {
-                    self.rename_references_in_expr(value, module_renames);
+                    Self::rename_references_in_expr(value, module_renames);
                 }
             }
             Stmt::If(if_stmt) => {
-                self.rename_references_in_expr(&mut if_stmt.test, module_renames);
+                Self::rename_references_in_expr(&mut if_stmt.test, module_renames);
                 for body_stmt in &mut if_stmt.body {
                     self.transform_stmt_for_renames(body_stmt, module_renames);
                 }
                 for elif_else_clause in &mut if_stmt.elif_else_clauses {
                     if let Some(test_expr) = &mut elif_else_clause.test {
-                        self.rename_references_in_expr(test_expr, module_renames);
+                        Self::rename_references_in_expr(test_expr, module_renames);
                     }
                     for body_stmt in &mut elif_else_clause.body {
                         self.transform_stmt_for_renames(body_stmt, module_renames);
@@ -4573,7 +4561,7 @@ impl HybridStaticBundler {
                 }
             }
             Stmt::For(for_stmt) => {
-                self.rename_references_in_expr(&mut for_stmt.iter, module_renames);
+                Self::rename_references_in_expr(&mut for_stmt.iter, module_renames);
                 for body_stmt in &mut for_stmt.body {
                     self.transform_stmt_for_renames(body_stmt, module_renames);
                 }
@@ -4582,7 +4570,7 @@ impl HybridStaticBundler {
                 }
             }
             Stmt::While(while_stmt) => {
-                self.rename_references_in_expr(&mut while_stmt.test, module_renames);
+                Self::rename_references_in_expr(&mut while_stmt.test, module_renames);
                 for body_stmt in &mut while_stmt.body {
                     self.transform_stmt_for_renames(body_stmt, module_renames);
                 }
@@ -4614,11 +4602,7 @@ impl HybridStaticBundler {
     }
 
     /// Rename references in an expression based on module renames
-    fn rename_references_in_expr(
-        &self,
-        expr: &mut Expr,
-        module_renames: &FxIndexMap<String, String>,
-    ) {
+    fn rename_references_in_expr(expr: &mut Expr, module_renames: &FxIndexMap<String, String>) {
         match expr {
             Expr::Name(name_expr) => {
                 if let Some(renamed) = module_renames.get(name_expr.id.as_str()) {
@@ -4626,15 +4610,15 @@ impl HybridStaticBundler {
                 }
             }
             Expr::Attribute(attr_expr) => {
-                self.rename_references_in_expr(&mut attr_expr.value, module_renames);
+                Self::rename_references_in_expr(&mut attr_expr.value, module_renames);
             }
             Expr::Call(call_expr) => {
-                self.rename_references_in_expr(&mut call_expr.func, module_renames);
+                Self::rename_references_in_expr(&mut call_expr.func, module_renames);
                 for arg in &mut call_expr.arguments.args {
-                    self.rename_references_in_expr(arg, module_renames);
+                    Self::rename_references_in_expr(arg, module_renames);
                 }
                 for keyword in &mut call_expr.arguments.keywords {
-                    self.rename_references_in_expr(&mut keyword.value, module_renames);
+                    Self::rename_references_in_expr(&mut keyword.value, module_renames);
                 }
             }
             Expr::FString(fstring) => {
@@ -4650,7 +4634,7 @@ impl HybridStaticBundler {
                         }
                         FStringElement::Expression(expr_elem) => {
                             let mut new_expr = expr_elem.expression.clone();
-                            self.rename_references_in_expr(&mut new_expr, module_renames);
+                            Self::rename_references_in_expr(&mut new_expr, module_renames);
 
                             let new_element = FStringExpressionElement {
                                 expression: new_expr,
@@ -4681,93 +4665,93 @@ impl HybridStaticBundler {
                 }
             }
             Expr::BinOp(binop) => {
-                self.rename_references_in_expr(&mut binop.left, module_renames);
-                self.rename_references_in_expr(&mut binop.right, module_renames);
+                Self::rename_references_in_expr(&mut binop.left, module_renames);
+                Self::rename_references_in_expr(&mut binop.right, module_renames);
             }
             Expr::Compare(compare) => {
-                self.rename_references_in_expr(&mut compare.left, module_renames);
+                Self::rename_references_in_expr(&mut compare.left, module_renames);
                 for comparator in &mut compare.comparators {
-                    self.rename_references_in_expr(comparator, module_renames);
+                    Self::rename_references_in_expr(comparator, module_renames);
                 }
             }
             Expr::BoolOp(boolop) => {
                 for value in &mut boolop.values {
-                    self.rename_references_in_expr(value, module_renames);
+                    Self::rename_references_in_expr(value, module_renames);
                 }
             }
             Expr::UnaryOp(unaryop) => {
-                self.rename_references_in_expr(&mut unaryop.operand, module_renames);
+                Self::rename_references_in_expr(&mut unaryop.operand, module_renames);
             }
             Expr::If(ifexp) => {
-                self.rename_references_in_expr(&mut ifexp.test, module_renames);
-                self.rename_references_in_expr(&mut ifexp.body, module_renames);
-                self.rename_references_in_expr(&mut ifexp.orelse, module_renames);
+                Self::rename_references_in_expr(&mut ifexp.test, module_renames);
+                Self::rename_references_in_expr(&mut ifexp.body, module_renames);
+                Self::rename_references_in_expr(&mut ifexp.orelse, module_renames);
             }
             Expr::Dict(dict_expr) => {
                 for item in &mut dict_expr.items {
                     if let Some(key) = &mut item.key {
-                        self.rename_references_in_expr(key, module_renames);
+                        Self::rename_references_in_expr(key, module_renames);
                     }
-                    self.rename_references_in_expr(&mut item.value, module_renames);
+                    Self::rename_references_in_expr(&mut item.value, module_renames);
                 }
             }
             Expr::List(list_expr) => {
                 for elem in &mut list_expr.elts {
-                    self.rename_references_in_expr(elem, module_renames);
+                    Self::rename_references_in_expr(elem, module_renames);
                 }
             }
             Expr::Tuple(tuple_expr) => {
                 for elem in &mut tuple_expr.elts {
-                    self.rename_references_in_expr(elem, module_renames);
+                    Self::rename_references_in_expr(elem, module_renames);
                 }
             }
             Expr::Set(set_expr) => {
                 for elem in &mut set_expr.elts {
-                    self.rename_references_in_expr(elem, module_renames);
+                    Self::rename_references_in_expr(elem, module_renames);
                 }
             }
             Expr::Subscript(subscript) => {
-                self.rename_references_in_expr(&mut subscript.value, module_renames);
-                self.rename_references_in_expr(&mut subscript.slice, module_renames);
+                Self::rename_references_in_expr(&mut subscript.value, module_renames);
+                Self::rename_references_in_expr(&mut subscript.slice, module_renames);
             }
             Expr::Lambda(lambda) => {
                 // Don't rename parameters, but do rename body
-                self.rename_references_in_expr(&mut lambda.body, module_renames);
+                Self::rename_references_in_expr(&mut lambda.body, module_renames);
             }
             Expr::ListComp(comp) => {
-                self.rename_references_in_expr(&mut comp.elt, module_renames);
+                Self::rename_references_in_expr(&mut comp.elt, module_renames);
                 for generator in &mut comp.generators {
-                    self.rename_references_in_expr(&mut generator.iter, module_renames);
+                    Self::rename_references_in_expr(&mut generator.iter, module_renames);
                     for if_clause in &mut generator.ifs {
-                        self.rename_references_in_expr(if_clause, module_renames);
+                        Self::rename_references_in_expr(if_clause, module_renames);
                     }
                 }
             }
             Expr::SetComp(comp) => {
-                self.rename_references_in_expr(&mut comp.elt, module_renames);
+                Self::rename_references_in_expr(&mut comp.elt, module_renames);
                 for generator in &mut comp.generators {
-                    self.rename_references_in_expr(&mut generator.iter, module_renames);
+                    Self::rename_references_in_expr(&mut generator.iter, module_renames);
                     for if_clause in &mut generator.ifs {
-                        self.rename_references_in_expr(if_clause, module_renames);
+                        Self::rename_references_in_expr(if_clause, module_renames);
                     }
                 }
             }
             Expr::Generator(comp) => {
-                self.rename_references_in_expr(&mut comp.elt, module_renames);
+                Self::rename_references_in_expr(&mut comp.elt, module_renames);
                 for generator in &mut comp.generators {
-                    self.rename_references_in_expr(&mut generator.iter, module_renames);
+                    Self::rename_references_in_expr(&mut generator.iter, module_renames);
                     for if_clause in &mut generator.ifs {
-                        self.rename_references_in_expr(if_clause, module_renames);
+                        Self::rename_references_in_expr(if_clause, module_renames);
                     }
                 }
             }
             Expr::DictComp(comp) => {
-                self.rename_references_in_expr(&mut comp.key, module_renames);
-                self.rename_references_in_expr(&mut comp.value, module_renames);
+                Self::rename_references_in_expr(&mut comp.key, module_renames);
+                Self::rename_references_in_expr(&mut comp.value, module_renames);
                 for generator in &mut comp.generators {
-                    self.rename_references_in_expr(&mut generator.iter, module_renames);
+                    Self::rename_references_in_expr(&mut generator.iter, module_renames);
                     for if_clause in &mut generator.ifs {
-                        self.rename_references_in_expr(if_clause, module_renames);
+                        Self::rename_references_in_expr(if_clause, module_renames);
                     }
                 }
             }
