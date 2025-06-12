@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use ruff_linter::source_kind::SourceKind;
-use ruff_python_ast::{ModModule, PySourceType, Stmt};
+use ruff_python_ast::{Expr, ModModule, PySourceType, Stmt};
 use ruff_python_parser::parse_unchecked_source;
 use ruff_python_semantic::{
     BindingFlags, BindingId, BindingKind, Module, ModuleKind, ModuleSource, SemanticModel,
@@ -418,6 +418,28 @@ pub struct SymbolConflict {
     pub modules: Vec<ModuleId>,
 }
 
+/// Information about module-level global usage
+#[derive(Debug, Clone, Default)]
+pub struct ModuleGlobalInfo {
+    /// Variables that exist at module level
+    pub module_level_vars: FxIndexSet<String>,
+
+    /// Variables declared with 'global' keyword in functions
+    pub global_declarations: FxIndexMap<String, Vec<TextRange>>,
+
+    /// Locations where globals are read
+    pub global_reads: FxIndexMap<String, Vec<TextRange>>,
+
+    /// Locations where globals are written  
+    pub global_writes: FxIndexMap<String, Vec<TextRange>>,
+
+    /// Functions that use global statements
+    pub functions_using_globals: FxIndexSet<String>,
+
+    /// Module name for generating unique prefixes
+    pub module_name: String,
+}
+
 impl Default for SemanticBundler {
     fn default() -> Self {
         Self::new()
@@ -512,5 +534,127 @@ impl SemanticBundler {
     /// Get semantic information for a module (for scope analysis during code generation)
     pub fn get_module_semantic_info(&self, module_id: &ModuleId) -> Option<&ModuleSemanticInfo> {
         self.module_semantics.get(module_id)
+    }
+
+    /// Analyze global variable usage in a module
+    pub fn analyze_module_globals(
+        &self,
+        _module_id: ModuleId,
+        ast: &ModModule,
+        module_name: &str,
+    ) -> ModuleGlobalInfo {
+        let mut info = ModuleGlobalInfo {
+            module_name: module_name.to_string(),
+            ..Default::default()
+        };
+
+        // First pass: collect module-level variables
+        for stmt in &ast.body {
+            match stmt {
+                Stmt::Assign(assign) => {
+                    for target in &assign.targets {
+                        if let Expr::Name(name) = target {
+                            info.module_level_vars.insert(name.id.to_string());
+                        }
+                    }
+                }
+                Stmt::AnnAssign(ann_assign) => {
+                    if let Expr::Name(name) = ann_assign.target.as_ref() {
+                        info.module_level_vars.insert(name.id.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Second pass: analyze global usage in functions
+        GlobalUsageVisitor::new(&mut info).visit_module(ast);
+
+        info
+    }
+}
+
+/// Visitor that tracks global variable usage in a module
+pub struct GlobalUsageVisitor<'a> {
+    info: &'a mut ModuleGlobalInfo,
+    current_function: Option<String>,
+    in_global_statement: bool,
+}
+
+impl<'a> GlobalUsageVisitor<'a> {
+    pub fn new(info: &'a mut ModuleGlobalInfo) -> Self {
+        Self {
+            info,
+            current_function: None,
+            in_global_statement: false,
+        }
+    }
+
+    pub fn visit_module(&mut self, module: &ModModule) {
+        for stmt in &module.body {
+            self.visit_stmt(stmt);
+        }
+    }
+
+    fn visit_stmt(&mut self, stmt: &Stmt) {
+        match stmt {
+            Stmt::FunctionDef(func) => {
+                let old_function = self.current_function.clone();
+                self.current_function = Some(func.name.to_string());
+
+                // Visit function body
+                for stmt in &func.body {
+                    self.visit_stmt(stmt);
+                }
+
+                self.current_function = old_function;
+            }
+            Stmt::Global(global_stmt) => {
+                if let Some(ref func_name) = self.current_function {
+                    self.info.functions_using_globals.insert(func_name.clone());
+
+                    for name in &global_stmt.names {
+                        let name_str = name.to_string();
+                        self.info
+                            .global_declarations
+                            .entry(name_str)
+                            .or_default()
+                            .push(global_stmt.range());
+                    }
+                }
+
+                // Visit the statement itself to track usage
+                self.in_global_statement = true;
+                // Statement processed
+                self.in_global_statement = false;
+            }
+            Stmt::ClassDef(class) => {
+                // Visit methods within the class
+                for stmt in &class.body {
+                    self.visit_stmt(stmt);
+                }
+            }
+            Stmt::Assign(assign) => {
+                // Check if we're assigning to a global
+                if let Some(ref _func_name) = self.current_function {
+                    for target in &assign.targets {
+                        if let Expr::Name(name) = target {
+                            let name_str = name.id.to_string();
+                            if self.info.global_declarations.contains_key(&name_str) {
+                                self.info
+                                    .global_writes
+                                    .entry(name_str)
+                                    .or_default()
+                                    .push(target.range());
+                            }
+                        }
+                    }
+                }
+                // Statement processed
+            }
+            _ => {
+                // Statement processed
+            }
+        }
     }
 }

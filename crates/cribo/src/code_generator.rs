@@ -1,8 +1,9 @@
 use anyhow::Result;
 use indexmap::{IndexMap, IndexSet};
+use log::debug;
 use ruff_python_ast::{
-    CmpOp, Comprehension, Expr, ExprAttribute, ExprCall, ExprCompare, ExprContext, ExprIf,
-    ExprList, ExprName, ExprNoneLiteral, ExprStringLiteral, Identifier, ModModule, Stmt,
+    CmpOp, Comprehension, ExceptHandler, Expr, ExprAttribute, ExprCall, ExprCompare, ExprContext,
+    ExprIf, ExprList, ExprName, ExprNoneLiteral, ExprStringLiteral, Identifier, ModModule, Stmt,
     StmtAssign, StmtFunctionDef, StmtIf, StmtImport, StmtImportFrom, StringLiteral,
     StringLiteralFlags, StringLiteralValue,
 };
@@ -11,7 +12,7 @@ use rustc_hash::FxHasher;
 use std::hash::BuildHasherDefault;
 use std::path::{Path, PathBuf};
 
-use crate::semantic_bundler::SemanticBundler;
+use crate::semantic_bundler::{ModuleGlobalInfo, SemanticBundler};
 
 /// Type alias for IndexMap with FxHasher for better performance
 type FxIndexMap<K, V> = IndexMap<K, V, BuildHasherDefault<FxHasher>>;
@@ -23,6 +24,7 @@ struct ModuleTransformContext<'a> {
     module_name: &'a str,
     synthetic_name: &'a str,
     module_path: &'a Path,
+    global_info: Option<ModuleGlobalInfo>,
 }
 
 /// Context for inlining operations
@@ -46,6 +48,181 @@ pub struct BundleParams<'a> {
 
 use crate::cribo_graph::CriboGraph;
 
+/// Transformer that lifts module-level globals to true global scope
+struct GlobalsLifter {
+    /// Map from original name to lifted name
+    lifted_names: FxIndexMap<String, String>,
+    /// Statements to add at module top level
+    lifted_declarations: Vec<Stmt>,
+}
+
+/// Transform globals() calls to module.__dict__ when inside module functions
+fn transform_globals_in_expr(expr: &mut Expr) {
+    match expr {
+        Expr::Call(call_expr) => {
+            // Check if this is a globals() call
+            if let Expr::Name(name_expr) = &*call_expr.func {
+                if name_expr.id.as_str() == "globals" && call_expr.arguments.args.is_empty() {
+                    // Replace the entire expression with module.__dict__
+                    *expr = Expr::Attribute(ExprAttribute {
+                        value: Box::new(Expr::Name(ExprName {
+                            id: "module".into(),
+                            ctx: ExprContext::Load,
+                            range: TextRange::default(),
+                        })),
+                        attr: Identifier::new("__dict__", TextRange::default()),
+                        ctx: ExprContext::Load,
+                        range: TextRange::default(),
+                    });
+                    return;
+                }
+            }
+
+            // Recursively transform in function and arguments
+            transform_globals_in_expr(&mut call_expr.func);
+            for arg in &mut call_expr.arguments.args {
+                transform_globals_in_expr(arg);
+            }
+            for keyword in &mut call_expr.arguments.keywords {
+                transform_globals_in_expr(&mut keyword.value);
+            }
+        }
+        Expr::Attribute(attr_expr) => {
+            transform_globals_in_expr(&mut attr_expr.value);
+        }
+        Expr::Subscript(subscript_expr) => {
+            transform_globals_in_expr(&mut subscript_expr.value);
+            transform_globals_in_expr(&mut subscript_expr.slice);
+        }
+        Expr::List(list_expr) => {
+            for elem in &mut list_expr.elts {
+                transform_globals_in_expr(elem);
+            }
+        }
+        Expr::Dict(dict_expr) => {
+            for item in &mut dict_expr.items {
+                if let Some(ref mut key) = item.key {
+                    transform_globals_in_expr(key);
+                }
+                transform_globals_in_expr(&mut item.value);
+            }
+        }
+        Expr::If(if_expr) => {
+            transform_globals_in_expr(&mut if_expr.test);
+            transform_globals_in_expr(&mut if_expr.body);
+            transform_globals_in_expr(&mut if_expr.orelse);
+        }
+        // Add more expression types as needed
+        _ => {}
+    }
+}
+
+/// Transform globals() calls in a statement
+fn transform_globals_in_stmt(stmt: &mut Stmt) {
+    match stmt {
+        Stmt::Expr(expr_stmt) => {
+            transform_globals_in_expr(&mut expr_stmt.value);
+        }
+        Stmt::Assign(assign_stmt) => {
+            transform_globals_in_expr(&mut assign_stmt.value);
+            for target in &mut assign_stmt.targets {
+                transform_globals_in_expr(target);
+            }
+        }
+        Stmt::Return(return_stmt) => {
+            if let Some(ref mut value) = return_stmt.value {
+                transform_globals_in_expr(value);
+            }
+        }
+        Stmt::If(if_stmt) => {
+            transform_globals_in_expr(&mut if_stmt.test);
+            for stmt in &mut if_stmt.body {
+                transform_globals_in_stmt(stmt);
+            }
+            for clause in &mut if_stmt.elif_else_clauses {
+                if let Some(ref mut test) = clause.test {
+                    transform_globals_in_expr(test);
+                }
+                for stmt in &mut clause.body {
+                    transform_globals_in_stmt(stmt);
+                }
+            }
+        }
+        Stmt::FunctionDef(func_def) => {
+            // Transform globals() calls in function body
+            for stmt in &mut func_def.body {
+                transform_globals_in_stmt(stmt);
+            }
+        }
+        // Add more statement types as needed
+        _ => {}
+    }
+}
+
+impl GlobalsLifter {
+    fn new(global_info: &ModuleGlobalInfo) -> Self {
+        let mut lifted_names = FxIndexMap::default();
+        let mut lifted_declarations = Vec::new();
+
+        debug!("GlobalsLifter::new for module: {}", global_info.module_name);
+        debug!("Module level vars: {:?}", global_info.module_level_vars);
+        debug!(
+            "Global declarations: {:?}",
+            global_info.global_declarations.keys().collect::<Vec<_>>()
+        );
+
+        // Generate lifted names and declarations for all module-level variables
+        // that are referenced with global statements
+        for var_name in &global_info.module_level_vars {
+            // Only lift variables that are actually used with global statements
+            if global_info.global_declarations.contains_key(var_name) {
+                let lifted_name = format!(
+                    "__cribo_{}_{}",
+                    global_info.module_name.replace(['.', '-'], "_"),
+                    var_name
+                );
+
+                debug!(
+                    "Creating lifted declaration for {} -> {}",
+                    var_name, lifted_name
+                );
+
+                lifted_names.insert(var_name.clone(), lifted_name.clone());
+
+                // Create assignment: __cribo_module_var = None (will be set by init function)
+                lifted_declarations.push(Stmt::Assign(StmtAssign {
+                    targets: vec![Expr::Name(ExprName {
+                        id: lifted_name.into(),
+                        ctx: ExprContext::Store,
+                        range: TextRange::default(),
+                    })],
+                    value: Box::new(Expr::NoneLiteral(ExprNoneLiteral {
+                        range: TextRange::default(),
+                    })),
+                    range: TextRange::default(),
+                }));
+            }
+        }
+
+        debug!("Created {} lifted declarations", lifted_declarations.len());
+
+        Self {
+            lifted_names,
+            lifted_declarations,
+        }
+    }
+
+    /// Get the lifted global declarations
+    fn get_lifted_declarations(&self) -> Vec<Stmt> {
+        self.lifted_declarations.clone()
+    }
+
+    /// Get the lifted names mapping
+    fn get_lifted_names(&self) -> &FxIndexMap<String, String> {
+        &self.lifted_names
+    }
+}
+
 /// Hybrid static bundler that uses sys.modules and hash-based naming
 /// This approach avoids forward reference issues while maintaining Python module semantics
 pub struct HybridStaticBundler {
@@ -68,6 +245,8 @@ pub struct HybridStaticBundler {
     entry_path: Option<String>,
     /// Module export information (for __all__ handling)
     module_exports: FxIndexMap<String, Option<Vec<String>>>,
+    /// Lifted global declarations to add at module top level
+    lifted_global_declarations: Vec<Stmt>,
 }
 
 impl Default for HybridStaticBundler {
@@ -88,6 +267,7 @@ impl HybridStaticBundler {
             inlined_modules: FxIndexSet::default(),
             entry_path: None,
             module_exports: FxIndexMap::default(),
+            lifted_global_declarations: Vec::new(),
         }
     }
 
@@ -665,12 +845,54 @@ impl HybridStaticBundler {
         // Now transform wrapper modules into init functions AFTER inlining
         // This way we have access to symbol_renames for proper import resolution
         if need_sys_import {
+            // First pass: analyze globals in all wrapper modules
+            let mut module_globals = FxIndexMap::default();
+            let mut all_lifted_declarations = Vec::new();
+
+            for (module_name, ast, _, _) in &wrapper_modules_saved {
+                // Get module ID from graph
+                if let Some(module) = params.graph.get_module_by_name(module_name) {
+                    let module_id = module.module_id;
+                    let global_info =
+                        params
+                            .semantic_bundler
+                            .analyze_module_globals(module_id, ast, module_name);
+
+                    // Create GlobalsLifter and collect declarations
+                    if !global_info.global_declarations.is_empty() {
+                        let globals_lifter = GlobalsLifter::new(&global_info);
+                        all_lifted_declarations.extend(globals_lifter.get_lifted_declarations());
+                    }
+
+                    module_globals.insert(module_name.clone(), global_info);
+                }
+            }
+
+            // Store all lifted declarations
+            debug!(
+                "Collected {} total lifted declarations",
+                all_lifted_declarations.len()
+            );
+            self.lifted_global_declarations = all_lifted_declarations.clone();
+
+            // Add lifted global declarations to final body before init functions
+            if !all_lifted_declarations.is_empty() {
+                debug!(
+                    "Adding {} lifted global declarations to final body",
+                    all_lifted_declarations.len()
+                );
+                final_body.extend(all_lifted_declarations);
+            }
+
+            // Second pass: transform modules with global info
             for (module_name, ast, module_path, _content_hash) in wrapper_modules_saved {
                 let synthetic_name = self.module_registry[&module_name].clone();
+                let global_info = module_globals.get(&module_name).cloned();
                 let ctx = ModuleTransformContext {
                     module_name: &module_name,
                     synthetic_name: &synthetic_name,
                     module_path: &module_path,
+                    global_info,
                 };
                 let init_function =
                     self.transform_module_to_init_function(ctx, ast, &symbol_renames)?;
@@ -735,13 +957,17 @@ impl HybridStaticBundler {
                     }
                     _ => {
                         // For non-import statements in the entry module, apply symbol renames
+                        let handled = false;
+                        let mut pending_reassignment: Option<(String, String)> = None;
                         if !entry_module_renames.is_empty() {
                             // We need special handling for different statement types
                             match &mut stmt {
                                 Stmt::FunctionDef(func_def) => {
                                     // Check if this function name needs renaming
-                                    let func_name = func_def.name.as_str();
-                                    if let Some(new_name) = entry_module_renames.get(func_name) {
+                                    let func_name = func_def.name.to_string();
+                                    let needs_reassignment = if let Some(new_name) =
+                                        entry_module_renames.get(&func_name)
+                                    {
                                         log::debug!(
                                             "Renaming function '{}' to '{}' in entry module",
                                             func_name,
@@ -749,14 +975,32 @@ impl HybridStaticBundler {
                                         );
                                         func_def.name =
                                             Identifier::new(new_name, TextRange::default());
+                                        true
+                                    } else {
+                                        false
+                                    };
+                                    // For function bodies, we need special handling:
+                                    // - Global statements must be renamed to match module-level renames
+                                    // - But other references should NOT be renamed (Python resolves at runtime)
+                                    self.rewrite_global_statements_in_function(
+                                        func_def,
+                                        &entry_module_renames,
+                                    );
+
+                                    // Mark that we need to add a reassignment after this statement
+                                    if needs_reassignment {
+                                        pending_reassignment = Some((
+                                            func_name.clone(),
+                                            entry_module_renames[&func_name].clone(),
+                                        ));
                                     }
-                                    // Also apply renames to the function body
-                                    self.rewrite_aliases_in_stmt(&mut stmt, &entry_module_renames);
                                 }
                                 Stmt::ClassDef(class_def) => {
                                     // Check if this class name needs renaming
-                                    let class_name = class_def.name.as_str();
-                                    if let Some(new_name) = entry_module_renames.get(class_name) {
+                                    let class_name = class_def.name.to_string();
+                                    let needs_reassignment = if let Some(new_name) =
+                                        entry_module_renames.get(&class_name)
+                                    {
                                         log::debug!(
                                             "Renaming class '{}' to '{}' in entry module",
                                             class_name,
@@ -764,17 +1008,55 @@ impl HybridStaticBundler {
                                         );
                                         class_def.name =
                                             Identifier::new(new_name, TextRange::default());
-                                    }
-                                    // Also apply renames to the class body
+                                        true
+                                    } else {
+                                        false
+                                    };
+                                    // Apply renames to class body - classes don't create new scopes for globals
                                     self.rewrite_aliases_in_stmt(&mut stmt, &entry_module_renames);
+
+                                    // Mark that we need to add a reassignment after this statement
+                                    if needs_reassignment {
+                                        pending_reassignment = Some((
+                                            class_name.clone(),
+                                            entry_module_renames[&class_name].clone(),
+                                        ));
+                                    }
                                 }
                                 _ => {
                                     // For other statements, use the existing rewrite method
                                     self.rewrite_aliases_in_stmt(&mut stmt, &entry_module_renames);
+
+                                    // Check if this is an assignment that was renamed
+                                    if let Stmt::Assign(assign) = &stmt {
+                                        if assign.targets.len() == 1 {
+                                            if let Expr::Name(name_expr) = &assign.targets[0] {
+                                                let assigned_name = name_expr.id.as_str();
+                                                // Check if this is a renamed variable (e.g., Logger_1)
+                                                for (original, renamed) in &entry_module_renames {
+                                                    if assigned_name == renamed {
+                                                        // This is a renamed assignment, mark for reassignment
+                                                        pending_reassignment = Some((
+                                                            original.clone(),
+                                                            renamed.clone(),
+                                                        ));
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
-                        final_body.push(stmt);
+                        if !handled {
+                            final_body.push(stmt);
+                            // Add reassignment if needed
+                            if let Some((original, renamed)) = pending_reassignment {
+                                let reassign = self.create_reassignment(&original, &renamed);
+                                final_body.push(reassign);
+                            }
+                        }
                     }
                 }
             }
@@ -790,7 +1072,7 @@ impl HybridStaticBundler {
     fn transform_module_to_init_function(
         &self,
         ctx: ModuleTransformContext,
-        ast: ModModule,
+        mut ast: ModModule,
         symbol_renames: &FxIndexMap<String, FxIndexMap<String, String>>,
     ) -> Result<Stmt> {
         let init_func_name = &self.init_functions[ctx.synthetic_name];
@@ -805,6 +1087,23 @@ impl HybridStaticBundler {
         // Register in sys.modules with both synthetic and original names
         body.push(self.create_sys_modules_registration(ctx.synthetic_name));
         body.push(self.create_sys_modules_registration_alias(ctx.synthetic_name, ctx.module_name));
+
+        // Apply globals lifting if needed
+        let lifted_names = if let Some(ref global_info) = ctx.global_info {
+            if !global_info.global_declarations.is_empty() {
+                let globals_lifter = GlobalsLifter::new(global_info);
+                let lifted_names = globals_lifter.get_lifted_names().clone();
+
+                // Transform the AST to use lifted globals
+                self.transform_ast_with_lifted_globals(&mut ast, &lifted_names, global_info);
+
+                Some(lifted_names)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         // Transform module contents
         for stmt in ast.body {
@@ -1174,6 +1473,32 @@ impl HybridStaticBundler {
             }
         }
 
+        // Initialize lifted globals if any
+        if let Some(ref lifted_names) = lifted_names {
+            for (original_name, lifted_name) in lifted_names {
+                // global __cribo_module_var
+                body.push(Stmt::Global(ruff_python_ast::StmtGlobal {
+                    names: vec![Identifier::new(lifted_name, TextRange::default())],
+                    range: TextRange::default(),
+                }));
+
+                // __cribo_module_var = original_var
+                body.push(Stmt::Assign(StmtAssign {
+                    targets: vec![Expr::Name(ExprName {
+                        id: lifted_name.clone().into(),
+                        ctx: ExprContext::Store,
+                        range: TextRange::default(),
+                    })],
+                    value: Box::new(Expr::Name(ExprName {
+                        id: original_name.clone().into(),
+                        ctx: ExprContext::Load,
+                        range: TextRange::default(),
+                    })),
+                    range: TextRange::default(),
+                }));
+            }
+        }
+
         // Generate __all__ for the bundled module only if the original module had __all__
         if let Some(Some(_)) = self.module_exports.get(ctx.module_name) {
             body.push(self.create_all_assignment_for_module(ctx.module_name));
@@ -1188,6 +1513,11 @@ impl HybridStaticBundler {
             }))),
             range: TextRange::default(),
         }));
+
+        // Transform globals() calls to module.__dict__ in the entire body
+        for stmt in &mut body {
+            transform_globals_in_stmt(stmt);
+        }
 
         // Create the init function
         Ok(Stmt::FunctionDef(StmtFunctionDef {
@@ -2219,6 +2549,116 @@ impl HybridStaticBundler {
     }
 
     /// Recursively rewrite aliases in a statement
+    /// Rewrite only global statements within a function, leaving other references untouched
+    fn rewrite_global_statements_in_function(
+        &self,
+        func_def: &mut StmtFunctionDef,
+        alias_to_canonical: &FxIndexMap<String, String>,
+    ) {
+        for stmt in &mut func_def.body {
+            self.rewrite_global_statements_only(stmt, alias_to_canonical);
+        }
+    }
+
+    /// Recursively rewrite only global statements, not other name references
+    fn rewrite_global_statements_only(
+        &self,
+        stmt: &mut Stmt,
+        alias_to_canonical: &FxIndexMap<String, String>,
+    ) {
+        match stmt {
+            Stmt::Global(global_stmt) => {
+                // Apply renames to global variable names
+                for name in &mut global_stmt.names {
+                    let name_str = name.as_str();
+                    if let Some(new_name) = alias_to_canonical.get(name_str) {
+                        log::debug!(
+                            "Rewriting global statement variable '{}' to '{}'",
+                            name_str,
+                            new_name
+                        );
+                        *name = Identifier::new(new_name, TextRange::default());
+                    }
+                }
+            }
+            // For control flow statements, recurse into their bodies
+            Stmt::If(if_stmt) => {
+                for stmt in &mut if_stmt.body {
+                    self.rewrite_global_statements_only(stmt, alias_to_canonical);
+                }
+                for clause in &mut if_stmt.elif_else_clauses {
+                    for stmt in &mut clause.body {
+                        self.rewrite_global_statements_only(stmt, alias_to_canonical);
+                    }
+                }
+            }
+            Stmt::While(while_stmt) => {
+                for stmt in &mut while_stmt.body {
+                    self.rewrite_global_statements_only(stmt, alias_to_canonical);
+                }
+                for stmt in &mut while_stmt.orelse {
+                    self.rewrite_global_statements_only(stmt, alias_to_canonical);
+                }
+            }
+            Stmt::For(for_stmt) => {
+                for stmt in &mut for_stmt.body {
+                    self.rewrite_global_statements_only(stmt, alias_to_canonical);
+                }
+                for stmt in &mut for_stmt.orelse {
+                    self.rewrite_global_statements_only(stmt, alias_to_canonical);
+                }
+            }
+            Stmt::With(with_stmt) => {
+                for stmt in &mut with_stmt.body {
+                    self.rewrite_global_statements_only(stmt, alias_to_canonical);
+                }
+            }
+            Stmt::Try(try_stmt) => {
+                for stmt in &mut try_stmt.body {
+                    self.rewrite_global_statements_only(stmt, alias_to_canonical);
+                }
+                for handler in &mut try_stmt.handlers {
+                    match handler {
+                        ExceptHandler::ExceptHandler(except_handler) => {
+                            for stmt in &mut except_handler.body {
+                                self.rewrite_global_statements_only(stmt, alias_to_canonical);
+                            }
+                        }
+                    }
+                }
+                for stmt in &mut try_stmt.orelse {
+                    self.rewrite_global_statements_only(stmt, alias_to_canonical);
+                }
+                for stmt in &mut try_stmt.finalbody {
+                    self.rewrite_global_statements_only(stmt, alias_to_canonical);
+                }
+            }
+            // Nested functions need the same treatment
+            Stmt::FunctionDef(nested_func) => {
+                self.rewrite_global_statements_in_function(nested_func, alias_to_canonical);
+            }
+            // For other statements, do nothing - we don't want to rewrite name references
+            _ => {}
+        }
+    }
+
+    /// Create a reassignment statement: original_name = renamed_name
+    fn create_reassignment(&self, original_name: &str, renamed_name: &str) -> Stmt {
+        Stmt::Assign(StmtAssign {
+            targets: vec![Expr::Name(ExprName {
+                id: original_name.into(),
+                ctx: ExprContext::Store,
+                range: TextRange::default(),
+            })],
+            value: Box::new(Expr::Name(ExprName {
+                id: renamed_name.into(),
+                ctx: ExprContext::Load,
+                range: TextRange::default(),
+            })),
+            range: TextRange::default(),
+        })
+    }
+
     fn rewrite_aliases_in_stmt(
         &self,
         stmt: &mut Stmt,
@@ -2349,8 +2789,18 @@ impl HybridStaticBundler {
                     self.rewrite_aliases_in_expr(target, alias_to_canonical);
                 }
             }
-            Stmt::Global(_) | Stmt::Nonlocal(_) => {
-                // These don't contain expressions that need rewriting
+            Stmt::Global(global_stmt) => {
+                // Apply renames to global variable names
+                for name in &mut global_stmt.names {
+                    let name_str = name.as_str();
+                    if let Some(new_name) = alias_to_canonical.get(name_str) {
+                        log::debug!("Rewriting global variable '{}' to '{}'", name_str, new_name);
+                        *name = Identifier::new(new_name, TextRange::default());
+                    }
+                }
+            }
+            Stmt::Nonlocal(_) => {
+                // Nonlocal statements don't need rewriting in our use case
             }
             Stmt::Pass(_) | Stmt::Break(_) | Stmt::Continue(_) => {
                 // These don't contain expressions
@@ -2557,6 +3007,365 @@ fn rewrite_aliases_in_expr_impl(expr: &mut Expr, alias_to_canonical: &FxIndexMap
         _ => {
             // Log unhandled expression types for future reference
             log::trace!("Unhandled expression type in alias rewriting");
+        }
+    }
+}
+
+impl HybridStaticBundler {
+    /// Transform AST to use lifted global variables
+    fn transform_ast_with_lifted_globals(
+        &self,
+        ast: &mut ModModule,
+        lifted_names: &FxIndexMap<String, String>,
+        global_info: &ModuleGlobalInfo,
+    ) {
+        // Transform all statements that use global declarations
+        for stmt in &mut ast.body {
+            self.transform_stmt_for_lifted_globals(stmt, lifted_names, global_info, None);
+        }
+    }
+
+    /// Transform a statement to use lifted globals
+    fn transform_stmt_for_lifted_globals(
+        &self,
+        stmt: &mut Stmt,
+        lifted_names: &FxIndexMap<String, String>,
+        global_info: &ModuleGlobalInfo,
+        current_function_globals: Option<&FxIndexSet<String>>,
+    ) {
+        match stmt {
+            Stmt::FunctionDef(func_def) => {
+                // Check if this function uses globals
+                if global_info
+                    .functions_using_globals
+                    .contains(&func_def.name.to_string())
+                {
+                    // Collect globals declared in this function
+                    let mut function_globals = FxIndexSet::default();
+
+                    // First pass: collect all global declarations in this function
+                    for body_stmt in &func_def.body {
+                        if let Stmt::Global(global_stmt) = body_stmt {
+                            for name in &global_stmt.names {
+                                function_globals.insert(name.to_string());
+                            }
+                        }
+                    }
+
+                    // Create initialization statements for lifted globals
+                    let mut init_stmts = Vec::new();
+                    for global_name in &function_globals {
+                        if let Some(lifted_name) = lifted_names.get(global_name) {
+                            // Add: local_var = __cribo_module_var at the beginning
+                            init_stmts.push(Stmt::Assign(StmtAssign {
+                                targets: vec![Expr::Name(ExprName {
+                                    id: global_name.clone().into(),
+                                    ctx: ExprContext::Store,
+                                    range: TextRange::default(),
+                                })],
+                                value: Box::new(Expr::Name(ExprName {
+                                    id: lifted_name.clone().into(),
+                                    ctx: ExprContext::Load,
+                                    range: TextRange::default(),
+                                })),
+                                range: TextRange::default(),
+                            }));
+                        }
+                    }
+
+                    // Second pass: transform statements with the function context
+                    let mut new_body = Vec::new();
+                    let mut added_init = false;
+
+                    for body_stmt in &mut func_def.body {
+                        match body_stmt {
+                            Stmt::Global(global_stmt) => {
+                                // Rewrite global statement to use lifted names
+                                for name in &mut global_stmt.names {
+                                    if let Some(lifted_name) = lifted_names.get(name.as_str()) {
+                                        *name = Identifier::new(lifted_name, TextRange::default());
+                                    }
+                                }
+                                new_body.push(body_stmt.clone());
+
+                                // Add initialization statements after global declarations
+                                if !added_init && !init_stmts.is_empty() {
+                                    new_body.extend(init_stmts.clone());
+                                    added_init = true;
+                                }
+                            }
+                            _ => {
+                                // Transform other statements recursively with function context
+                                self.transform_stmt_for_lifted_globals(
+                                    body_stmt,
+                                    lifted_names,
+                                    global_info,
+                                    Some(&function_globals),
+                                );
+                                new_body.push(body_stmt.clone());
+                            }
+                        }
+                    }
+
+                    // Replace function body with new body
+                    func_def.body = new_body;
+                }
+            }
+            Stmt::Assign(assign) => {
+                // Transform assignments to use lifted names if they're in a function with global declarations
+                for target in &mut assign.targets {
+                    self.transform_expr_for_lifted_globals(
+                        target,
+                        lifted_names,
+                        global_info,
+                        current_function_globals,
+                    );
+                }
+                self.transform_expr_for_lifted_globals(
+                    &mut assign.value,
+                    lifted_names,
+                    global_info,
+                    current_function_globals,
+                );
+            }
+            Stmt::Expr(expr_stmt) => {
+                self.transform_expr_for_lifted_globals(
+                    &mut expr_stmt.value,
+                    lifted_names,
+                    global_info,
+                    current_function_globals,
+                );
+            }
+            Stmt::If(if_stmt) => {
+                self.transform_expr_for_lifted_globals(
+                    &mut if_stmt.test,
+                    lifted_names,
+                    global_info,
+                    current_function_globals,
+                );
+                for stmt in &mut if_stmt.body {
+                    self.transform_stmt_for_lifted_globals(
+                        stmt,
+                        lifted_names,
+                        global_info,
+                        current_function_globals,
+                    );
+                }
+                for clause in &mut if_stmt.elif_else_clauses {
+                    if let Some(test) = &mut clause.test {
+                        self.transform_expr_for_lifted_globals(
+                            test,
+                            lifted_names,
+                            global_info,
+                            current_function_globals,
+                        );
+                    }
+                    for stmt in &mut clause.body {
+                        self.transform_stmt_for_lifted_globals(
+                            stmt,
+                            lifted_names,
+                            global_info,
+                            current_function_globals,
+                        );
+                    }
+                }
+            }
+            Stmt::While(while_stmt) => {
+                self.transform_expr_for_lifted_globals(
+                    &mut while_stmt.test,
+                    lifted_names,
+                    global_info,
+                    current_function_globals,
+                );
+                for stmt in &mut while_stmt.body {
+                    self.transform_stmt_for_lifted_globals(
+                        stmt,
+                        lifted_names,
+                        global_info,
+                        current_function_globals,
+                    );
+                }
+            }
+            Stmt::For(for_stmt) => {
+                self.transform_expr_for_lifted_globals(
+                    &mut for_stmt.target,
+                    lifted_names,
+                    global_info,
+                    current_function_globals,
+                );
+                self.transform_expr_for_lifted_globals(
+                    &mut for_stmt.iter,
+                    lifted_names,
+                    global_info,
+                    current_function_globals,
+                );
+                for stmt in &mut for_stmt.body {
+                    self.transform_stmt_for_lifted_globals(
+                        stmt,
+                        lifted_names,
+                        global_info,
+                        current_function_globals,
+                    );
+                }
+            }
+            Stmt::Return(return_stmt) => {
+                if let Some(value) = &mut return_stmt.value {
+                    self.transform_expr_for_lifted_globals(
+                        value,
+                        lifted_names,
+                        global_info,
+                        current_function_globals,
+                    );
+                }
+            }
+            _ => {
+                // Other statement types handled as needed
+            }
+        }
+    }
+
+    /// Transform an expression to use lifted globals
+    fn transform_expr_for_lifted_globals(
+        &self,
+        expr: &mut Expr,
+        lifted_names: &FxIndexMap<String, String>,
+        global_info: &ModuleGlobalInfo,
+        in_function_with_globals: Option<&FxIndexSet<String>>,
+    ) {
+        match expr {
+            Expr::Name(name_expr) => {
+                // Transform if this is a lifted global and we're in a function that declares it global
+                if let Some(function_globals) = in_function_with_globals {
+                    if function_globals.contains(name_expr.id.as_str()) {
+                        if let Some(lifted_name) = lifted_names.get(name_expr.id.as_str()) {
+                            name_expr.id = lifted_name.clone().into();
+                        }
+                    }
+                }
+            }
+            Expr::Call(call) => {
+                self.transform_expr_for_lifted_globals(
+                    &mut call.func,
+                    lifted_names,
+                    global_info,
+                    in_function_with_globals,
+                );
+                for arg in &mut call.arguments.args {
+                    self.transform_expr_for_lifted_globals(
+                        arg,
+                        lifted_names,
+                        global_info,
+                        in_function_with_globals,
+                    );
+                }
+            }
+            Expr::Attribute(attr) => {
+                self.transform_expr_for_lifted_globals(
+                    &mut attr.value,
+                    lifted_names,
+                    global_info,
+                    in_function_with_globals,
+                );
+            }
+            Expr::FString(_fstring) => {
+                // Transform f-string values
+                // Note: FString handling is complex due to immutable structure
+                // For now, we'll skip f-string transformation as it requires rebuilding the entire structure
+                // TODO: Implement proper f-string transformation
+            }
+            Expr::BinOp(binop) => {
+                self.transform_expr_for_lifted_globals(
+                    &mut binop.left,
+                    lifted_names,
+                    global_info,
+                    in_function_with_globals,
+                );
+                self.transform_expr_for_lifted_globals(
+                    &mut binop.right,
+                    lifted_names,
+                    global_info,
+                    in_function_with_globals,
+                );
+            }
+            Expr::UnaryOp(unaryop) => {
+                self.transform_expr_for_lifted_globals(
+                    &mut unaryop.operand,
+                    lifted_names,
+                    global_info,
+                    in_function_with_globals,
+                );
+            }
+            Expr::Compare(compare) => {
+                self.transform_expr_for_lifted_globals(
+                    &mut compare.left,
+                    lifted_names,
+                    global_info,
+                    in_function_with_globals,
+                );
+                for comparator in &mut compare.comparators {
+                    self.transform_expr_for_lifted_globals(
+                        comparator,
+                        lifted_names,
+                        global_info,
+                        in_function_with_globals,
+                    );
+                }
+            }
+            Expr::Subscript(subscript) => {
+                self.transform_expr_for_lifted_globals(
+                    &mut subscript.value,
+                    lifted_names,
+                    global_info,
+                    in_function_with_globals,
+                );
+                self.transform_expr_for_lifted_globals(
+                    &mut subscript.slice,
+                    lifted_names,
+                    global_info,
+                    in_function_with_globals,
+                );
+            }
+            Expr::List(list_expr) => {
+                for elem in &mut list_expr.elts {
+                    self.transform_expr_for_lifted_globals(
+                        elem,
+                        lifted_names,
+                        global_info,
+                        in_function_with_globals,
+                    );
+                }
+            }
+            Expr::Tuple(tuple_expr) => {
+                for elem in &mut tuple_expr.elts {
+                    self.transform_expr_for_lifted_globals(
+                        elem,
+                        lifted_names,
+                        global_info,
+                        in_function_with_globals,
+                    );
+                }
+            }
+            Expr::Dict(dict_expr) => {
+                for item in &mut dict_expr.items {
+                    if let Some(key) = &mut item.key {
+                        self.transform_expr_for_lifted_globals(
+                            key,
+                            lifted_names,
+                            global_info,
+                            in_function_with_globals,
+                        );
+                    }
+                    self.transform_expr_for_lifted_globals(
+                        &mut item.value,
+                        lifted_names,
+                        global_info,
+                        in_function_with_globals,
+                    );
+                }
+            }
+            _ => {
+                // Other expressions handled as needed
+            }
         }
     }
 }

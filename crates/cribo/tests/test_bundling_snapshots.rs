@@ -176,9 +176,6 @@ fn test_bundling_fixtures() {
             .trim()
             .replace("\r\n", "\n")
             .to_string();
-        let original_stderr = String::from_utf8_lossy(&original_output.stderr)
-            .trim()
-            .replace("\r\n", "\n");
         let original_exit_code = original_output.status.code().unwrap_or(-1);
 
         // Create temporary directory for output
