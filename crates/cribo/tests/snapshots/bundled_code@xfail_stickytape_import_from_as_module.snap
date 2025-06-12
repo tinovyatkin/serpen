@@ -8,4 +8,5 @@ input_file: crates/cribo/tests/fixtures/bundling/xfail_stickytape_import_from_as
 
 message = "Hello"
 g = types.SimpleNamespace()
+g.message = message
 print(g.message)

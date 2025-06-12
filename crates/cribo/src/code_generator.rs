@@ -975,10 +975,12 @@ impl HybridStaticBundler {
 
         final_body.push(stmt.clone());
 
-        // Add reassignment if needed
+        // Add reassignment if needed, but skip if original and renamed are the same
         if let Some((original, renamed)) = pending_reassignment {
-            let reassign = self.create_reassignment(&original, &renamed);
-            final_body.push(reassign);
+            if original != renamed {
+                let reassign = self.create_reassignment(&original, &renamed);
+                final_body.push(reassign);
+            }
         }
     }
 
@@ -3030,11 +3032,21 @@ impl HybridStaticBundler {
         symbol_registry: &SymbolRegistry,
         symbol_renames: &mut FxIndexMap<String, FxIndexMap<String, String>>,
     ) {
+        log::debug!(
+            "collect_module_renames: Processing module '{}'",
+            module_name
+        );
+
         // Find the module ID for this module name
         let module_id = match graph.get_module_by_name(module_name) {
             Some(module) => module.module_id,
-            None => return,
+            None => {
+                log::warn!("Module '{}' not found in graph", module_name);
+                return;
+            }
         };
+
+        log::debug!("Module '{}' has ID: {:?}", module_name, module_id);
 
         // Get all renames for this module from semantic analysis
         let mut module_renames = FxIndexMap::default();
@@ -3053,11 +3065,28 @@ impl HybridStaticBundler {
                     symbol,
                     new_name
                 );
+            } else {
+                // Include non-renamed symbols too - they still need to be in the namespace
+                module_renames.insert(symbol.clone(), symbol.clone());
+                log::debug!(
+                    "Module '{}': symbol '{}' has no rename, using original name",
+                    module_name,
+                    symbol
+                );
             }
         }
 
         if !module_renames.is_empty() {
+            log::debug!(
+                "Inserting {} renames for module '{}' with key '{}': {:?}",
+                module_renames.len(),
+                module_name,
+                module_name,
+                module_renames.keys().collect::<Vec<_>>()
+            );
             symbol_renames.insert(module_name.to_string(), module_renames);
+        } else {
+            log::debug!("No renames to insert for module '{}'", module_name);
         }
     }
 
@@ -3587,11 +3616,23 @@ impl HybridStaticBundler {
         symbol_renames: &FxIndexMap<String, FxIndexMap<String, String>>,
         body: &mut Vec<Stmt>,
     ) {
+        log::debug!(
+            "add_symbols_to_namespace: local_name='{}', imported_name='{}', inlined_module_key='{}'",
+            local_name,
+            imported_name,
+            inlined_module_key
+        );
+        log::debug!(
+            "Available keys in symbol_renames: {:?}",
+            symbol_renames.keys().collect::<Vec<_>>()
+        );
+
         // Get the renames from the symbol registry
         if let Some(module_renames) = symbol_renames.get(inlined_module_key).or_else(|| {
             // Try without prefix
             if let Some(dot_pos) = inlined_module_key.find('.') {
                 let without_prefix = &inlined_module_key[dot_pos + 1..];
+                log::debug!("Trying without prefix: '{}'", without_prefix);
                 symbol_renames.get(without_prefix)
             } else {
                 None
@@ -3601,6 +3642,12 @@ impl HybridStaticBundler {
             for (original_name, renamed_name) in module_renames {
                 self.add_symbol_to_namespace(local_name, original_name, renamed_name, body);
             }
+        } else {
+            log::warn!(
+                "No renames found for module '{}' when creating namespace '{}'",
+                inlined_module_key,
+                local_name
+            );
         }
     }
 
@@ -3719,13 +3766,28 @@ impl HybridStaticBundler {
 
             // Special handling for different module types
             if parts.len() == 1 && import_from.level == 1 {
-                // Single-component modules need special handling
-                if current_module == "main" {
-                    // For true root-level modules like "main", level 1 imports are siblings
-                    parts.clear();
+                // For single-component modules with level 1 imports, we need to determine
+                // if this is a root-level module or a package __init__ file
+                // Check if this module is in the inlined_modules or module_registry to determine if it's a package
+                let is_package = self
+                    .bundled_modules
+                    .iter()
+                    .any(|m| m.starts_with(&format!("{}.", current_module)));
+
+                if is_package {
+                    // This is a package __init__ file - level 1 imports stay in the package
+                    log::debug!(
+                        "Module '{}' is a package, keeping parts for relative import",
+                        current_module
+                    );
+                    // Keep parts as is
                 } else {
-                    // For package __init__ files (e.g., "core"), level 1 stays in the package
-                    // Don't remove any parts - the import is relative to the package itself
+                    // This is a root-level module - level 1 imports are siblings
+                    log::debug!(
+                        "Module '{}' is root-level, clearing parts for relative import",
+                        current_module
+                    );
+                    parts.clear();
                 }
             } else {
                 // For modules with multiple components (e.g., "core.utils.helpers")
