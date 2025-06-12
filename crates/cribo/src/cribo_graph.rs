@@ -27,6 +27,7 @@ impl ModuleId {
         Self(id)
     }
 
+    /// Returns the underlying u32 value of the ModuleId
     pub fn as_u32(&self) -> u32 {
         self.0
     }
