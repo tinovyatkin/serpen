@@ -596,6 +596,21 @@ impl<'a> GlobalUsageVisitor<'a> {
         }
     }
 
+    fn track_global_assignments(&mut self, targets: &[Expr]) {
+        for target in targets {
+            if let Expr::Name(name) = target {
+                let name_str = name.id.to_string();
+                if self.info.global_declarations.contains_key(&name_str) {
+                    self.info
+                        .global_writes
+                        .entry(name_str)
+                        .or_default()
+                        .push(target.range());
+                }
+            }
+        }
+    }
+
     fn visit_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::FunctionDef(func) => {
@@ -636,19 +651,8 @@ impl<'a> GlobalUsageVisitor<'a> {
             }
             Stmt::Assign(assign) => {
                 // Check if we're assigning to a global
-                if let Some(ref _func_name) = self.current_function {
-                    for target in &assign.targets {
-                        if let Expr::Name(name) = target {
-                            let name_str = name.id.to_string();
-                            if self.info.global_declarations.contains_key(&name_str) {
-                                self.info
-                                    .global_writes
-                                    .entry(name_str)
-                                    .or_default()
-                                    .push(target.range());
-                            }
-                        }
-                    }
+                if self.current_function.is_some() {
+                    self.track_global_assignments(&assign.targets);
                 }
                 // Statement processed
             }

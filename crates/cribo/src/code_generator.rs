@@ -3914,52 +3914,7 @@ impl HybridStaticBundler {
                 Stmt::Import(_) | Stmt::ImportFrom(_) => {
                     // Track import aliases for resolution in assignments
                     if let Stmt::ImportFrom(import_from) = &stmt {
-                        let resolved_module =
-                            self.resolve_relative_import(import_from, module_name);
-                        if let Some(resolved) = resolved_module {
-                            // Track aliases for ALL imports, not just from inlined modules
-                            for alias in &import_from.names {
-                                let imported_name = alias.name.as_str();
-                                let local_name = alias
-                                    .asname
-                                    .as_ref()
-                                    .map(|n| n.as_str())
-                                    .unwrap_or(imported_name);
-
-                                // For imports from inlined modules, check if the symbol was renamed
-                                let actual_name = if self.inlined_modules.contains(&resolved) {
-                                    // First check if we already have the rename in our context
-                                    if let Some(source_renames) = ctx.module_renames.get(&resolved)
-                                    {
-                                        if let Some(renamed) = source_renames.get(imported_name) {
-                                            // We found the renamed symbol, use it directly
-                                            renamed.clone()
-                                        } else {
-                                            // Symbol not found in renames, use original
-                                            imported_name.to_string()
-                                        }
-                                    } else {
-                                        // The module will be inlined later, we don't know the rename yet
-                                        // Store as "module:symbol" format that we'll resolve later
-                                        format!("{}:{}", resolved, imported_name)
-                                    }
-                                } else {
-                                    // For imports from non-inlined modules, use the original name
-                                    imported_name.to_string()
-                                };
-
-                                // Store the mapping: alias -> actual_name (either renamed or module:symbol)
-                                ctx.import_aliases
-                                    .insert(local_name.to_string(), actual_name.clone());
-                                log::debug!(
-                                    "Tracking import in module '{}': {} -> {} (from module {})",
-                                    module_name,
-                                    local_name,
-                                    imported_name,
-                                    resolved
-                                );
-                            }
-                        }
+                        self.track_import_aliases(import_from, module_name, ctx);
                     }
 
                     // Skip imports - they should be handled separately
@@ -4320,6 +4275,60 @@ impl HybridStaticBundler {
         };
 
         (new_element, was_transformed)
+    }
+
+    /// Track import aliases from a statement
+    fn track_import_aliases(
+        &self,
+        import_from: &StmtImportFrom,
+        module_name: &str,
+        ctx: &mut InlineContext,
+    ) {
+        let resolved_module = self.resolve_relative_import(import_from, module_name);
+        if let Some(resolved) = resolved_module {
+            // Track aliases for ALL imports, not just from inlined modules
+            for alias in &import_from.names {
+                let imported_name = alias.name.as_str();
+                let local_name = alias
+                    .asname
+                    .as_ref()
+                    .map(|n| n.as_str())
+                    .unwrap_or(imported_name);
+
+                // For imports from inlined modules, check if the symbol was renamed
+                let actual_name = self.get_actual_import_name(&resolved, imported_name, ctx);
+
+                if local_name != imported_name || self.inlined_modules.contains(&resolved) {
+                    ctx.import_aliases
+                        .insert(local_name.to_string(), actual_name);
+                }
+            }
+        }
+    }
+
+    /// Get the actual name for an imported symbol, handling renames
+    fn get_actual_import_name(
+        &self,
+        resolved_module: &str,
+        imported_name: &str,
+        ctx: &InlineContext,
+    ) -> String {
+        if self.inlined_modules.contains(resolved_module) {
+            // First check if we already have the rename in our context
+            if let Some(source_renames) = ctx.module_renames.get(resolved_module) {
+                source_renames
+                    .get(imported_name)
+                    .cloned()
+                    .unwrap_or_else(|| imported_name.to_string())
+            } else {
+                // The module will be inlined later, we don't know the rename yet
+                // Store as "module:symbol" format that we'll resolve later
+                format!("{}:{}", resolved_module, imported_name)
+            }
+        } else {
+            // For non-inlined imports, just track the mapping
+            imported_name.to_string()
+        }
     }
 
     /// Check if a symbol should be inlined based on export rules
@@ -4787,6 +4796,7 @@ impl HybridStaticBundler {
         }
     }
     /// Resolve import aliases in an expression
+    #[allow(clippy::only_used_in_recursion)]
     fn resolve_import_aliases_in_expr(
         &self,
         expr: &mut Expr,

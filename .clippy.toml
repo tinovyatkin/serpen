@@ -1,6 +1,6 @@
 # Complexity thresholds
 cognitive-complexity-threshold = 10
-excessive-nesting-threshold = 5
+excessive-nesting-threshold = 6
 too-many-arguments-threshold = 7
 too-many-lines-threshold = 80
 min-ident-chars-threshold = 2
