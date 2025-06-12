@@ -247,6 +247,9 @@ pub struct HybridStaticBundler {
     module_exports: FxIndexMap<String, Option<Vec<String>>>,
     /// Lifted global declarations to add at module top level
     lifted_global_declarations: Vec<Stmt>,
+    /// Modules that are imported as namespaces (e.g., from package import module)
+    /// Maps module name to set of importing modules
+    namespace_imported_modules: FxIndexMap<String, FxIndexSet<String>>,
 }
 
 impl Default for HybridStaticBundler {
@@ -268,6 +271,7 @@ impl HybridStaticBundler {
             entry_path: None,
             module_exports: FxIndexMap::default(),
             lifted_global_declarations: Vec::new(),
+            namespace_imported_modules: FxIndexMap::default(),
         }
     }
 
@@ -681,12 +685,17 @@ impl HybridStaticBundler {
             self.find_directly_imported_modules(&modules, params.entry_module_name);
         log::debug!("Directly imported modules: {:?}", directly_imported_modules);
 
-        // Separate modules into inlinable and non-inlinable
+        // Find modules that are imported as namespaces (e.g., from models import base)
+        self.find_namespace_imported_modules(&modules);
+
+        // Separate modules into inlinable, wrapper, and namespace-hybrid modules
         let mut inlinable_modules = Vec::new();
         let mut wrapper_modules = Vec::new();
+        let mut namespace_hybrid_modules = Vec::new();
         let mut module_exports_map = FxIndexMap::default();
 
         for (module_name, ast, module_path, content_hash) in &modules {
+            log::info!("Processing module: '{}'", module_name);
             if module_name == params.entry_module_name {
                 continue;
             }
@@ -695,14 +704,38 @@ impl HybridStaticBundler {
             let module_exports = self.extract_all_exports(ast);
             module_exports_map.insert(module_name.clone(), module_exports.clone());
 
+            // Check if module is imported as a namespace
+            let is_namespace_imported = self.namespace_imported_modules.contains_key(module_name);
+
+            if is_namespace_imported {
+                log::info!(
+                    "Module '{}' is imported as namespace by: {:?}",
+                    module_name,
+                    self.namespace_imported_modules.get(module_name)
+                );
+            }
+
             // Check if module can be inlined
             // A module can only be inlined if:
             // 1. It has no side effects
             // 2. It's never imported directly (only from X import Y style)
+            // 3. It's not imported as a namespace
             let has_side_effects = Self::has_side_effects(ast);
             let is_directly_imported = directly_imported_modules.contains(module_name);
 
-            if has_side_effects || is_directly_imported {
+            if is_namespace_imported {
+                // Module is imported as namespace - use hybrid approach
+                log::debug!(
+                    "Module '{}' is imported as namespace - using hybrid inlining approach",
+                    module_name
+                );
+                namespace_hybrid_modules.push((
+                    module_name.clone(),
+                    ast.clone(),
+                    module_path.clone(),
+                    content_hash.clone(),
+                ));
+            } else if has_side_effects || is_directly_imported {
                 let reason = if has_side_effects {
                     "has side effects"
                 } else {
@@ -738,6 +771,13 @@ impl HybridStaticBundler {
             self.inlined_modules.insert(module_name.clone());
         }
 
+        // Track namespace hybrid modules as both bundled and inlined
+        // They need to be in inlined_modules for namespace creation to work
+        for (module_name, _, _, _) in &namespace_hybrid_modules {
+            self.bundled_modules.insert(module_name.clone());
+            self.inlined_modules.insert(module_name.clone());
+        }
+
         // First pass: normalize stdlib import aliases in ALL modules before collecting imports
         let mut modules_normalized = modules;
         for (_module_name, ast, _, _) in &mut modules_normalized {
@@ -752,6 +792,11 @@ impl HybridStaticBundler {
         // If we have wrapper modules, inject sys and types as stdlib dependencies
         if !wrapper_modules.is_empty() {
             self.add_stdlib_import("sys");
+            self.add_stdlib_import("types");
+        }
+
+        // If we have namespace imports, inject types as stdlib dependency
+        if !self.namespace_imported_modules.is_empty() {
             self.add_stdlib_import("types");
         }
 
@@ -778,6 +823,9 @@ impl HybridStaticBundler {
         // Check if we need sys import (for wrapper modules)
         let need_sys_import = !wrapper_modules.is_empty();
 
+        // Check if we need types import (for namespace imports)
+        let _need_types_import = !self.namespace_imported_modules.is_empty();
+
         // Get symbol renames from semantic analysis
         let symbol_registry = params.semantic_bundler.symbol_registry();
         let mut symbol_renames = FxIndexMap::default();
@@ -799,6 +847,26 @@ impl HybridStaticBundler {
 
         // Save wrapper modules for later processing
         let wrapper_modules_saved = wrapper_modules;
+
+        // Process namespace hybrid modules - inline their symbols with module-qualified names
+        for (module_name, ast, _module_path, _content_hash) in &namespace_hybrid_modules {
+            log::debug!("Processing namespace hybrid module '{}'", module_name);
+            let mut inlined_stmts = Vec::new();
+            let mut inline_ctx = InlineContext {
+                module_exports_map: &module_exports_map,
+                global_symbols: &mut global_symbols,
+                module_renames: &mut symbol_renames,
+                inlined_stmts: &mut inlined_stmts,
+                import_aliases: FxIndexMap::default(),
+            };
+            self.inline_module_for_namespace(module_name, ast.clone(), &mut inline_ctx)?;
+            log::debug!(
+                "Inlined {} statements from namespace hybrid module '{}'",
+                inlined_stmts.len(),
+                module_name
+            );
+            final_body.extend(inlined_stmts);
+        }
 
         // Inline the inlinable modules FIRST to populate symbol_renames
         // This ensures we know what symbols have been renamed before processing wrapper modules
@@ -3923,6 +3991,95 @@ impl HybridStaticBundler {
         }
     }
 
+    /// Find modules that are imported as namespaces (e.g., from models import base)
+    /// Returns a map from module name to set of importing modules
+    fn find_namespace_imported_modules(
+        &mut self,
+        modules: &[(String, ModModule, PathBuf, String)],
+    ) {
+        // Check all modules for namespace imports
+        for (importing_module, ast, _, _) in modules {
+            log::debug!(
+                "Checking module '{}' for namespace imports",
+                importing_module
+            );
+            for stmt in &ast.body {
+                self.collect_namespace_imports(stmt, modules, importing_module);
+            }
+        }
+
+        log::info!(
+            "Found {} namespace imported modules: {:?}",
+            self.namespace_imported_modules.len(),
+            self.namespace_imported_modules
+        );
+    }
+
+    /// Helper to collect namespace imports from a statement
+    fn collect_namespace_imports(
+        &mut self,
+        stmt: &Stmt,
+        modules: &[(String, ModModule, PathBuf, String)],
+        importing_module: &str,
+    ) {
+        if let Stmt::ImportFrom(import_from) = stmt {
+            if let Some(module) = &import_from.module {
+                let module_name = module.as_str();
+                // Check if any imported name is actually a submodule
+                for alias in &import_from.names {
+                    let imported_name = alias.name.as_str();
+                    let full_module_path = format!("{}.{}", module_name, imported_name);
+
+                    log::debug!(
+                        "Checking if '{}' (from {} import {}) is a bundled module in namespace import check",
+                        full_module_path,
+                        module_name,
+                        imported_name
+                    );
+
+                    // Check if this full path matches a bundled module
+                    let is_namespace_import = modules.iter().any(|(name, _, _, _)| {
+                        // Check exact match
+                        if name == &full_module_path {
+                            return true;
+                        }
+                        // Also check if the module name ends with the expected pattern
+                        // This handles cases where module names have prefixes like "tests.fixtures.bundling..."
+                        if name.ends_with(&full_module_path) {
+                            return true;
+                        }
+                        false
+                    });
+
+                    if is_namespace_import {
+                        // Find the actual module name that matched
+                        let actual_module_name = modules
+                            .iter()
+                            .find(|(name, _, _, _)| {
+                                name == &full_module_path || name.ends_with(&full_module_path)
+                            })
+                            .map(|(name, _, _, _)| name.clone())
+                            .unwrap_or(full_module_path.clone());
+
+                        // This is importing a submodule as a namespace
+                        log::info!(
+                            "Found namespace import: from {} import {} -> {} (actual: {}) in module {}",
+                            module_name,
+                            imported_name,
+                            full_module_path,
+                            actual_module_name,
+                            importing_module
+                        );
+                        self.namespace_imported_modules
+                            .entry(actual_module_name)
+                            .or_default()
+                            .insert(importing_module.to_string());
+                    }
+                }
+            }
+        }
+    }
+
     /// Collect all defined symbols in the global scope
     fn collect_global_symbols(
         &self,
@@ -4132,6 +4289,491 @@ impl HybridStaticBundler {
         }
 
         Ok(Vec::new()) // Statements are accumulated in ctx.inlined_stmts
+    }
+
+    /// Inline module symbols with module-qualified names for namespace imports
+    fn inline_module_for_namespace(
+        &mut self,
+        module_name: &str,
+        ast: ModModule,
+        ctx: &mut InlineContext,
+    ) -> Result<Vec<Stmt>> {
+        log::debug!("Inlining module '{}' for namespace import", module_name);
+        let mut module_renames = FxIndexMap::default();
+
+        // First pass: collect all symbol renames and track imports
+        for stmt in &ast.body {
+            match &stmt {
+                Stmt::Import(_) | Stmt::ImportFrom(_) => {
+                    // Track import aliases for resolution in the module
+                    if let Stmt::ImportFrom(import_from) = &stmt {
+                        self.track_import_aliases(import_from, module_name, ctx);
+                    }
+                    log::debug!(
+                        "Tracked import in namespace hybrid module '{}': {:?}",
+                        module_name,
+                        stmt
+                    );
+                }
+                Stmt::FunctionDef(func_def) => {
+                    let func_name = func_def.name.to_string();
+                    if !self.should_inline_symbol(&func_name, module_name, ctx.module_exports_map) {
+                        continue;
+                    }
+
+                    let module_suffix = module_name.cow_replace('.', "_").into_owned();
+                    let base_name = format!("{}_{}", func_name, module_suffix);
+                    let renamed = self.get_unique_name(&base_name, ctx.global_symbols);
+
+                    ctx.global_symbols.insert(renamed.clone());
+                    module_renames.insert(func_name.clone(), renamed);
+                }
+                Stmt::ClassDef(class_def) => {
+                    let class_name = class_def.name.to_string();
+                    if !self.should_inline_symbol(&class_name, module_name, ctx.module_exports_map)
+                    {
+                        continue;
+                    }
+
+                    let module_suffix = module_name.cow_replace('.', "_").into_owned();
+                    let base_name = format!("{}_{}", class_name, module_suffix);
+                    let renamed = self.get_unique_name(&base_name, ctx.global_symbols);
+
+                    ctx.global_symbols.insert(renamed.clone());
+                    module_renames.insert(class_name.clone(), renamed);
+                }
+                Stmt::Assign(assign) => {
+                    // Handle module-level assignments
+                    if assign.targets.len() == 1 {
+                        if let Expr::Name(name_expr) = &assign.targets[0] {
+                            let var_name = name_expr.id.to_string();
+                            if !self.should_inline_symbol(
+                                &var_name,
+                                module_name,
+                                ctx.module_exports_map,
+                            ) {
+                                continue;
+                            }
+
+                            // Check if this is a self-referential assignment (e.g., validate = validate)
+                            if let Expr::Name(value_name) = &*assign.value {
+                                if value_name.id.as_str() == var_name {
+                                    // This is a self-referential assignment
+                                    // Check if we already have a renamed version of this symbol
+                                    if let Some(existing_renamed) = module_renames.get(&var_name) {
+                                        // Create assignment with the renamed symbol
+                                        // e.g., validate_models_base = validate_models_base
+                                        log::debug!(
+                                            "Handling self-referential assignment '{}' in namespace module '{}' -> '{}' = '{}'",
+                                            var_name,
+                                            module_name,
+                                            existing_renamed,
+                                            existing_renamed
+                                        );
+                                        // Skip this - it's redundant after renaming
+                                        continue;
+                                    }
+                                }
+                            }
+
+                            // Generate module-qualified name
+                            let module_suffix = module_name.cow_replace('.', "_").into_owned();
+                            let base_name = format!("{}_{}", var_name, module_suffix);
+                            let renamed = self.get_unique_name(&base_name, ctx.global_symbols);
+
+                            log::debug!(
+                                "Collecting rename for variable '{}' from namespace module '{}' as '{}'",
+                                var_name,
+                                module_name,
+                                renamed
+                            );
+
+                            ctx.global_symbols.insert(renamed.clone());
+                            module_renames.insert(var_name.clone(), renamed);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Second pass: process statements with all renames available
+        for stmt in ast.body {
+            match &stmt {
+                Stmt::Import(_) | Stmt::ImportFrom(_) => {
+                    // Skip imports
+                }
+                Stmt::FunctionDef(func_def) => {
+                    let func_name = func_def.name.to_string();
+                    if let Some(renamed) = module_renames.get(&func_name) {
+                        log::debug!(
+                            "Inlining function '{}' from namespace module '{}' as '{}'",
+                            func_name,
+                            module_name,
+                            renamed
+                        );
+
+                        let mut renamed_func = func_def.clone();
+                        renamed_func.name = Identifier::new(renamed, TextRange::default());
+
+                        // Transform the function body to use renamed symbols and resolve imports
+                        for body_stmt in &mut renamed_func.body {
+                            self.resolve_import_aliases_in_stmt(body_stmt, &ctx.import_aliases);
+                        }
+                        self.transform_function_body_for_renames(
+                            &mut renamed_func,
+                            &module_renames,
+                        );
+
+                        ctx.inlined_stmts.push(Stmt::FunctionDef(renamed_func));
+                    }
+                }
+                Stmt::ClassDef(class_def) => {
+                    let class_name = class_def.name.to_string();
+                    if let Some(renamed) = module_renames.get(&class_name) {
+                        log::debug!(
+                            "Inlining class '{}' from namespace module '{}' as '{}'",
+                            class_name,
+                            module_name,
+                            renamed
+                        );
+
+                        let mut renamed_class = class_def.clone();
+                        renamed_class.name = Identifier::new(renamed, TextRange::default());
+
+                        // Transform the class body to use renamed symbols and resolve imports
+                        for body_stmt in &mut renamed_class.body {
+                            self.resolve_import_aliases_in_stmt(body_stmt, &ctx.import_aliases);
+                            self.transform_stmt_for_renames(body_stmt, &module_renames);
+                        }
+
+                        ctx.inlined_stmts.push(Stmt::ClassDef(renamed_class));
+                    }
+                }
+                Stmt::Assign(assign) => {
+                    if assign.targets.len() == 1 {
+                        if let Expr::Name(name_expr) = &assign.targets[0] {
+                            let var_name = name_expr.id.to_string();
+
+                            if !self.should_inline_symbol(
+                                &var_name,
+                                module_name,
+                                ctx.module_exports_map,
+                            ) {
+                                continue;
+                            }
+
+                            if module_renames.contains_key(&var_name) {
+                                // Check if this is a self-referential assignment
+                                if let Expr::Name(value_name) = &*assign.value {
+                                    if value_name.id.as_str() == var_name {
+                                        // Skip self-referential assignments
+                                        continue;
+                                    }
+                                }
+
+                                if let Some(renamed) = module_renames.get(&var_name) {
+                                    log::debug!(
+                                        "Inlining variable '{}' from namespace module '{}' as '{}'",
+                                        var_name,
+                                        module_name,
+                                        renamed
+                                    );
+
+                                    let mut renamed_assign = assign.clone();
+                                    renamed_assign.targets = vec![Expr::Name(ExprName {
+                                        id: renamed.clone().into(),
+                                        ctx: ExprContext::Store,
+                                        range: TextRange::default(),
+                                    })];
+
+                                    // Transform the value expression to use renamed symbols and resolve imports
+                                    let mut value = (*assign.value).clone();
+                                    self.resolve_import_aliases_in_expr(
+                                        &mut value,
+                                        &ctx.import_aliases,
+                                    );
+                                    self.rename_references_in_expr(&mut value, &module_renames);
+                                    renamed_assign.value = Box::new(value);
+
+                                    ctx.inlined_stmts.push(Stmt::Assign(renamed_assign));
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    log::debug!(
+                        "Skipping statement type in namespace module '{}' during second pass",
+                        module_name
+                    );
+                }
+            }
+        }
+
+        // Store the renames for this module
+        if !module_renames.is_empty() {
+            ctx.module_renames
+                .insert(module_name.to_string(), module_renames);
+        }
+
+        Ok(Vec::new()) // Statements are accumulated in ctx.inlined_stmts
+    }
+
+    /// Transform a function body to use renamed symbols
+    fn transform_function_body_for_renames(
+        &self,
+        func_def: &mut StmtFunctionDef,
+        module_renames: &FxIndexMap<String, String>,
+    ) {
+        for stmt in &mut func_def.body {
+            self.transform_stmt_for_renames(stmt, module_renames);
+        }
+    }
+
+    /// Transform a statement to use renamed symbols
+    fn transform_stmt_for_renames(
+        &self,
+        stmt: &mut Stmt,
+        module_renames: &FxIndexMap<String, String>,
+    ) {
+        match stmt {
+            Stmt::Expr(expr_stmt) => {
+                self.rename_references_in_expr(&mut expr_stmt.value, module_renames);
+            }
+            Stmt::Assign(assign) => {
+                // Rename assignment targets if they're renamed globals
+                for target in &mut assign.targets {
+                    if let Expr::Name(name_expr) = target {
+                        if let Some(renamed) = module_renames.get(name_expr.id.as_str()) {
+                            name_expr.id = renamed.clone().into();
+                        }
+                    }
+                }
+                // Also rename values (RHS)
+                self.rename_references_in_expr(&mut assign.value, module_renames);
+            }
+            Stmt::Return(ret_stmt) => {
+                if let Some(value) = &mut ret_stmt.value {
+                    self.rename_references_in_expr(value, module_renames);
+                }
+            }
+            Stmt::If(if_stmt) => {
+                self.rename_references_in_expr(&mut if_stmt.test, module_renames);
+                for body_stmt in &mut if_stmt.body {
+                    self.transform_stmt_for_renames(body_stmt, module_renames);
+                }
+                for elif_else_clause in &mut if_stmt.elif_else_clauses {
+                    if let Some(test_expr) = &mut elif_else_clause.test {
+                        self.rename_references_in_expr(test_expr, module_renames);
+                    }
+                    for body_stmt in &mut elif_else_clause.body {
+                        self.transform_stmt_for_renames(body_stmt, module_renames);
+                    }
+                }
+            }
+            Stmt::For(for_stmt) => {
+                self.rename_references_in_expr(&mut for_stmt.iter, module_renames);
+                for body_stmt in &mut for_stmt.body {
+                    self.transform_stmt_for_renames(body_stmt, module_renames);
+                }
+                for orelse_stmt in &mut for_stmt.orelse {
+                    self.transform_stmt_for_renames(orelse_stmt, module_renames);
+                }
+            }
+            Stmt::While(while_stmt) => {
+                self.rename_references_in_expr(&mut while_stmt.test, module_renames);
+                for body_stmt in &mut while_stmt.body {
+                    self.transform_stmt_for_renames(body_stmt, module_renames);
+                }
+                for orelse_stmt in &mut while_stmt.orelse {
+                    self.transform_stmt_for_renames(orelse_stmt, module_renames);
+                }
+            }
+            Stmt::FunctionDef(inner_func) => {
+                // Recursively transform nested functions
+                self.transform_function_body_for_renames(inner_func, module_renames);
+            }
+            Stmt::ClassDef(class_def) => {
+                // Transform methods in the class
+                for body_stmt in &mut class_def.body {
+                    self.transform_stmt_for_renames(body_stmt, module_renames);
+                }
+            }
+            Stmt::Global(global_stmt) => {
+                // Rename global variable names
+                for name in &mut global_stmt.names {
+                    if let Some(renamed) = module_renames.get(name.as_str()) {
+                        *name = Identifier::new(renamed, TextRange::default());
+                    }
+                }
+            }
+            // Add more cases as needed
+            _ => {}
+        }
+    }
+
+    /// Rename references in an expression based on module renames
+    fn rename_references_in_expr(
+        &self,
+        expr: &mut Expr,
+        module_renames: &FxIndexMap<String, String>,
+    ) {
+        match expr {
+            Expr::Name(name_expr) => {
+                if let Some(renamed) = module_renames.get(name_expr.id.as_str()) {
+                    name_expr.id = renamed.clone().into();
+                }
+            }
+            Expr::Attribute(attr_expr) => {
+                self.rename_references_in_expr(&mut attr_expr.value, module_renames);
+            }
+            Expr::Call(call_expr) => {
+                self.rename_references_in_expr(&mut call_expr.func, module_renames);
+                for arg in &mut call_expr.arguments.args {
+                    self.rename_references_in_expr(arg, module_renames);
+                }
+                for keyword in &mut call_expr.arguments.keywords {
+                    self.rename_references_in_expr(&mut keyword.value, module_renames);
+                }
+            }
+            Expr::FString(fstring) => {
+                // Handle FString transformation
+                let fstring_range = fstring.range;
+                let mut transformed_elements = Vec::new();
+                let mut any_transformed = false;
+
+                for element in fstring.value.elements() {
+                    match element {
+                        FStringElement::Literal(lit_elem) => {
+                            transformed_elements.push(FStringElement::Literal(lit_elem.clone()));
+                        }
+                        FStringElement::Expression(expr_elem) => {
+                            let mut new_expr = expr_elem.expression.clone();
+                            self.rename_references_in_expr(&mut new_expr, module_renames);
+
+                            let new_element = FStringExpressionElement {
+                                expression: new_expr,
+                                debug_text: expr_elem.debug_text.clone(),
+                                conversion: expr_elem.conversion,
+                                format_spec: expr_elem.format_spec.clone(),
+                                range: expr_elem.range,
+                            };
+                            transformed_elements.push(FStringElement::Expression(new_element));
+                            any_transformed = true;
+                        }
+                    }
+                }
+
+                if any_transformed {
+                    let new_fstring = FString {
+                        elements: FStringElements::from(transformed_elements),
+                        range: TextRange::default(),
+                        flags: FStringFlags::empty(),
+                    };
+
+                    let new_value = FStringValue::single(new_fstring);
+
+                    *expr = Expr::FString(ExprFString {
+                        value: new_value,
+                        range: fstring_range,
+                    });
+                }
+            }
+            Expr::BinOp(binop) => {
+                self.rename_references_in_expr(&mut binop.left, module_renames);
+                self.rename_references_in_expr(&mut binop.right, module_renames);
+            }
+            Expr::Compare(compare) => {
+                self.rename_references_in_expr(&mut compare.left, module_renames);
+                for comparator in &mut compare.comparators {
+                    self.rename_references_in_expr(comparator, module_renames);
+                }
+            }
+            Expr::BoolOp(boolop) => {
+                for value in &mut boolop.values {
+                    self.rename_references_in_expr(value, module_renames);
+                }
+            }
+            Expr::UnaryOp(unaryop) => {
+                self.rename_references_in_expr(&mut unaryop.operand, module_renames);
+            }
+            Expr::If(ifexp) => {
+                self.rename_references_in_expr(&mut ifexp.test, module_renames);
+                self.rename_references_in_expr(&mut ifexp.body, module_renames);
+                self.rename_references_in_expr(&mut ifexp.orelse, module_renames);
+            }
+            Expr::Dict(dict_expr) => {
+                for item in &mut dict_expr.items {
+                    if let Some(key) = &mut item.key {
+                        self.rename_references_in_expr(key, module_renames);
+                    }
+                    self.rename_references_in_expr(&mut item.value, module_renames);
+                }
+            }
+            Expr::List(list_expr) => {
+                for elem in &mut list_expr.elts {
+                    self.rename_references_in_expr(elem, module_renames);
+                }
+            }
+            Expr::Tuple(tuple_expr) => {
+                for elem in &mut tuple_expr.elts {
+                    self.rename_references_in_expr(elem, module_renames);
+                }
+            }
+            Expr::Set(set_expr) => {
+                for elem in &mut set_expr.elts {
+                    self.rename_references_in_expr(elem, module_renames);
+                }
+            }
+            Expr::Subscript(subscript) => {
+                self.rename_references_in_expr(&mut subscript.value, module_renames);
+                self.rename_references_in_expr(&mut subscript.slice, module_renames);
+            }
+            Expr::Lambda(lambda) => {
+                // Don't rename parameters, but do rename body
+                self.rename_references_in_expr(&mut lambda.body, module_renames);
+            }
+            Expr::ListComp(comp) => {
+                self.rename_references_in_expr(&mut comp.elt, module_renames);
+                for generator in &mut comp.generators {
+                    self.rename_references_in_expr(&mut generator.iter, module_renames);
+                    for if_clause in &mut generator.ifs {
+                        self.rename_references_in_expr(if_clause, module_renames);
+                    }
+                }
+            }
+            Expr::SetComp(comp) => {
+                self.rename_references_in_expr(&mut comp.elt, module_renames);
+                for generator in &mut comp.generators {
+                    self.rename_references_in_expr(&mut generator.iter, module_renames);
+                    for if_clause in &mut generator.ifs {
+                        self.rename_references_in_expr(if_clause, module_renames);
+                    }
+                }
+            }
+            Expr::Generator(comp) => {
+                self.rename_references_in_expr(&mut comp.elt, module_renames);
+                for generator in &mut comp.generators {
+                    self.rename_references_in_expr(&mut generator.iter, module_renames);
+                    for if_clause in &mut generator.ifs {
+                        self.rename_references_in_expr(if_clause, module_renames);
+                    }
+                }
+            }
+            Expr::DictComp(comp) => {
+                self.rename_references_in_expr(&mut comp.key, module_renames);
+                self.rename_references_in_expr(&mut comp.value, module_renames);
+                for generator in &mut comp.generators {
+                    self.rename_references_in_expr(&mut generator.iter, module_renames);
+                    for if_clause in &mut generator.ifs {
+                        self.rename_references_in_expr(if_clause, module_renames);
+                    }
+                }
+            }
+            // Add more cases as needed
+            _ => {}
+        }
     }
 
     /// Process import statements in wrapper modules

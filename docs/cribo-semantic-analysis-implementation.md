@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the semantic analysis implementation in Cribo, which provides advanced Python code understanding capabilities for the bundling process. The semantic analysis system enables proper handling of variable scoping, name resolution, and module-level globals lifting.
+This document describes the semantic analysis implementation in Cribo, which provides advanced Python code understanding capabilities for the bundling process. The semantic analysis system enables proper handling of variable scoping, name resolution, module-level globals lifting, and namespace imports resolution.
 
 ## Architecture
 
@@ -60,7 +60,69 @@ struct GlobalUsageVisitor<'a> {
 
 ### Integration with Code Generation
 
-#### 1. GlobalsLifter (`code_generator.rs`)
+#### 1. Namespace Imports Handler (`code_generator.rs`)
+
+The code generator now includes sophisticated namespace import detection and handling:
+
+```rust
+struct PythonCodeGenerator {
+    namespace_imported_modules: FxIndexMap<String, FxIndexSet<String>>,
+    // ... other fields
+}
+```
+
+**Namespace Import Detection:**
+
+The system identifies when modules are imported as namespaces (e.g., `from package import module`):
+
+```rust
+fn find_namespace_imported_modules(&mut self, module_asts: &FxIndexMap<String, ParsedModule>) {
+    for (module_name, parsed_module) in module_asts {
+        let namespace_imports = self.collect_namespace_imports(&parsed_module.ast);
+
+        for imported_module in namespace_imports {
+            self.namespace_imported_modules
+                .entry(imported_module)
+                .or_default()
+                .insert(module_name.clone());
+        }
+    }
+}
+```
+
+**Hybrid Inlining Approach:**
+
+When a module is imported as a namespace, it uses a hybrid approach that combines inlining with namespace preservation:
+
+```rust
+fn inline_module_for_namespace(
+    &mut self,
+    module_name: &str,
+    ast: ModModule,
+    ctx: &mut InlineContext,
+) -> Result<Vec<Stmt>>
+```
+
+**Example Transformation:**
+
+```python
+# Original: models/base.py
+class BaseModel:
+    pass
+
+# Original: main.py
+from models import base
+model = base.BaseModel()
+
+# After transformation:
+class BaseModel_models_base:
+    pass
+base = types.SimpleNamespace()
+base.BaseModel = BaseModel_models_base
+model = base.BaseModel()
+```
+
+#### 2. GlobalsLifter (`code_generator.rs`)
 
 The `GlobalsLifter` transforms module-level variables that are referenced with global statements:
 
@@ -137,13 +199,32 @@ The system handles conflicts between:
 - Module-level variables across different modules
 - Function/class names that might clash
 - Variables referenced in global statements
+- Symbols from namespace-imported modules
 
 **Resolution Strategy:**
 
 1. **Detection**: Identify all symbols that could conflict
-2. **Renaming**: Generate unique names using content hashing
+2. **Renaming**: Generate unique names using module-qualified suffixes
 3. **Mapping**: Maintain registry of original → renamed mappings
 4. **Application**: Apply renames consistently throughout the AST
+
+**Namespace Import Symbol Renaming:**
+
+For namespace imports, symbols get module-qualified names:
+
+```python
+# Original: helpers.py
+def format_data(data):
+    return f"Formatted: {data}"
+
+# When imported as namespace: from utils import helpers
+# Becomes:
+def format_data_utils_helpers(data):
+    return f"Formatted: {data}"
+
+helpers = types.SimpleNamespace()
+helpers.format_data = format_data_utils_helpers
+```
 
 #### 2. Scoping Rules
 
@@ -170,13 +251,20 @@ print(Logger)  # This references the renamed Logger_1
 
 1. **Parse Module**: Use Ruff's parser to create AST
 2. **Build Semantic Model**: Create bindings and scope information
-3. **Analyze Global Usage**:
+3. **Detect Namespace Imports**:
+   ```rust
+   self.find_namespace_imported_modules(&modules);
+   ```
+4. **Analyze Global Usage**:
    ```rust
    let mut visitor = GlobalUsageVisitor::new(&mut global_info);
    visitor.visit_body(&module.body);
    ```
-4. **Register Symbols**: Track all module-level definitions
-5. **Apply Transformations**: Lift globals and resolve conflicts
+5. **Register Symbols**: Track all module-level definitions
+6. **Apply Transformations**:
+   - Lift globals and resolve conflicts
+   - Apply namespace hybrid inlining for namespace imports
+   - Rename symbols with module-qualified names
 
 ### Test Framework Integration
 
@@ -217,11 +305,20 @@ assert_eq!(
    - Cross-module globals usage
    - Relative imports with global declarations
    - Module-level imports that shadow globals
+   - Namespace imports (`from package import module`)
+   - Re-exports in `__init__.py` files
 
 3. **Special Function Handling**:
    - `globals()` calls in various contexts
    - Dynamic attribute access on module objects
    - Comprehensions and lambda functions
+   - F-strings with renamed symbol references
+
+4. **Namespace Import Edge Cases**:
+   - Modules imported both directly and as namespaces
+   - Circular dependencies with namespace imports
+   - Namespace imports with aliasing
+   - Global variables in namespace-imported modules
 
 ## Performance Considerations
 
@@ -231,17 +328,20 @@ assert_eq!(
 
 ## Future Enhancements
 
-1. **F-string Transformation**: Handle f-strings that reference lifted globals
-2. **Enhanced Diagnostics**: Better error messages for global conflicts
-3. **Optimization**: Minimize number of lifted variables
+1. **Enhanced Diagnostics**: Better error messages for global conflicts and namespace import issues
+2. **Optimization**: Minimize number of lifted variables and namespace objects
+3. **Dynamic Import Support**: Handle dynamic imports with namespace preservation
 
 ## Configuration
 
-The globals lifting feature is automatic and requires no configuration. It activates when:
+The semantic analysis features are automatic and require no configuration. They activate when:
 
 - Module-level variables are defined
 - Global statements reference those variables
+- Modules are imported as namespaces (`from package import module`)
 - The bundler needs to maintain correct Python semantics
+
+The namespace imports feature specifically activates when detecting `ImportFrom` statements that import module names rather than specific symbols.
 
 ## Testing
 
