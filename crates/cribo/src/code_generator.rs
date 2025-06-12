@@ -2744,74 +2744,20 @@ impl HybridStaticBundler {
                     .contains(&func_def.name.to_string())
                 {
                     // Collect globals declared in this function
-                    let mut function_globals = FxIndexSet::default();
-
-                    // First pass: collect all global declarations in this function
-                    for body_stmt in &func_def.body {
-                        if let Stmt::Global(global_stmt) = body_stmt {
-                            for name in &global_stmt.names {
-                                function_globals.insert(name.to_string());
-                            }
-                        }
-                    }
+                    let function_globals = self.collect_function_globals(&func_def.body);
 
                     // Create initialization statements for lifted globals
-                    let mut init_stmts = Vec::new();
-                    for global_name in &function_globals {
-                        if let Some(lifted_name) = lifted_names.get(global_name) {
-                            // Add: local_var = __cribo_module_var at the beginning
-                            init_stmts.push(Stmt::Assign(StmtAssign {
-                                targets: vec![Expr::Name(ExprName {
-                                    id: global_name.clone().into(),
-                                    ctx: ExprContext::Store,
-                                    range: TextRange::default(),
-                                })],
-                                value: Box::new(Expr::Name(ExprName {
-                                    id: lifted_name.clone().into(),
-                                    ctx: ExprContext::Load,
-                                    range: TextRange::default(),
-                                })),
-                                range: TextRange::default(),
-                            }));
-                        }
-                    }
+                    let init_stmts =
+                        self.create_global_init_statements(&function_globals, lifted_names);
 
-                    // Second pass: transform statements with the function context
-                    let mut new_body = Vec::new();
-                    let mut added_init = false;
-
-                    for body_stmt in &mut func_def.body {
-                        match body_stmt {
-                            Stmt::Global(global_stmt) => {
-                                // Rewrite global statement to use lifted names
-                                for name in &mut global_stmt.names {
-                                    if let Some(lifted_name) = lifted_names.get(name.as_str()) {
-                                        *name = Identifier::new(lifted_name, TextRange::default());
-                                    }
-                                }
-                                new_body.push(body_stmt.clone());
-
-                                // Add initialization statements after global declarations
-                                if !added_init && !init_stmts.is_empty() {
-                                    new_body.extend(init_stmts.clone());
-                                    added_init = true;
-                                }
-                            }
-                            _ => {
-                                // Transform other statements recursively with function context
-                                self.transform_stmt_for_lifted_globals(
-                                    body_stmt,
-                                    lifted_names,
-                                    global_info,
-                                    Some(&function_globals),
-                                );
-                                new_body.push(body_stmt.clone());
-                            }
-                        }
-                    }
-
-                    // Replace function body with new body
-                    func_def.body = new_body;
+                    // Transform the function body
+                    self.transform_function_body_for_lifted_globals(
+                        func_def,
+                        lifted_names,
+                        global_info,
+                        &function_globals,
+                        init_stmts,
+                    );
                 }
             }
             Stmt::Assign(assign) => {
@@ -4251,6 +4197,93 @@ impl HybridStaticBundler {
             // Check if any imported symbols should be re-exported as module attributes
             self.add_imported_symbol_attributes(&stmt, ctx.module_name, body);
         }
+    }
+
+    /// Collect global declarations from a function body
+    fn collect_function_globals(&self, body: &[Stmt]) -> FxIndexSet<String> {
+        let mut function_globals = FxIndexSet::default();
+        for stmt in body {
+            if let Stmt::Global(global_stmt) = stmt {
+                for name in &global_stmt.names {
+                    function_globals.insert(name.to_string());
+                }
+            }
+        }
+        function_globals
+    }
+
+    /// Create initialization statements for lifted globals
+    fn create_global_init_statements(
+        &self,
+        function_globals: &FxIndexSet<String>,
+        lifted_names: &FxIndexMap<String, String>,
+    ) -> Vec<Stmt> {
+        let mut init_stmts = Vec::new();
+        for global_name in function_globals {
+            if let Some(lifted_name) = lifted_names.get(global_name) {
+                // Add: local_var = __cribo_module_var at the beginning
+                init_stmts.push(Stmt::Assign(StmtAssign {
+                    targets: vec![Expr::Name(ExprName {
+                        id: global_name.clone().into(),
+                        ctx: ExprContext::Store,
+                        range: TextRange::default(),
+                    })],
+                    value: Box::new(Expr::Name(ExprName {
+                        id: lifted_name.clone().into(),
+                        ctx: ExprContext::Load,
+                        range: TextRange::default(),
+                    })),
+                    range: TextRange::default(),
+                }));
+            }
+        }
+        init_stmts
+    }
+
+    /// Transform function body for lifted globals
+    fn transform_function_body_for_lifted_globals(
+        &self,
+        func_def: &mut StmtFunctionDef,
+        lifted_names: &FxIndexMap<String, String>,
+        global_info: &ModuleGlobalInfo,
+        function_globals: &FxIndexSet<String>,
+        init_stmts: Vec<Stmt>,
+    ) {
+        let mut new_body = Vec::new();
+        let mut added_init = false;
+
+        for body_stmt in &mut func_def.body {
+            match body_stmt {
+                Stmt::Global(global_stmt) => {
+                    // Rewrite global statement to use lifted names
+                    for name in &mut global_stmt.names {
+                        if let Some(lifted_name) = lifted_names.get(name.as_str()) {
+                            *name = Identifier::new(lifted_name, TextRange::default());
+                        }
+                    }
+                    new_body.push(body_stmt.clone());
+
+                    // Add initialization statements after global declarations
+                    if !added_init && !init_stmts.is_empty() {
+                        new_body.extend(init_stmts.clone());
+                        added_init = true;
+                    }
+                }
+                _ => {
+                    // Transform other statements recursively with function context
+                    self.transform_stmt_for_lifted_globals(
+                        body_stmt,
+                        lifted_names,
+                        global_info,
+                        Some(function_globals),
+                    );
+                    new_body.push(body_stmt.clone());
+                }
+            }
+        }
+
+        // Replace function body with new body
+        func_def.body = new_body;
     }
 
     /// Check if a symbol should be inlined based on export rules
