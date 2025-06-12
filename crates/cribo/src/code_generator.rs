@@ -3587,30 +3587,8 @@ impl HybridStaticBundler {
         symbol_renames: &FxIndexMap<String, FxIndexMap<String, String>>,
         body: &mut Vec<Stmt>,
     ) {
-        log::debug!(
-            "Wrapper: Checking imported_name='{}', inlined_module_key='{}' for base module symbols",
-            imported_name,
-            inlined_module_key
-        );
-
-        // Special handling for known modules
-        if imported_name == "base"
-            && (inlined_module_key == "models.base" || inlined_module_key.ends_with(".models.base"))
-        {
-            // Add known symbols from the base module
-            let base_symbols = vec![
-                ("result", "result_2"),
-                ("process", "process_3"),
-                ("validate", "validate_3"),
-                ("Logger", "Logger_2"),
-                ("connect", "connect_1"),
-                ("initialize", "initialize"), // Non-renamed symbol
-            ];
-
-            for (original_name, target_name) in base_symbols {
-                self.add_symbol_to_namespace(local_name, original_name, target_name, body);
-            }
-        } else if let Some(module_renames) = symbol_renames.get(inlined_module_key).or_else(|| {
+        // Get the renames from the symbol registry
+        if let Some(module_renames) = symbol_renames.get(inlined_module_key).or_else(|| {
             // Try without prefix
             if let Some(dot_pos) = inlined_module_key.find('.') {
                 let without_prefix = &inlined_module_key[dot_pos + 1..];
@@ -4408,48 +4386,8 @@ impl HybridStaticBundler {
                 }));
 
                 // Now add all symbols from the inlined module to the namespace
-                // For the base module, we need to add these known symbols
-                // TODO: This should ideally come from semantic analysis of what symbols the module exports
-                log::debug!(
-                    "Checking module_name='{}', imported_name='{}', full_module_path='{}' for base module symbols",
-                    module_name,
-                    imported_name,
-                    full_module_path
-                );
-                if (module_name == "models" && imported_name == "base")
-                    || full_module_path == "models.base"
-                {
-                    // Add known symbols from the base module
-                    let base_symbols = vec![
-                        ("result", "result_2"),
-                        ("process", "process_3"),
-                        ("validate", "validate_3"),
-                        ("Logger", "Logger_2"),
-                        ("connect", "connect_1"),
-                        ("initialize", "initialize"), // Non-renamed symbol
-                    ];
-
-                    for (original_name, target_name) in base_symbols {
-                        assignments.push(Stmt::Assign(StmtAssign {
-                            targets: vec![Expr::Attribute(ExprAttribute {
-                                value: Box::new(Expr::Name(ExprName {
-                                    id: local_name.as_str().into(),
-                                    ctx: ExprContext::Load,
-                                    range: TextRange::default(),
-                                })),
-                                attr: Identifier::new(original_name, TextRange::default()),
-                                ctx: ExprContext::Store,
-                                range: TextRange::default(),
-                            })],
-                            value: Box::new(Expr::Name(ExprName {
-                                id: target_name.into(),
-                                ctx: ExprContext::Load,
-                                range: TextRange::default(),
-                            })),
-                            range: TextRange::default(),
-                        }));
-                    }
-                } else if let Some(module_renames) = symbol_renames.get(&full_module_path) {
+                // This should come from semantic analysis of what symbols the module exports
+                if let Some(module_renames) = symbol_renames.get(&full_module_path) {
                     // Add each symbol from the module to the namespace
                     for (original_name, renamed_name) in module_renames {
                         // base.original_name = renamed_name
