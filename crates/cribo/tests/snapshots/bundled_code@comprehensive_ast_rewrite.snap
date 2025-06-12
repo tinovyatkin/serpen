@@ -89,6 +89,9 @@ def shadow_test_models_base(validate: Any=None, process: Any=None, Logger: Any=N
     logger = Logger_models_base("shadow_test")
     shadows.update({"global_validate_result": validation_result, "global_process_result": process_result, "global_logger_source": logger.source})
     return shadows
+process_3 = "models_process_string"
+validate_3 = "models_validate_string"
+connection_2 = "models_connection_string"
 """\nUser model with extensive naming conflicts across the project\n"""
 result_3 = {"model": "user"}
 connection_3 = None
@@ -213,48 +216,10 @@ process_4 = process_4
 validate_4 = validate_4
 User_2 = User_2
 Logger_2 = Logger_2
-"""\nDatabase connection module with naming conflicts\n"""
-result_8 = []
-connection_5 = None
-class Connection_6:
-    """Database connection class"""
-
-    def __init__(self, host="localhost", port=5432):
-        self.host = host
-        self.port = port
-        self.connected = False
-        self.result = None
-        self.process = self._internal_process
-
-    def _internal_process(self, query):
-        return f"db_internal: {query}"
-
-    def connect(self):
-        global connection_5
-        self.connected = True
-        connection_5 = self
-        return f"Connected to {self.host}:{self.port}"
-def process_7(data):
-    """Database process function - conflicts with other process functions"""
-    global result_8
-    validated = validate_6(data)
-    user_result = process_user(data)
-    processed = {"db_process": True, "data": validated, "user_processing": user_result, "timestamp": "2024-01-01"}
-    result_8.append(processed)
-    return f"db_processed: {data}"
-def validate_7(data):
-    """Database validate function - another conflict"""
-    if not data:
-        return False
-    return f"db_valid: {data}"
-def connect_5():
-    """Module-level connect function"""
-    global connection_5
-    if connection_5 is None:
-        connection_5 = Connection_6()
-    return connection_5.connect()
-process_7 = process_7
-User_5 = "database_user_type"
+connection_4 = "auth_connection_string"
+Logger_3 = "services_logger_string"
+result_4 = {"services": "initialized"}
+Connection_4 = "utils_connection_type"
 """\nUtility helpers module with extensive naming conflicts\n"""
 result_6 = 0
 User_4 = "helper_user_string"
@@ -320,13 +285,48 @@ def process_with_conflicts(data: Any, User: str="param_user", result: int=100, L
     return local_result
 validate_6 = validate_6
 process_6 = process_6
-Connection_4 = "utils_connection_type"
-connection_4 = "auth_connection_string"
-process_3 = "models_process_string"
-validate_3 = "models_validate_string"
-connection_2 = "models_connection_string"
-Logger_3 = "services_logger_string"
-result_4 = {"services": "initialized"}
+User_5 = "database_user_type"
+"""\nDatabase connection module with naming conflicts\n"""
+result_8 = []
+connection_5 = None
+class Connection_6:
+    """Database connection class"""
+
+    def __init__(self, host="localhost", port=5432):
+        self.host = host
+        self.port = port
+        self.connected = False
+        self.result = None
+        self.process = self._internal_process
+
+    def _internal_process(self, query):
+        return f"db_internal: {query}"
+
+    def connect(self):
+        global connection_5
+        self.connected = True
+        connection_5 = self
+        return f"Connected to {self.host}:{self.port}"
+def process_7(data):
+    """Database process function - conflicts with other process functions"""
+    global result_8
+    validated = validate_6(data)
+    user_result = process_user(data)
+    processed = {"db_process": True, "data": validated, "user_processing": user_result, "timestamp": "2024-01-01"}
+    result_8.append(processed)
+    return f"db_processed: {data}"
+def validate_7(data):
+    """Database validate function - another conflict"""
+    if not data:
+        return False
+    return f"db_valid: {data}"
+def connect_5():
+    """Module-level connect function"""
+    global connection_5
+    if connection_5 is None:
+        connection_5 = Connection_6()
+    return connection_5.connect()
+process_7 = process_7
 __cribo_services_auth_manager_result = None
 def __cribo_init___cribo_49b92c_services_auth_manager():
     if '__cribo_49b92c_services_auth_manager' in sys.modules:

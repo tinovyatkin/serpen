@@ -326,6 +326,18 @@ impl HybridStaticBundler {
         }
     }
 
+    /// Find matching module name from the modules list (for namespace imports)
+    fn find_matching_module_name_namespace(
+        modules: &[(String, ModModule, PathBuf, String)],
+        full_module_path: &str,
+    ) -> String {
+        modules
+            .iter()
+            .find(|(name, _, _, _)| name == full_module_path || name.ends_with(full_module_path))
+            .map(|(name, _, _, _)| name.clone())
+            .unwrap_or_else(|| full_module_path.to_string())
+    }
+
     /// Check if a module AST has side effects (executable code at top level)
     /// Returns true if the module has side effects beyond simple definitions
     pub fn has_side_effects(ast: &ModModule) -> bool {
@@ -4095,13 +4107,8 @@ impl HybridStaticBundler {
 
                     if is_namespace_import {
                         // Find the actual module name that matched
-                        let actual_module_name = modules
-                            .iter()
-                            .find(|(name, _, _, _)| {
-                                name == &full_module_path || name.ends_with(&full_module_path)
-                            })
-                            .map(|(name, _, _, _)| name.clone())
-                            .unwrap_or(full_module_path.clone());
+                        let actual_module_name =
+                            Self::find_matching_module_name_namespace(modules, &full_module_path);
 
                         // This is importing a submodule as a namespace
                         log::info!(

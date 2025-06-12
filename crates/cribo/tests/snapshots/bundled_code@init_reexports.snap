@@ -16,12 +16,10 @@ class Config_mypackage_config:
         self.DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
         self.LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 config_mypackage_config = Config_mypackage_config()
-"""Data processing module."""
-def process_data(data):
-    """Process the input data."""
-    processed = data.copy()
-    processed["processed"] = True
-    return processed
+"""Utils subpackage with re-exports."""
+"""Constants module."""
+MAX_ITEMS = 100
+DEFAULT_VALUE = "default"
 """Helper utilities."""
 def helper_function(data):
     """Helper function for processing data."""
@@ -30,10 +28,12 @@ def helper_function(data):
 def format_data(data):
     """Format the processed data."""
     return f"Formatted: {data}"
-"""Constants module."""
-MAX_ITEMS = 100
-DEFAULT_VALUE = "default"
-"""Utils subpackage with re-exports."""
+"""Data processing module."""
+def process_data(data):
+    """Process the input data."""
+    processed = data.copy()
+    processed["processed"] = True
+    return processed
 def __cribo_init___cribo_a81151_mypackage():
     if '__cribo_a81151_mypackage' in sys.modules:
         return sys.modules['__cribo_a81151_mypackage']
