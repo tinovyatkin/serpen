@@ -29,7 +29,6 @@ pub struct SemanticBundler {
 /// Semantic model builder that properly populates bindings using visitor pattern
 struct SemanticModelBuilder<'a> {
     semantic: SemanticModel<'a>,
-    source: &'a str,
 }
 
 impl<'a> SemanticModelBuilder<'a> {
@@ -45,10 +44,7 @@ impl<'a> SemanticModelBuilder<'a> {
         let _parsed = parse_unchecked_source(source_kind.source_code(), source_type);
 
         // Step 2: Determine module kind
-        let kind = if file_path
-            .file_name()
-            .and_then(|name| name.to_str()) == Some("__init__.py")
-        {
+        let kind = if file_path.file_name().and_then(|name| name.to_str()) == Some("__init__.py") {
             ModuleKind::Package
         } else {
             ModuleKind::Module
@@ -65,7 +61,7 @@ impl<'a> SemanticModelBuilder<'a> {
         let semantic = SemanticModel::new(&[], file_path, module);
 
         // Step 4: Create builder and populate semantic model
-        let mut builder = Self { semantic, source };
+        let mut builder = Self { semantic };
         builder.bind_builtins();
         builder.traverse_and_bind(&ast.body)?;
 
@@ -133,7 +129,12 @@ impl<'a> SemanticModelBuilder<'a> {
             // Handle imports to enable qualified name resolution
             Stmt::Import(import) => {
                 for alias in &import.names {
-                    let module = alias.name.as_str().split('.').next().unwrap();
+                    let module = alias
+                        .name
+                        .as_str()
+                        .split('.')
+                        .next()
+                        .expect("module name should have at least one part");
                     self.semantic.add_module(module);
 
                     let name = alias
@@ -295,11 +296,11 @@ pub struct ModuleSemanticInfo {
 /// Global symbol registry across all modules with semantic information
 pub struct SymbolRegistry {
     /// Symbol name -> list of modules that define it
-    symbols: FxIndexMap<String, Vec<ModuleId>>,
+    pub symbols: FxIndexMap<String, Vec<ModuleId>>,
     /// Renames: (ModuleId, OriginalName) -> NewName
-    renames: FxIndexMap<(ModuleId, String), String>,
+    pub renames: FxIndexMap<(ModuleId, String), String>,
     /// Symbol binding information for scope analysis
-    symbol_bindings: FxIndexMap<(ModuleId, String), SymbolBindingInfo>,
+    pub symbol_bindings: FxIndexMap<(ModuleId, String), SymbolBindingInfo>,
 }
 
 /// Information about a symbol binding from semantic analysis
@@ -401,8 +402,7 @@ impl SymbolRegistry {
         module_id: &ModuleId,
         symbol: &str,
     ) -> Option<&SymbolBindingInfo> {
-        self.symbol_bindings
-            .get(&(*module_id, symbol.to_string()))
+        self.symbol_bindings.get(&(*module_id, symbol.to_string()))
     }
 
     /// Check if a symbol is module-level in a specific module

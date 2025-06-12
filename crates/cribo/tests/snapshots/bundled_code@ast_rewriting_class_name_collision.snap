@@ -7,7 +7,7 @@ input_file: crates/cribo/tests/fixtures/bundling/ast_rewriting_class_name_collis
 # https://github.com/ophidiarium/cribo
 
 """\nModels module with User and Product classes.\nThese will conflict with entities.py when bundled.\n"""
-class User:
+class User_2:
     """User model for data persistence."""
 
     def __init__(self, name: str, email: str):
@@ -17,7 +17,7 @@ class User:
 
     def __str__(self) -> str:
         return f"Model User(name='{self.name}', email='{self.email}')"
-class Product:
+class Product_2:
     """Product model for catalog."""
 
     def __init__(self, name: str, price: float):
@@ -27,9 +27,9 @@ class Product:
 
     def __str__(self) -> str:
         return f"Model Product(name='{self.name}', price={self.price})"
-def create_user(name: str, email: str) -> User:
+def create_user(name: str, email: str) -> User_2:
     """Factory function for creating users."""
-    return User(name, email)
+    return User_2(name, email)
 """\nEntities module with User and Product classes.\nThese will conflict with models.py when bundled.\n"""
 class User_1:
     """User entity for business logic."""
@@ -55,8 +55,8 @@ def create_product(sku: str, name: str) -> Product_1:
     """Factory function for creating products."""
     return Product_1(sku, name)
 """\nClass name collision test.\nBoth modules define classes with the same names.\n"""
-ModelUser = User
-ModelProduct = Product
+ModelUser = User_2
+ModelProduct = Product_2
 EntityUser = User_1
 EntityProduct = Product_1
 def main():

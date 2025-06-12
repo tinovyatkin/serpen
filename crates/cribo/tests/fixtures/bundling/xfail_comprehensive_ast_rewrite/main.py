@@ -84,7 +84,7 @@ def main():
     final_result = {
         "process_results": [db_result, util_result, auth_result],
         "validation_results": [local_validate_result, auth_validate_result, util_validate_result],
-        "user_types": [auth_user.name, model_user.name, service_user.username],
+        "user_types": [auth_user.name, model_user.name, service_user.name],
         "logger_messages": [util_logger.get_message(), model_logger.get_message()],
         "base_init": base_result,
         "total": result + globals()["result"],  # Global vs local result conflict

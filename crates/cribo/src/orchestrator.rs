@@ -11,6 +11,7 @@ use crate::cribo_graph::{
     CircularDependencyGroup, CircularDependencyType, CriboGraph, ResolutionStrategy,
 };
 use crate::resolver::{ImportType, ModuleResolver};
+use crate::semantic_bundler::SemanticBundler;
 use crate::util::{module_name_from_relative, normalize_line_endings};
 
 /// Type alias for module processing queue
@@ -67,11 +68,15 @@ struct GraphBuildParams<'a> {
 
 pub struct BundleOrchestrator {
     config: Config,
+    semantic_bundler: SemanticBundler,
 }
 
 impl BundleOrchestrator {
     pub fn new(config: Config) -> Self {
-        Self { config }
+        Self {
+            config,
+            semantic_bundler: SemanticBundler::new(),
+        }
     }
 
     /// Format error message for unresolvable cycles
@@ -472,7 +477,7 @@ impl BundleOrchestrator {
     }
 
     /// Build the complete dependency graph starting from the entry module
-    fn build_dependency_graph(&self, params: &mut GraphBuildParams<'_>) -> Result<()> {
+    fn build_dependency_graph(&mut self, params: &mut GraphBuildParams<'_>) -> Result<()> {
         let mut processed_modules = ProcessedModules::new();
         let mut queued_modules = IndexSet::new();
         let mut modules_to_process = ModuleQueue::new();
@@ -538,6 +543,14 @@ impl BundleOrchestrator {
             let source = crate::util::normalize_line_endings(source);
             let parsed = ruff_python_parser::parse_module(&source)
                 .with_context(|| format!("Failed to parse Python file: {:?}", module_path))?;
+
+            // Perform semantic analysis on this module
+            self.semantic_bundler.analyze_module(
+                module_id,
+                parsed.syntax(),
+                &source,
+                module_path,
+            )?;
 
             if let Some(module) = params.graph.get_module_by_name_mut(module_name) {
                 let mut builder = crate::graph_builder::GraphBuilder::new(module);
@@ -1147,7 +1160,22 @@ impl BundleOrchestrator {
     }
 
     /// Emit bundle using static bundler (no exec calls)
-    fn emit_static_bundle(&self, params: StaticBundleParams<'_>) -> Result<String> {
+    fn emit_static_bundle(&mut self, params: StaticBundleParams<'_>) -> Result<String> {
+        // First, detect and resolve conflicts after all modules have been analyzed
+        let conflicts = self.semantic_bundler.detect_and_resolve_conflicts();
+        if !conflicts.is_empty() {
+            info!(
+                "Detected {} symbol conflicts across modules, applying renaming strategy",
+                conflicts.len()
+            );
+            for conflict in &conflicts {
+                debug!(
+                    "Symbol '{}' conflicts across modules: {:?}",
+                    conflict.symbol, conflict.modules
+                );
+            }
+        }
+
         let mut static_bundler = HybridStaticBundler::new();
 
         // Parse all modules and prepare them for bundling
@@ -1182,6 +1210,7 @@ impl BundleOrchestrator {
             sorted_modules: params.sorted_modules,
             entry_module_name: params.entry_module_name,
             graph: params.graph,
+            semantic_bundler: &self.semantic_bundler,
         })?;
 
         // Generate Python code from AST
