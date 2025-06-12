@@ -1117,58 +1117,12 @@ impl HybridStaticBundler {
             match &stmt {
                 Stmt::Import(_) | Stmt::ImportFrom(_) => {
                     // Transform any import statements in non-entry modules
-                    if !self.is_hoisted_import(&stmt) {
-                        let mut handled_inlined_import = false;
-
-                        // For wrapper modules, we need special handling for imports from inlined modules
-                        if let Stmt::ImportFrom(import_from) = &stmt {
-                            // Check if this is importing from an inlined module
-                            let resolved_module =
-                                self.resolve_relative_import(import_from, ctx.module_name);
-                            log::debug!(
-                                "Checking import from {:?} in wrapper module {}: resolved to {:?}",
-                                import_from.module.as_ref().map(|m| m.as_str()),
-                                ctx.module_name,
-                                resolved_module
-                            );
-                            if let Some(ref resolved) = resolved_module {
-                                handled_inlined_import = self.handle_inlined_module_import(
-                                    import_from,
-                                    resolved,
-                                    &ctx,
-                                    symbol_renames,
-                                    &mut body,
-                                );
-                            }
-                        }
-
-                        // Only do standard transformation if we didn't handle it as an inlined import
-                        if !handled_inlined_import {
-                            // For other imports, use the standard transformation
-                            log::debug!(
-                                "Standard import transformation for {:?} in wrapper module '{}'",
-                                match &stmt {
-                                    Stmt::ImportFrom(imp) => format!(
-                                        "from {:?}",
-                                        imp.module.as_ref().map(|m| m.as_str())
-                                    ),
-                                    _ => "non-import".to_string(),
-                                },
-                                ctx.module_name
-                            );
-                            let empty_renames = FxIndexMap::default();
-                            let transformed_stmts = self
-                                .rewrite_import_in_stmt_multiple_with_context(
-                                    stmt.clone(),
-                                    ctx.module_name,
-                                    &empty_renames,
-                                );
-                            body.extend(transformed_stmts);
-
-                            // Check if any imported symbols should be re-exported as module attributes
-                            self.add_imported_symbol_attributes(&stmt, ctx.module_name, &mut body);
-                        }
-                    }
+                    self.process_wrapper_module_import(
+                        stmt.clone(),
+                        &ctx,
+                        symbol_renames,
+                        &mut body,
+                    );
                 }
                 Stmt::ClassDef(class_def) => {
                     // Add class definition
@@ -4228,6 +4182,66 @@ impl HybridStaticBundler {
         }
 
         Ok(Vec::new()) // Statements are accumulated in ctx.inlined_stmts
+    }
+
+    /// Process import statements in wrapper modules
+    fn process_wrapper_module_import(
+        &self,
+        stmt: Stmt,
+        ctx: &ModuleTransformContext,
+        symbol_renames: &FxIndexMap<String, FxIndexMap<String, String>>,
+        body: &mut Vec<Stmt>,
+    ) {
+        if self.is_hoisted_import(&stmt) {
+            return;
+        }
+
+        let mut handled_inlined_import = false;
+
+        // For wrapper modules, we need special handling for imports from inlined modules
+        if let Stmt::ImportFrom(import_from) = &stmt {
+            // Check if this is importing from an inlined module
+            let resolved_module = self.resolve_relative_import(import_from, ctx.module_name);
+            log::debug!(
+                "Checking import from {:?} in wrapper module {}: resolved to {:?}",
+                import_from.module.as_ref().map(|m| m.as_str()),
+                ctx.module_name,
+                resolved_module
+            );
+            if let Some(ref resolved) = resolved_module {
+                handled_inlined_import = self.handle_inlined_module_import(
+                    import_from,
+                    resolved,
+                    ctx,
+                    symbol_renames,
+                    body,
+                );
+            }
+        }
+
+        // Only do standard transformation if we didn't handle it as an inlined import
+        if !handled_inlined_import {
+            // For other imports, use the standard transformation
+            log::debug!(
+                "Standard import transformation for {:?} in wrapper module '{}'",
+                match &stmt {
+                    Stmt::ImportFrom(imp) =>
+                        format!("from {:?}", imp.module.as_ref().map(|m| m.as_str())),
+                    _ => "non-import".to_string(),
+                },
+                ctx.module_name
+            );
+            let empty_renames = FxIndexMap::default();
+            let transformed_stmts = self.rewrite_import_in_stmt_multiple_with_context(
+                stmt.clone(),
+                ctx.module_name,
+                &empty_renames,
+            );
+            body.extend(transformed_stmts);
+
+            // Check if any imported symbols should be re-exported as module attributes
+            self.add_imported_symbol_attributes(&stmt, ctx.module_name, body);
+        }
     }
 
     /// Check if a symbol should be inlined based on export rules
