@@ -5320,24 +5320,67 @@ impl HybridStaticBundler {
 
         for alias in &import_stmt.names {
             let module_name = alias.name.as_str();
-            if !self.bundled_modules.contains(module_name) {
-                handled_all = false;
-                continue;
-            }
 
-            if self.module_registry.contains_key(module_name) {
-                // Module uses wrapper approach - transform to sys.modules access
-                let target_name = alias.asname.as_ref().unwrap_or(&alias.name);
-                result_stmts
-                    .push(self.create_sys_modules_assignment(target_name.as_str(), module_name));
+            // Check if this is a dotted import (e.g., greetings.greeting)
+            if module_name.contains('.') {
+                // Handle dotted imports specially
+                let parts: Vec<&str> = module_name.split('.').collect();
+                let parent_module = parts[0];
+
+                // Check if the full module is bundled
+                if self.bundled_modules.contains(module_name)
+                    && self.module_registry.contains_key(module_name)
+                {
+                    // First, ensure parent module exists as a namespace
+                    // We need to create it if it's not in the module_registry (i.e., not a wrapper module)
+                    if !self.module_registry.contains_key(parent_module) {
+                        // Create a simple namespace module for the parent
+                        result_stmts.push(self.create_namespace_module(parent_module));
+                    }
+
+                    let target_name = alias.asname.as_ref().unwrap_or(&alias.name);
+
+                    // If there's no alias, we need to handle the dotted name specially
+                    if alias.asname.is_none() && module_name.contains('.') {
+                        // For import greetings.greeting, we need:
+                        // 1. greetings.greeting = sys.modules['greetings.greeting']
+                        let attr_name = parts[1..].join(".");
+                        result_stmts.push(self.create_dotted_attribute_assignment(
+                            parent_module,
+                            &attr_name,
+                            module_name,
+                        ));
+                    } else {
+                        // For aliased imports or non-dotted imports, just assign to the target
+                        result_stmts.push(
+                            self.create_sys_modules_assignment(target_name.as_str(), module_name),
+                        );
+                    }
+                } else {
+                    handled_all = false;
+                }
             } else {
-                // Module was inlined - this is problematic for direct imports
-                // We need to create a mock module object
-                log::warn!(
-                    "Direct import of inlined module '{}' detected - this pattern is not fully supported",
-                    module_name
-                );
-                // For now, skip it
+                // Non-dotted import - handle as before
+                if !self.bundled_modules.contains(module_name) {
+                    handled_all = false;
+                    continue;
+                }
+
+                if self.module_registry.contains_key(module_name) {
+                    // Module uses wrapper approach - transform to sys.modules access
+                    let target_name = alias.asname.as_ref().unwrap_or(&alias.name);
+                    result_stmts.push(
+                        self.create_sys_modules_assignment(target_name.as_str(), module_name),
+                    );
+                } else {
+                    // Module was inlined - this is problematic for direct imports
+                    // We need to create a mock module object
+                    log::warn!(
+                        "Direct import of inlined module '{}' detected - this pattern is not fully supported",
+                        module_name
+                    );
+                    // For now, skip it
+                }
             }
         }
 
@@ -5369,6 +5412,74 @@ impl HybridStaticBundler {
                     range: TextRange::default(),
                 })),
                 slice: Box::new(self.create_string_literal(module_name)),
+                ctx: ExprContext::Load,
+                range: TextRange::default(),
+            })),
+            range: TextRange::default(),
+        })
+    }
+
+    /// Create a simple namespace module object
+    fn create_namespace_module(&self, module_name: &str) -> Stmt {
+        // Create: module_name = types.ModuleType('module_name')
+        Stmt::Assign(StmtAssign {
+            targets: vec![Expr::Name(ExprName {
+                id: module_name.into(),
+                ctx: ExprContext::Store,
+                range: TextRange::default(),
+            })],
+            value: Box::new(Expr::Call(ExprCall {
+                func: Box::new(Expr::Attribute(ExprAttribute {
+                    value: Box::new(Expr::Name(ExprName {
+                        id: "types".into(),
+                        ctx: ExprContext::Load,
+                        range: TextRange::default(),
+                    })),
+                    attr: Identifier::new("ModuleType", TextRange::default()),
+                    ctx: ExprContext::Load,
+                    range: TextRange::default(),
+                })),
+                arguments: ruff_python_ast::Arguments {
+                    args: Box::from([self.create_string_literal(module_name)]),
+                    keywords: Box::from([]),
+                    range: TextRange::default(),
+                },
+                range: TextRange::default(),
+            })),
+            range: TextRange::default(),
+        })
+    }
+
+    /// Create dotted attribute assignment (e.g., greetings.greeting = sys.modules['greetings.greeting'])
+    fn create_dotted_attribute_assignment(
+        &self,
+        parent_module: &str,
+        attr_name: &str,
+        full_module_name: &str,
+    ) -> Stmt {
+        Stmt::Assign(StmtAssign {
+            targets: vec![Expr::Attribute(ExprAttribute {
+                value: Box::new(Expr::Name(ExprName {
+                    id: parent_module.into(),
+                    ctx: ExprContext::Load,
+                    range: TextRange::default(),
+                })),
+                attr: Identifier::new(attr_name, TextRange::default()),
+                ctx: ExprContext::Store,
+                range: TextRange::default(),
+            })],
+            value: Box::new(Expr::Subscript(ruff_python_ast::ExprSubscript {
+                value: Box::new(Expr::Attribute(ExprAttribute {
+                    value: Box::new(Expr::Name(ExprName {
+                        id: "sys".into(),
+                        ctx: ExprContext::Load,
+                        range: TextRange::default(),
+                    })),
+                    attr: Identifier::new("modules", TextRange::default()),
+                    ctx: ExprContext::Load,
+                    range: TextRange::default(),
+                })),
+                slice: Box::new(self.create_string_literal(full_module_name)),
                 ctx: ExprContext::Load,
                 range: TextRange::default(),
             })),
