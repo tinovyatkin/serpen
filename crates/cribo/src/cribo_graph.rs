@@ -1195,7 +1195,12 @@ impl CriboGraph {
         }
 
         if analysis_result.has_class_definitions {
-            // Classes that reference each other
+            // Check if the circular imports are used for inheritance
+            // If all imports in the cycle are only used in functions, it's still FunctionLevel
+            if analysis_result.imports_used_in_functions_only {
+                return CircularDependencyType::FunctionLevel;
+            }
+            // Otherwise, it's a true class-level cycle
             return CircularDependencyType::ClassLevel;
         }
 
