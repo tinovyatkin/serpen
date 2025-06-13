@@ -4155,6 +4155,16 @@ impl HybridStaticBundler {
                         .any(|(name, _, _, _)| name == imported_module)
                     {
                         directly_imported.insert(imported_module.to_string());
+
+                        // When importing a submodule, Python implicitly imports parent packages
+                        // For example, importing 'greetings.irrelevant' also imports 'greetings'
+                        if imported_module.contains('.') {
+                            self.mark_parent_packages_as_imported(
+                                imported_module,
+                                modules,
+                                directly_imported,
+                            );
+                        }
                     }
                 }
             }
@@ -4186,6 +4196,10 @@ impl HybridStaticBundler {
                                 full_module_path
                             );
                             directly_imported.insert(full_module_path);
+
+                            // Note: We don't mark the parent module as directly imported here
+                            // because `from models import base` is importing the submodule `base`,
+                            // not the parent package `models` itself
                         }
                     }
                 } else if import_from.level > 0 {
@@ -4246,6 +4260,34 @@ impl HybridStaticBundler {
                     full_module_path
                 );
                 directly_imported.insert(full_module_path);
+            }
+        }
+    }
+
+    /// Mark parent packages as directly imported when a submodule is imported
+    fn mark_parent_packages_as_imported(
+        &self,
+        imported_module: &str,
+        modules: &[(String, ModModule, PathBuf, String)],
+        directly_imported: &mut FxIndexSet<String>,
+    ) {
+        let parts: Vec<&str> = imported_module.split('.').collect();
+        let mut parent = String::new();
+
+        for (i, part) in parts.iter().enumerate() {
+            if i > 0 {
+                parent.push('.');
+            }
+            parent.push_str(part);
+
+            // Only add if it's a bundled module (skip the last part as it's already added)
+            if i < parts.len() - 1 && modules.iter().any(|(name, _, _, _)| name == &parent) {
+                log::info!(
+                    "Marking parent package '{}' as directly imported (implicit import via '{}')",
+                    parent,
+                    imported_module
+                );
+                directly_imported.insert(parent.clone());
             }
         }
     }
@@ -5540,10 +5582,13 @@ impl HybridStaticBundler {
                 if self.bundled_modules.contains(module_name)
                     && self.module_registry.contains_key(module_name)
                 {
-                    // First, ensure parent module exists as a namespace
-                    // We need to create it if it's not in the module_registry (i.e., not a wrapper module)
-                    if !self.module_registry.contains_key(parent_module) {
-                        // Create a simple namespace module for the parent
+                    // First, ensure parent module exists
+                    if self.module_registry.contains_key(parent_module) {
+                        // Parent is a wrapper module, get it from sys.modules
+                        result_stmts
+                            .push(self.create_sys_modules_assignment(parent_module, parent_module));
+                    } else {
+                        // Parent is not a wrapper module, create a simple namespace
                         result_stmts.push(self.create_namespace_module(parent_module));
                     }
 
