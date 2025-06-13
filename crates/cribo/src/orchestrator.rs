@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use indexmap::IndexSet;
 use log::{debug, info, warn};
-use ruff_python_ast::{ModModule, Stmt, StmtImportFrom};
+use ruff_python_ast::{Expr, ExprStringLiteral, ModModule, Stmt, StmtImportFrom, StringFlags};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,7 +12,7 @@ use crate::cribo_graph::{
 };
 use crate::resolver::{ImportType, ModuleResolver};
 use crate::semantic_bundler::SemanticBundler;
-use crate::util::{module_name_from_relative, normalize_line_endings};
+use crate::util::module_name_from_relative;
 
 /// Type alias for module processing queue
 type ModuleQueue = Vec<(String, PathBuf)>;
@@ -85,17 +85,8 @@ impl BundleOrchestrator {
     /// Format error message for unresolvable cycles
     fn format_unresolvable_cycles_error(cycles: &[CircularDependencyGroup]) -> String {
         let mut error_msg = String::from("Unresolvable circular dependencies detected:\n\n");
-
-        for (i, cycle) in cycles.iter().enumerate() {
-            error_msg.push_str(&format!("Cycle {}: {}\n", i + 1, cycle.modules.join(" → ")));
-            error_msg.push_str(&format!("  Type: {:?}\n", cycle.cycle_type));
-
-            if let ResolutionStrategy::Unresolvable { reason } = &cycle.suggested_resolution {
-                error_msg.push_str(&format!("  Reason: {}\n", reason));
-            }
-            error_msg.push('\n');
-        }
-
+        // Delegate to append helper
+        Self::append_unresolvable_cycles_to_error(&mut error_msg, cycles);
         error_msg
     }
 
@@ -556,7 +547,6 @@ impl BundleOrchestrator {
             // Parse the module AST and build detailed graph
             let source = fs::read_to_string(module_path)
                 .with_context(|| format!("Failed to read file: {:?}", module_path))?;
-            let source = crate::util::normalize_line_endings(source);
             let parsed = ruff_python_parser::parse_module(&source)
                 .with_context(|| format!("Failed to parse Python file: {:?}", module_path))?;
 
@@ -617,7 +607,6 @@ impl BundleOrchestrator {
     ) -> Result<Vec<String>> {
         let source = fs::read_to_string(file_path)
             .with_context(|| format!("Failed to read file: {:?}", file_path))?;
-        let source = normalize_line_endings(source);
 
         let parsed = ruff_python_parser::parse_module(&source)
             .with_context(|| format!("Failed to parse Python file: {:?}", file_path))?;
@@ -1013,19 +1002,7 @@ impl BundleOrchestrator {
         sorted_modules: &[(String, PathBuf, Vec<String>)],
         resolver: &ModuleResolver,
     ) -> Result<()> {
-        let requirements_content = self.generate_requirements(sorted_modules, resolver)?;
-        if !requirements_content.is_empty() {
-            let requirements_path = Path::new("requirements.txt");
-
-            fs::write(requirements_path, requirements_content).with_context(|| {
-                format!("Failed to write requirements file: {:?}", requirements_path)
-            })?;
-
-            info!("Requirements written to: {:?}", requirements_path);
-        } else {
-            info!("No third-party dependencies found, skipping requirements.txt");
-        }
-        Ok(())
+        self.write_requirements_common(sorted_modules, resolver, None)
     }
 
     /// Write requirements.txt file if there are dependencies
@@ -1035,18 +1012,27 @@ impl BundleOrchestrator {
         resolver: &ModuleResolver,
         output_path: &Path,
     ) -> Result<()> {
-        let requirements_content = self.generate_requirements(sorted_modules, resolver)?;
-        if !requirements_content.is_empty() {
-            let requirements_path = output_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join("requirements.txt");
+        let dir = output_path.parent().unwrap_or_else(|| Path::new("."));
+        self.write_requirements_common(sorted_modules, resolver, Some(dir))
+    }
 
-            fs::write(&requirements_path, requirements_content).with_context(|| {
-                format!("Failed to write requirements file: {:?}", requirements_path)
-            })?;
-
-            info!("Requirements written to: {:?}", requirements_path);
+    /// Common helper for writing requirements.txt files
+    fn write_requirements_common(
+        &self,
+        sorted_modules: &[(String, PathBuf, Vec<String>)],
+        resolver: &ModuleResolver,
+        dir_opt: Option<&Path>,
+    ) -> Result<()> {
+        let content = self.generate_requirements(sorted_modules, resolver)?;
+        if !content.is_empty() {
+            let path = if let Some(dir) = dir_opt {
+                dir.join("requirements.txt")
+            } else {
+                Path::new("requirements.txt").to_path_buf()
+            };
+            fs::write(&path, content)
+                .with_context(|| format!("Failed to write requirements file: {:?}", path))?;
+            info!("Requirements written to: {:?}", path);
         } else {
             info!("No third-party dependencies found, skipping requirements.txt");
         }
@@ -1227,7 +1213,6 @@ impl BundleOrchestrator {
             for (module_name, module_path, _imports) in params.sorted_modules {
                 let source = fs::read_to_string(module_path)
                     .with_context(|| format!("Failed to read module file: {:?}", module_path))?;
-                let source = crate::util::normalize_line_endings(source);
                 // Calculate content hash for deterministic module naming
                 use sha2::{Digest, Sha256};
                 let mut hasher = Sha256::new();
@@ -1258,15 +1243,7 @@ impl BundleOrchestrator {
         })?;
 
         // Generate Python code from AST
-        let empty_parsed = ruff_python_parser::parse_module("")?;
-        let stylist = ruff_python_codegen::Stylist::from_tokens(empty_parsed.tokens(), "");
-
-        let mut code_parts = Vec::new();
-        for stmt in &bundled_ast.body {
-            let generator = ruff_python_codegen::Generator::from(&stylist);
-            let stmt_code = generator.stmt(stmt);
-            code_parts.push(stmt_code);
-        }
+        let code = self.generate_code_from_ast(&bundled_ast)?;
 
         // Add shebang and header
         let mut final_output = vec![
@@ -1275,9 +1252,189 @@ impl BundleOrchestrator {
             "# https://github.com/ophidiarium/cribo".to_string(),
             String::new(), // Empty line
         ];
-        final_output.extend(code_parts);
+        final_output.push(code);
 
         Ok(final_output.join("\n"))
+    }
+
+    /// Generate code from AST with custom handling for triple-quoted strings
+    fn generate_code_from_ast(&self, module: &ModModule) -> Result<String> {
+        // Using predermined Stylist output with TABs (to be smaller)
+        let stylist = {
+            let sample_code = "def foo():\n\tprint(\"Cribo!\")\n";
+            let parsed = ruff_python_parser::parse_module(sample_code)
+                .expect("Failed to parse sample code for stylist");
+            ruff_python_codegen::Stylist::from_tokens(parsed.tokens(), sample_code)
+        };
+
+        let mut result = Vec::new();
+        for stmt in &module.body {
+            let formatted = self.format_statement_preserving_docstrings(stmt, &stylist)?;
+            result.push(formatted);
+        }
+
+        Ok(result.join("\n"))
+    }
+
+    /// Format a statement, preserving triple-quoted docstrings
+    fn format_statement_preserving_docstrings(
+        &self,
+        stmt: &Stmt,
+        stylist: &ruff_python_codegen::Stylist,
+    ) -> Result<String> {
+        match stmt {
+            // Handle expression statements that might be docstrings
+            Stmt::Expr(expr_stmt) => {
+                if let Expr::StringLiteral(string_lit) = &*expr_stmt.value {
+                    // Check if it's triple-quoted
+                    for part in &string_lit.value {
+                        if part.flags.triple_quotes().is_yes() {
+                            return self.format_triple_quoted_string(string_lit);
+                        }
+                    }
+                }
+                // Not a triple-quoted string, use default formatting
+                let generator = ruff_python_codegen::Generator::from(stylist);
+                Ok(generator.stmt(stmt))
+            }
+            // Handle functions which might have docstrings
+            Stmt::FunctionDef(func_def) => {
+                self.format_function_preserving_docstring(func_def, stylist)
+            }
+            // Handle classes which might have docstrings
+            Stmt::ClassDef(class_def) => self.format_class_preserving_docstring(class_def, stylist),
+            // Default case: use ruff's generator
+            _ => {
+                let generator = ruff_python_codegen::Generator::from(stylist);
+                Ok(generator.stmt(stmt))
+            }
+        }
+    }
+
+    /// Format a function definition preserving its docstring
+    fn format_function_preserving_docstring(
+        &self,
+        func_def: &ruff_python_ast::StmtFunctionDef,
+        stylist: &ruff_python_codegen::Stylist,
+    ) -> Result<String> {
+        // Check if the first statement is a triple-quoted docstring
+        let has_triple_quoted_docstring = func_def.body.first().is_some_and(|stmt| {
+            if let Stmt::Expr(expr_stmt) = stmt {
+                if let Expr::StringLiteral(string_lit) = &*expr_stmt.value {
+                    return string_lit
+                        .value
+                        .iter()
+                        .any(|part| part.flags.triple_quotes().is_yes());
+                }
+            }
+            false
+        });
+
+        if !has_triple_quoted_docstring {
+            // No triple-quoted docstring, use default formatting
+            let generator = ruff_python_codegen::Generator::from(stylist);
+            return Ok(generator.stmt(&Stmt::FunctionDef(func_def.clone())));
+        }
+
+        // Function has a triple-quoted docstring - clone and modify the function
+        let mut func_def_clone = func_def.clone();
+
+        // Extract the docstring and format it separately
+        let docstring_stmt = func_def_clone.body.first().cloned();
+        let mut formatted_docstring = None;
+
+        if let Some(Stmt::Expr(expr_stmt)) = &docstring_stmt {
+            if let Expr::StringLiteral(string_lit) = &*expr_stmt.value {
+                formatted_docstring = Some(self.format_triple_quoted_string(string_lit)?);
+            }
+        }
+
+        // Remove the docstring from the body temporarily
+        if formatted_docstring.is_some() {
+            func_def_clone.body.remove(0);
+        }
+
+        // Generate the function without the docstring
+        let generator = ruff_python_codegen::Generator::from(stylist);
+        let func_str = generator.stmt(&Stmt::FunctionDef(func_def_clone));
+
+        // Now insert the formatted docstring back
+        if let Some(docstring) = formatted_docstring {
+            // Find where to insert the docstring (after the colon)
+            if let Some(colon_pos) = func_str.find(":\n") {
+                let before_body = &func_str[..colon_pos + 2];
+                let after_body = &func_str[colon_pos + 2..];
+
+                // Determine the indentation level by finding the indentation of the function definition
+                let indent = if let Some(def_pos) = func_str.find("def ") {
+                    // Count spaces before "def"
+                    let line_start = func_str[..def_pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
+                    let indent_str = &func_str[line_start..def_pos];
+                    indent_str.to_string() + stylist.indentation()
+                } else {
+                    // Fallback: count leading spaces in the after_body if it exists
+                    if !after_body.trim().is_empty() {
+                        let first_line = after_body.lines().next().unwrap_or("");
+                        let spaces = first_line.len() - first_line.trim_start().len();
+                        " ".repeat(spaces)
+                    } else {
+                        "\t".to_string() // Default to 1 tab
+                    }
+                };
+
+                // Build the final result
+                let mut result = String::new();
+                result.push_str(before_body);
+                result.push_str(&indent);
+                result.push_str(&docstring);
+                if !after_body.trim().is_empty() {
+                    result.push('\n');
+                    result.push_str(after_body);
+                }
+
+                return Ok(result);
+            }
+        }
+
+        // Fallback to the generated string
+        Ok(func_str)
+    }
+
+    /// Format a class definition preserving its docstring (similar to function)
+    fn format_class_preserving_docstring(
+        &self,
+        class_def: &ruff_python_ast::StmtClassDef,
+        stylist: &ruff_python_codegen::Stylist,
+    ) -> Result<String> {
+        // For now, use default formatting
+        // TODO: Implement similar logic to format_function_preserving_docstring
+        let generator = ruff_python_codegen::Generator::from(stylist);
+        Ok(generator.stmt(&Stmt::ClassDef(class_def.clone())))
+    }
+
+    /// Format a triple-quoted string literal, preserving actual newlines
+    fn format_triple_quoted_string(&self, string_lit: &ExprStringLiteral) -> Result<String> {
+        let mut result = String::new();
+
+        // For simplicity, we'll handle the most common case of a single triple-quoted string
+        if let Some(part) = string_lit.value.iter().next() {
+            let quote_char = match part.flags.quote_style() {
+                ruff_python_ast::str::Quote::Single => '\'',
+                ruff_python_ast::str::Quote::Double => '"',
+            };
+            let quote_str = quote_char.to_string().repeat(3);
+
+            // Add prefix if any
+            result.push_str(part.flags.prefix().as_str());
+            result.push_str(&quote_str);
+
+            // The value is already the content without quotes, and should have real newlines
+            result.push_str(&part.value);
+
+            result.push_str(&quote_str);
+        }
+
+        Ok(result)
     }
 
     /// Generate requirements.txt content from third-party imports
