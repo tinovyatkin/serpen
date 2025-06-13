@@ -78,7 +78,6 @@ __cribo_init___cribo_508050_utils_config()
 '''\nTest fixture for regular import statements with aliases (non-"from" imports).\nThis exercises the code path in ast_rewriter.rs around lines 216-228.\n'''
 utils = types.ModuleType('utils')
 helper_utils = sys.modules['utils.helpers']
-utils = types.ModuleType('utils')
 config_module = sys.modules['utils.config']
 def main():
     """Test function that uses the imported modules with aliases."""
