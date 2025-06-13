@@ -923,7 +923,12 @@ impl HybridStaticBundler {
                 inlined_stmts: &mut inlined_stmts,
                 import_aliases: FxIndexMap::default(),
             };
-            self.inline_module_for_namespace(module_name, ast.clone(), &mut inline_ctx)?;
+            self.inline_module_for_namespace(
+                module_name,
+                ast.clone(),
+                _module_path,
+                &mut inline_ctx,
+            )?;
             log::debug!(
                 "Inlined {} statements from namespace hybrid module '{}'",
                 inlined_stmts.len(),
@@ -944,7 +949,7 @@ impl HybridStaticBundler {
                 inlined_stmts: &mut inlined_stmts,
                 import_aliases: FxIndexMap::default(),
             };
-            self.inline_module(module_name, ast.clone(), &mut inline_ctx)?;
+            self.inline_module(module_name, ast.clone(), _module_path, &mut inline_ctx)?;
             log::debug!(
                 "Inlined {} statements from module '{}'",
                 inlined_stmts.len(),
@@ -3387,11 +3392,21 @@ impl HybridStaticBundler {
     }
 
     /// Add module attribute assignments for imported symbols that should be re-exported
-    fn add_imported_symbol_attributes(&self, stmt: &Stmt, module_name: &str, body: &mut Vec<Stmt>) {
+    fn add_imported_symbol_attributes(
+        &self,
+        stmt: &Stmt,
+        module_name: &str,
+        module_path: Option<&Path>,
+        body: &mut Vec<Stmt>,
+    ) {
         match stmt {
             Stmt::ImportFrom(import_from) => {
                 // First check if this is an import from an inlined module
-                let resolved_module_name = self.resolve_relative_import(import_from, module_name);
+                let resolved_module_name = self.resolve_relative_import_with_context(
+                    import_from,
+                    module_name,
+                    module_path,
+                );
                 if let Some(ref imported_module) = resolved_module_name {
                     // If this is an inlined module, skip module attribute assignment
                     // The symbols will be referenced directly in the transformed import
@@ -3898,6 +3913,16 @@ impl HybridStaticBundler {
         import_from: &StmtImportFrom,
         current_module: &str,
     ) -> Option<String> {
+        self.resolve_relative_import_with_context(import_from, current_module, None)
+    }
+
+    /// Resolve a relative import to an absolute module name with optional module path context
+    fn resolve_relative_import_with_context(
+        &self,
+        import_from: &StmtImportFrom,
+        current_module: &str,
+        module_path: Option<&Path>,
+    ) -> Option<String> {
         log::debug!(
             "Resolving relative import: level={}, module={:?}, current_module={}",
             import_from.level,
@@ -3935,12 +3960,43 @@ impl HybridStaticBundler {
                     parts.clear();
                 }
             } else {
-                // For modules with multiple components (e.g., "core.utils.helpers")
-                // For level 1 (.module), we go to parent package (remove current module)
-                // For level 2 (..module), we go up one more level (remove current + 1 parent)
-                // For level 3 (...module), we go up two more levels (remove current + 2 parents)
-                // So we remove 'level' parts
-                for _ in 0..import_from.level {
+                // For modules with multiple components (e.g., "greetings.greeting")
+                // Special handling: if this module represents a package __init__.py file,
+                // the first level doesn't remove anything (stays in the package)
+                // Subsequent levels go up the hierarchy
+
+                // Check if current module is a package __init__.py file
+                let is_package_init = if let Some(path) = module_path {
+                    path.file_name()
+                        .and_then(|f| f.to_str())
+                        .map(|f| f == "__init__.py")
+                        .unwrap_or(false)
+                } else {
+                    // Fallback: check if module has submodules
+                    self.bundled_modules
+                        .iter()
+                        .any(|m| m.starts_with(&format!("{}.", current_module)))
+                };
+
+                let levels_to_remove = if is_package_init {
+                    // For package __init__.py files, the first dot stays in the package
+                    // So we remove (level - 1) parts
+                    import_from.level.saturating_sub(1)
+                } else {
+                    // For regular modules, remove 'level' parts
+                    import_from.level
+                };
+
+                log::debug!(
+                    "Relative import resolution: current_module={}, is_package_init={}, level={}, levels_to_remove={}, parts={:?}",
+                    current_module,
+                    is_package_init,
+                    import_from.level,
+                    levels_to_remove,
+                    parts
+                );
+
+                for _ in 0..levels_to_remove {
                     if parts.is_empty() {
                         log::debug!("Invalid relative import - ran out of parent levels");
                         return None; // Invalid relative import
@@ -4205,6 +4261,7 @@ impl HybridStaticBundler {
         &mut self,
         module_name: &str,
         ast: ModModule,
+        module_path: &Path,
         ctx: &mut InlineContext,
     ) -> Result<Vec<Stmt>> {
         let mut module_renames = FxIndexMap::default();
@@ -4215,7 +4272,7 @@ impl HybridStaticBundler {
                 Stmt::Import(_) | Stmt::ImportFrom(_) => {
                     // Track import aliases for resolution in assignments
                     if let Stmt::ImportFrom(import_from) = &stmt {
-                        self.track_import_aliases(import_from, module_name, ctx);
+                        self.track_import_aliases(import_from, module_name, module_path, ctx);
                     }
 
                     // Skip imports - they should be handled separately
@@ -4345,6 +4402,7 @@ impl HybridStaticBundler {
         &mut self,
         module_name: &str,
         ast: ModModule,
+        module_path: &Path,
         ctx: &mut InlineContext,
     ) -> Result<Vec<Stmt>> {
         log::debug!("Inlining module '{}' for namespace import", module_name);
@@ -4356,7 +4414,7 @@ impl HybridStaticBundler {
                 Stmt::Import(_) | Stmt::ImportFrom(_) => {
                     // Track import aliases for resolution in the module
                     if let Stmt::ImportFrom(import_from) = &stmt {
-                        self.track_import_aliases(import_from, module_name, ctx);
+                        self.track_import_aliases(import_from, module_name, module_path, ctx);
                     }
                     log::debug!(
                         "Tracked import in namespace hybrid module '{}': {:?}",
@@ -4829,7 +4887,11 @@ impl HybridStaticBundler {
         // For wrapper modules, we need special handling for imports from inlined modules
         if let Stmt::ImportFrom(import_from) = &stmt {
             // Check if this is importing from an inlined module
-            let resolved_module = self.resolve_relative_import(import_from, ctx.module_name);
+            let resolved_module = self.resolve_relative_import_with_context(
+                import_from,
+                ctx.module_name,
+                Some(ctx.module_path),
+            );
             log::debug!(
                 "Checking import from {:?} in wrapper module {}: resolved to {:?}",
                 import_from.module.as_ref().map(|m| m.as_str()),
@@ -4868,7 +4930,12 @@ impl HybridStaticBundler {
             body.extend(transformed_stmts);
 
             // Check if any imported symbols should be re-exported as module attributes
-            self.add_imported_symbol_attributes(&stmt, ctx.module_name, body);
+            self.add_imported_symbol_attributes(
+                &stmt,
+                ctx.module_name,
+                Some(ctx.module_path),
+                body,
+            );
         }
     }
 
@@ -5053,9 +5120,11 @@ impl HybridStaticBundler {
         &self,
         import_from: &StmtImportFrom,
         module_name: &str,
+        module_path: &Path,
         ctx: &mut InlineContext,
     ) {
-        let resolved_module = self.resolve_relative_import(import_from, module_name);
+        let resolved_module =
+            self.resolve_relative_import_with_context(import_from, module_name, Some(module_path));
         if let Some(resolved) = resolved_module {
             // Track aliases for ALL imports, not just from inlined modules
             for alias in &import_from.names {
