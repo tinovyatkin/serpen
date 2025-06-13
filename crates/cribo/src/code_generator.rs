@@ -77,6 +77,13 @@ struct AddSymbolsParams<'a> {
     inlined_module_key: &'a str,
 }
 
+/// Context for collecting direct imports
+struct DirectImportContext<'a> {
+    current_module: &'a str,
+    module_path: &'a Path,
+    modules: &'a [(String, ModModule, PathBuf, String)],
+}
+
 /// Parameters for handling symbol imports from inlined modules
 struct SymbolImportParams<'a> {
     imported_name: &'a str,
@@ -894,22 +901,7 @@ impl HybridStaticBundler {
                 // Extract all module-level assignments, functions, and classes
                 let mut symbols = Vec::new();
                 for stmt in &ast.body {
-                    match stmt {
-                        Stmt::FunctionDef(func) => {
-                            symbols.push(func.name.to_string());
-                        }
-                        Stmt::ClassDef(class) => {
-                            symbols.push(class.name.to_string());
-                        }
-                        Stmt::Assign(assign) => {
-                            if assign.targets.len() == 1 {
-                                if let Expr::Name(name) = &assign.targets[0] {
-                                    symbols.push(name.id.to_string());
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
+                    self.collect_module_symbol(stmt, &mut symbols);
                 }
                 if symbols.is_empty() {
                     None
@@ -3348,6 +3340,24 @@ impl HybridStaticBundler {
         self.stdlib_import_statements.push(import_stmt);
     }
 
+    /// Collect a symbol from a module statement
+    fn collect_module_symbol(&self, stmt: &Stmt, symbols: &mut Vec<String>) {
+        match stmt {
+            Stmt::FunctionDef(func) => {
+                symbols.push(func.name.to_string());
+            }
+            Stmt::ClassDef(class) => {
+                symbols.push(class.name.to_string());
+            }
+            Stmt::Assign(assign) if assign.targets.len() == 1 => {
+                if let Expr::Name(name) = &assign.targets[0] {
+                    symbols.push(name.id.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Extract __all__ exports from a module
     /// Returns Some(vec) if __all__ is defined, None if not defined
     fn extract_all_exports(&self, ast: &ModModule) -> Option<Vec<String>> {
@@ -4165,14 +4175,13 @@ impl HybridStaticBundler {
         // Check all modules for direct imports
         for (module_name, ast, module_path, _) in modules {
             log::debug!("Checking module '{}' for direct imports", module_name);
+            let ctx = DirectImportContext {
+                current_module: module_name,
+                module_path,
+                modules,
+            };
             for stmt in &ast.body {
-                self.collect_direct_imports(
-                    stmt,
-                    module_name,
-                    module_path,
-                    modules,
-                    &mut directly_imported,
-                );
+                self.collect_direct_imports(stmt, &ctx, &mut directly_imported);
             }
         }
 
@@ -4188,9 +4197,7 @@ impl HybridStaticBundler {
     fn collect_direct_imports(
         &self,
         stmt: &Stmt,
-        current_module: &str,
-        module_path: &Path,
-        modules: &[(String, ModModule, PathBuf, String)],
+        ctx: &DirectImportContext<'_>,
         directly_imported: &mut FxIndexSet<String>,
     ) {
         match stmt {
@@ -4198,7 +4205,8 @@ impl HybridStaticBundler {
                 for alias in &import_stmt.names {
                     let imported_module = alias.name.as_str();
                     // Check if this is a bundled module
-                    if modules
+                    if ctx
+                        .modules
                         .iter()
                         .any(|(name, _, _, _)| name == imported_module)
                     {
@@ -4209,7 +4217,7 @@ impl HybridStaticBundler {
                         if imported_module.contains('.') {
                             self.mark_parent_packages_as_imported(
                                 imported_module,
-                                modules,
+                                ctx.modules,
                                 directly_imported,
                             );
                         }
@@ -4232,7 +4240,8 @@ impl HybridStaticBundler {
                         );
 
                         // Check if this full path matches a bundled module
-                        if modules
+                        if ctx
+                            .modules
                             .iter()
                             .any(|(name, _, _, _)| name == &full_module_path)
                         {
@@ -4252,13 +4261,7 @@ impl HybridStaticBundler {
                     }
                 } else if import_from.level > 0 {
                     // Handle relative imports (e.g., from . import greeting)
-                    self.collect_direct_relative_imports(
-                        import_from,
-                        current_module,
-                        module_path,
-                        modules,
-                        directly_imported,
-                    );
+                    self.collect_direct_relative_imports(import_from, ctx, directly_imported);
                 }
             }
             _ => {}
@@ -4269,15 +4272,13 @@ impl HybridStaticBundler {
     fn collect_direct_relative_imports(
         &self,
         import_from: &StmtImportFrom,
-        current_module: &str,
-        module_path: &Path,
-        modules: &[(String, ModModule, PathBuf, String)],
+        ctx: &DirectImportContext<'_>,
         directly_imported: &mut FxIndexSet<String>,
     ) {
         let resolved_module = self.resolve_relative_import_with_context(
             import_from,
-            current_module,
-            Some(module_path),
+            ctx.current_module,
+            Some(ctx.module_path),
         );
 
         let Some(base_module) = resolved_module else {
@@ -4296,7 +4297,8 @@ impl HybridStaticBundler {
             );
 
             // Check if this full path matches a bundled module
-            let is_bundled_module = modules
+            let is_bundled_module = ctx
+                .modules
                 .iter()
                 .any(|(name, _, _, _)| name == &full_module_path);
 
@@ -5689,20 +5691,7 @@ impl HybridStaticBundler {
                     let inlined_key = full_module_path.cow_replace('.', "_").into_owned();
 
                     // Get the exported symbols from this module
-                    let mut keywords = Vec::new();
-                    if let Some(Some(exports)) = self.module_exports.get(&full_module_path) {
-                        for symbol in exports {
-                            keywords.push(Keyword {
-                                arg: Some(Identifier::new(symbol.as_str(), TextRange::default())),
-                                value: Expr::Name(ExprName {
-                                    id: format!("{}_{}", symbol, inlined_key).into(),
-                                    ctx: ExprContext::Load,
-                                    range: TextRange::default(),
-                                }),
-                                range: TextRange::default(),
-                            });
-                        }
-                    }
+                    let keywords = self.create_namespace_keywords(&full_module_path, &inlined_key);
 
                     // Create a types.SimpleNamespace with the renamed attributes
                     result_stmts.push(Stmt::Assign(StmtAssign {
@@ -5771,49 +5760,14 @@ impl HybridStaticBundler {
                     && self.module_registry.contains_key(module_name)
                 {
                     // Create all parent namespaces if needed (e.g., for a.b.c.d, create a, a.b, a.b.c)
-                    for i in 1..parts.len() {
-                        let parent_path = parts[..i].join(".");
-
-                        if self.module_registry.contains_key(&parent_path) {
-                            // Parent is a wrapper module, get it from sys.modules
-                            result_stmts.push(
-                                self.create_sys_modules_assignment(&parent_path, &parent_path),
-                            );
-                        } else if !self.bundled_modules.contains(&parent_path) {
-                            // Check if we haven't already created this namespace in result_stmts
-                            let already_created = result_stmts.iter().any(|stmt| {
-                                if let Stmt::Assign(assign) = stmt {
-                                    if let Some(Expr::Name(name)) = assign.targets.first() {
-                                        return name.id.as_str() == parent_path;
-                                    }
-                                }
-                                false
-                            });
-
-                            if !already_created {
-                                // Parent is not a wrapper module and not an inlined module, create a simple namespace
-                                result_stmts.push(self.create_namespace_module(&parent_path));
-                            }
-                        }
-                    }
+                    self.create_parent_namespaces(&parts, &mut result_stmts);
 
                     let target_name = alias.asname.as_ref().unwrap_or(&alias.name);
 
                     // If there's no alias, we need to handle the dotted name specially
                     if alias.asname.is_none() && module_name.contains('.') {
                         // Create assignments for each level of nesting
-                        // For import a.b.c.d, we need:
-                        // a.b = sys.modules['a.b']
-                        // a.b.c = sys.modules['a.b.c']
-                        // a.b.c.d = sys.modules['a.b.c.d']
-                        for i in 2..=parts.len() {
-                            let parent = parts[..i - 1].join(".");
-                            let attr = parts[i - 1];
-                            let full_path = parts[..i].join(".");
-                            result_stmts.push(
-                                self.create_dotted_attribute_assignment(&parent, attr, &full_path),
-                            );
-                        }
+                        self.create_dotted_assignments(&parts, &mut result_stmts);
                     } else {
                         // For aliased imports or non-dotted imports, just assign to the target
                         result_stmts.push(
@@ -5884,6 +5838,98 @@ impl HybridStaticBundler {
         })
     }
 
+    /// Create parent namespaces for dotted imports in entry module
+    fn create_parent_namespaces_entry_module(
+        &mut self,
+        parts: &[&str],
+        result_stmts: &mut Vec<Stmt>,
+    ) {
+        for i in 1..parts.len() {
+            let parent_path = parts[..i].join(".");
+
+            if self.module_registry.contains_key(&parent_path) {
+                // Parent is a wrapper module, get it from sys.modules
+                result_stmts.push(self.create_sys_modules_assignment(&parent_path, &parent_path));
+            } else if !self.bundled_modules.contains(&parent_path) {
+                // Check if we haven't already created this namespace globally or in result_stmts
+                let already_created = self.created_namespace_modules.contains(&parent_path)
+                    || self.is_namespace_already_created(&parent_path, result_stmts);
+
+                if !already_created {
+                    // Parent is not a wrapper module and not an inlined module, create a simple namespace
+                    result_stmts.push(self.create_namespace_module(&parent_path));
+                    // Track that we created this namespace module
+                    self.created_namespace_modules.insert(parent_path);
+                }
+            }
+        }
+    }
+
+    /// Create parent namespaces for dotted imports
+    fn create_parent_namespaces(&self, parts: &[&str], result_stmts: &mut Vec<Stmt>) {
+        for i in 1..parts.len() {
+            let parent_path = parts[..i].join(".");
+
+            if self.module_registry.contains_key(&parent_path) {
+                // Parent is a wrapper module, get it from sys.modules
+                result_stmts.push(self.create_sys_modules_assignment(&parent_path, &parent_path));
+            } else if !self.bundled_modules.contains(&parent_path) {
+                // Check if we haven't already created this namespace in result_stmts
+                let already_created = self.is_namespace_already_created(&parent_path, result_stmts);
+
+                if !already_created {
+                    // Parent is not a wrapper module and not an inlined module, create a simple namespace
+                    result_stmts.push(self.create_namespace_module(&parent_path));
+                }
+            }
+        }
+    }
+
+    /// Check if a namespace module was already created
+    fn is_namespace_already_created(&self, parent_path: &str, result_stmts: &[Stmt]) -> bool {
+        result_stmts.iter().any(|stmt| {
+            if let Stmt::Assign(assign) = stmt {
+                if let Some(Expr::Name(name)) = assign.targets.first() {
+                    return name.id.as_str() == parent_path;
+                }
+            }
+            false
+        })
+    }
+
+    /// Create dotted attribute assignments for imports
+    fn create_dotted_assignments(&self, parts: &[&str], result_stmts: &mut Vec<Stmt>) {
+        // For import a.b.c.d, we need:
+        // a.b = sys.modules['a.b']
+        // a.b.c = sys.modules['a.b.c']
+        // a.b.c.d = sys.modules['a.b.c.d']
+        for i in 2..=parts.len() {
+            let parent = parts[..i - 1].join(".");
+            let attr = parts[i - 1];
+            let full_path = parts[..i].join(".");
+            result_stmts.push(self.create_dotted_attribute_assignment(&parent, attr, &full_path));
+        }
+    }
+
+    /// Create namespace keywords for a module
+    fn create_namespace_keywords(&self, full_module_path: &str, inlined_key: &str) -> Vec<Keyword> {
+        let mut keywords = Vec::new();
+        if let Some(Some(exports)) = self.module_exports.get(full_module_path) {
+            for symbol in exports {
+                keywords.push(Keyword {
+                    arg: Some(Identifier::new(symbol.as_str(), TextRange::default())),
+                    value: Expr::Name(ExprName {
+                        id: format!("{}_{}", symbol, inlined_key).into(),
+                        ctx: ExprContext::Load,
+                        range: TextRange::default(),
+                    }),
+                    range: TextRange::default(),
+                });
+            }
+        }
+        keywords
+    }
+
     /// Create a simple namespace module object
     fn create_namespace_module(&self, module_name: &str) -> Stmt {
         // Create: module_name = types.ModuleType('module_name')
@@ -5934,53 +5980,14 @@ impl HybridStaticBundler {
                     && self.module_registry.contains_key(module_name)
                 {
                     // Create all parent namespaces if needed (e.g., for a.b.c.d, create a, a.b, a.b.c)
-                    for i in 1..parts.len() {
-                        let parent_path = parts[..i].join(".");
-
-                        if self.module_registry.contains_key(&parent_path) {
-                            // Parent is a wrapper module, get it from sys.modules
-                            result_stmts.push(
-                                self.create_sys_modules_assignment(&parent_path, &parent_path),
-                            );
-                        } else if !self.bundled_modules.contains(&parent_path) {
-                            // Check if we haven't already created this namespace globally or in result_stmts
-                            let already_created =
-                                self.created_namespace_modules.contains(&parent_path)
-                                    || result_stmts.iter().any(|stmt| {
-                                        if let Stmt::Assign(assign) = stmt {
-                                            if let Some(Expr::Name(name)) = assign.targets.first() {
-                                                return name.id.as_str() == parent_path;
-                                            }
-                                        }
-                                        false
-                                    });
-
-                            if !already_created {
-                                // Parent is not a wrapper module and not an inlined module, create a simple namespace
-                                result_stmts.push(self.create_namespace_module(&parent_path));
-                                // Track that we created this namespace module
-                                self.created_namespace_modules.insert(parent_path);
-                            }
-                        }
-                    }
+                    self.create_parent_namespaces_entry_module(&parts, &mut result_stmts);
 
                     let target_name = alias.asname.as_ref().unwrap_or(&alias.name);
 
                     // If there's no alias, we need to handle the dotted name specially
                     if alias.asname.is_none() && module_name.contains('.') {
                         // Create assignments for each level of nesting
-                        // For import a.b.c.d, we need:
-                        // a.b = sys.modules['a.b']
-                        // a.b.c = sys.modules['a.b.c']
-                        // a.b.c.d = sys.modules['a.b.c.d']
-                        for i in 2..=parts.len() {
-                            let parent = parts[..i - 1].join(".");
-                            let attr = parts[i - 1];
-                            let full_path = parts[..i].join(".");
-                            result_stmts.push(
-                                self.create_dotted_attribute_assignment(&parent, attr, &full_path),
-                            );
-                        }
+                        self.create_dotted_assignments(&parts, &mut result_stmts);
                     } else {
                         // For aliased imports or non-dotted imports, just assign to the target
                         result_stmts.push(
