@@ -59,7 +59,6 @@ class UserResponse(BaseModel):
     is_active: bool
     bio: Optional[str] = None
 """Pydantic test project entry point."""
-from pydantic import ValidationError
 def main():
     """Main function demonstrating Pydantic usage."""
     user_data = {"name": "John Doe", "email": "john@example.com", "age": 25}

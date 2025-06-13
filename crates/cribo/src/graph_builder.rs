@@ -46,6 +46,18 @@ impl<'a> GraphBuilder<'a> {
 
     /// Process a statement and add it to the graph
     fn process_statement(&mut self, stmt: &Stmt) -> Result<()> {
+        // Inside functions, process imports, functions, and classes normally
+        // Skip other statements as they're tracked via eventual_read_vars
+        if matches!(self.current_scope, ScopeType::Function) {
+            match stmt {
+                Stmt::Import(import_stmt) => return self.process_import(import_stmt),
+                Stmt::ImportFrom(import_from) => return self.process_import_from(import_from),
+                Stmt::FunctionDef(func_def) => return self.process_function_def(func_def),
+                Stmt::ClassDef(class_def) => return self.process_class_def(class_def),
+                _ => return Ok(()),
+            }
+        }
+
         match stmt {
             Stmt::Import(import_stmt) => self.process_import(import_stmt),
             Stmt::ImportFrom(import_from) => self.process_import_from(import_from),

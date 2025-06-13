@@ -32,31 +32,7 @@ fn bundle_test_script(script_dir: &str) -> Result<String> {
     Ok(bundled_content)
 }
 
-#[test]
-fn test_three_module_circular_dependency() {
-    let result = bundle_test_script("three_module_cycle");
-
-    // This should detect the circular dependency: module_a -> module_b -> module_c -> module_a
-    match result {
-        Ok(bundled_content) => {
-            // If bundling succeeds, it means we've successfully resolved the circular dependency
-            // This is a function-level cycle that should be resolvable
-            assert_snapshot!("three_module_cycle_bundled", bundled_content);
-        }
-        Err(error) => {
-            // If it fails, we should get a meaningful error about the circular dependency
-            let error_msg = error.to_string();
-            assert!(
-                error_msg.contains("Circular dependencies detected")
-                    || error_msg.contains("circular")
-                    || error_msg.contains("cycle"),
-                "Error should mention circular dependency: {}",
-                error_msg
-            );
-            assert_snapshot!("three_module_cycle_error", error_msg);
-        }
-    }
-}
+// Note: test_three_module_circular_dependency removed as fixture was migrated to bundling framework
 
 #[test]
 fn test_four_module_circular_dependency() {
