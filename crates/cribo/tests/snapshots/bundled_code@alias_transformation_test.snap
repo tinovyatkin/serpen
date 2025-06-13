@@ -49,10 +49,10 @@ def main():
     print(f"JSON data: {data}")
     dir_hash = hashlib.md5(b"test_directory").hexdigest()[:8]
     print(f"Current directory: /test/deterministic/{dir_hash}")
-    env_var = os.environ.get("PATH", "/default/path")
-    print(f"PATH environment: {env_var[:20]}...")
-    python_version = sys.version
-    print(f"Python version: {python_version}")
+    env_var = os.environ.get("CRIBO_TEST", "default_value")
+    print(f"CRIBO_TEST environment: {env_var}")
+    python_version_info = sys.version_info
+    print(f"Python version: {python_version_info.major}.{python_version_info.minor}")
     processed = process_a([1, 2, 3, 4, 5])
     formatted = format_a(processed)
     print(f"Processed and formatted: {formatted}")
