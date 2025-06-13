@@ -5811,31 +5811,74 @@ impl HybridStaticBundler {
         }
     }
 
-    /// Create a sys.modules assignment for an import
-    fn create_sys_modules_assignment(&self, target_name: &str, module_name: &str) -> Stmt {
-        Stmt::Assign(StmtAssign {
-            targets: vec![Expr::Name(ExprName {
-                id: target_name.into(),
-                ctx: ExprContext::Store,
-                range: TextRange::default(),
-            })],
-            value: Box::new(Expr::Subscript(ruff_python_ast::ExprSubscript {
-                value: Box::new(Expr::Attribute(ExprAttribute {
-                    value: Box::new(Expr::Name(ExprName {
-                        id: "sys".into(),
-                        ctx: ExprContext::Load,
-                        range: TextRange::default(),
-                    })),
-                    attr: Identifier::new("modules", TextRange::default()),
-                    ctx: ExprContext::Load,
-                    range: TextRange::default(),
-                })),
-                slice: Box::new(self.create_string_literal(module_name)),
-                ctx: ExprContext::Load,
-                range: TextRange::default(),
-            })),
-            range: TextRange::default(),
-        })
+    /// Rewrite Import statements in entry module with namespace tracking
+    fn rewrite_import_entry_module(&mut self, import_stmt: StmtImport) -> Vec<Stmt> {
+        // We need to handle namespace tracking differently to avoid borrow issues
+        let mut result_stmts = Vec::new();
+        let mut handled_all = true;
+
+        for alias in &import_stmt.names {
+            let module_name = alias.name.as_str();
+
+            // Check if this is a dotted import (e.g., greetings.greeting)
+            if module_name.contains('.') {
+                // Handle dotted imports specially
+                let parts: Vec<&str> = module_name.split('.').collect();
+
+                // Check if the full module is bundled
+                if self.bundled_modules.contains(module_name)
+                    && self.module_registry.contains_key(module_name)
+                {
+                    // Create all parent namespaces if needed (e.g., for a.b.c.d, create a, a.b, a.b.c)
+                    self.create_parent_namespaces_entry_module(&parts, &mut result_stmts);
+
+                    let target_name = alias.asname.as_ref().unwrap_or(&alias.name);
+
+                    // If there's no alias, we need to handle the dotted name specially
+                    if alias.asname.is_none() && module_name.contains('.') {
+                        // Create assignments for each level of nesting
+                        self.create_dotted_assignments(&parts, &mut result_stmts);
+                    } else {
+                        // For aliased imports or non-dotted imports, just assign to the target
+                        result_stmts.push(
+                            self.create_sys_modules_assignment(target_name.as_str(), module_name),
+                        );
+                    }
+                } else {
+                    handled_all = false;
+                    continue;
+                }
+            } else {
+                // Non-dotted import - handle as before
+                if !self.bundled_modules.contains(module_name) {
+                    handled_all = false;
+                    continue;
+                }
+
+                if self.module_registry.contains_key(module_name) {
+                    // Module uses wrapper approach - transform to sys.modules access
+                    let target_name = alias.asname.as_ref().unwrap_or(&alias.name);
+                    result_stmts.push(
+                        self.create_sys_modules_assignment(target_name.as_str(), module_name),
+                    );
+                } else {
+                    // Module was inlined - this is problematic for direct imports
+                    // We need to create a mock module object
+                    log::warn!(
+                        "Direct import of inlined module '{}' detected - this pattern is not fully supported",
+                        module_name
+                    );
+                    // For now, skip it
+                }
+            }
+        }
+
+        if handled_all {
+            result_stmts
+        } else {
+            // Keep original import for non-bundled modules
+            vec![Stmt::Import(import_stmt)]
+        }
     }
 
     /// Create parent namespaces for dotted imports in entry module
@@ -5863,6 +5906,33 @@ impl HybridStaticBundler {
                 }
             }
         }
+    }
+
+    /// Create a sys.modules assignment for an import
+    fn create_sys_modules_assignment(&self, target_name: &str, module_name: &str) -> Stmt {
+        Stmt::Assign(StmtAssign {
+            targets: vec![Expr::Name(ExprName {
+                id: target_name.into(),
+                ctx: ExprContext::Store,
+                range: TextRange::default(),
+            })],
+            value: Box::new(Expr::Subscript(ruff_python_ast::ExprSubscript {
+                value: Box::new(Expr::Attribute(ExprAttribute {
+                    value: Box::new(Expr::Name(ExprName {
+                        id: "sys".into(),
+                        ctx: ExprContext::Load,
+                        range: TextRange::default(),
+                    })),
+                    attr: Identifier::new("modules", TextRange::default()),
+                    ctx: ExprContext::Load,
+                    range: TextRange::default(),
+                })),
+                slice: Box::new(self.create_string_literal(module_name)),
+                ctx: ExprContext::Load,
+                range: TextRange::default(),
+            })),
+            range: TextRange::default(),
+        })
     }
 
     /// Create parent namespaces for dotted imports
@@ -5959,76 +6029,6 @@ impl HybridStaticBundler {
             })),
             range: TextRange::default(),
         })
-    }
-
-    /// Rewrite Import statements in entry module with namespace tracking
-    fn rewrite_import_entry_module(&mut self, import_stmt: StmtImport) -> Vec<Stmt> {
-        // Check each import individually
-        let mut result_stmts = Vec::new();
-        let mut handled_all = true;
-
-        for alias in &import_stmt.names {
-            let module_name = alias.name.as_str();
-
-            // Check if this is a dotted import (e.g., greetings.greeting)
-            if module_name.contains('.') {
-                // Handle dotted imports specially
-                let parts: Vec<&str> = module_name.split('.').collect();
-
-                // Check if the full module is bundled
-                if self.bundled_modules.contains(module_name)
-                    && self.module_registry.contains_key(module_name)
-                {
-                    // Create all parent namespaces if needed (e.g., for a.b.c.d, create a, a.b, a.b.c)
-                    self.create_parent_namespaces_entry_module(&parts, &mut result_stmts);
-
-                    let target_name = alias.asname.as_ref().unwrap_or(&alias.name);
-
-                    // If there's no alias, we need to handle the dotted name specially
-                    if alias.asname.is_none() && module_name.contains('.') {
-                        // Create assignments for each level of nesting
-                        self.create_dotted_assignments(&parts, &mut result_stmts);
-                    } else {
-                        // For aliased imports or non-dotted imports, just assign to the target
-                        result_stmts.push(
-                            self.create_sys_modules_assignment(target_name.as_str(), module_name),
-                        );
-                    }
-                } else {
-                    handled_all = false;
-                    continue;
-                }
-            } else {
-                // Non-dotted import - handle as before
-                if !self.bundled_modules.contains(module_name) {
-                    handled_all = false;
-                    continue;
-                }
-
-                if self.module_registry.contains_key(module_name) {
-                    // Module uses wrapper approach - transform to sys.modules access
-                    let target_name = alias.asname.as_ref().unwrap_or(&alias.name);
-                    result_stmts.push(
-                        self.create_sys_modules_assignment(target_name.as_str(), module_name),
-                    );
-                } else {
-                    // Module was inlined - this is problematic for direct imports
-                    // We need to create a mock module object
-                    log::warn!(
-                        "Direct import of inlined module '{}' detected - this pattern is not fully supported",
-                        module_name
-                    );
-                    // For now, skip it
-                }
-            }
-        }
-
-        if handled_all {
-            result_stmts
-        } else {
-            // Keep original import for non-bundled modules
-            vec![Stmt::Import(import_stmt)]
-        }
     }
 
     /// Create dotted attribute assignment (e.g., greetings.greeting = sys.modules['greetings.greeting'])
