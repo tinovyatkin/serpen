@@ -4,11 +4,11 @@ use cow_utils::CowUtils;
 use indexmap::{IndexMap, IndexSet};
 use log::debug;
 use ruff_python_ast::{
-    CmpOp, Comprehension, ExceptHandler, Expr, ExprAttribute, ExprCall, ExprCompare, ExprContext,
-    ExprFString, ExprIf, ExprList, ExprName, ExprNoneLiteral, ExprStringLiteral, FString,
-    FStringElement, FStringElements, FStringExpressionElement, FStringFlags, FStringValue,
-    Identifier, ModModule, Stmt, StmtAssign, StmtClassDef, StmtFunctionDef, StmtIf, StmtImport,
-    StmtImportFrom, StringLiteral, StringLiteralFlags, StringLiteralValue,
+    Arguments, CmpOp, Comprehension, ExceptHandler, Expr, ExprAttribute, ExprCall, ExprCompare,
+    ExprContext, ExprFString, ExprIf, ExprList, ExprName, ExprNoneLiteral, ExprStringLiteral,
+    FString, FStringElement, FStringElements, FStringExpressionElement, FStringFlags, FStringValue,
+    Identifier, Keyword, ModModule, Stmt, StmtAssign, StmtClassDef, StmtFunctionDef, StmtIf,
+    StmtImport, StmtImportFrom, StringLiteral, StringLiteralFlags, StringLiteralValue,
 };
 use ruff_text_size::TextRange;
 use rustc_hash::FxHasher;
@@ -878,6 +878,45 @@ impl HybridStaticBundler {
             // Register init function
             let init_func_name = format!("__cribo_init_{}", synthetic_name);
             self.init_functions.insert(synthetic_name, init_func_name);
+        }
+
+        // Also register namespace hybrid modules' exports
+        // We'll use either explicit __all__ exports or fall back to all module-level symbols
+        for (module_name, ast, _, _) in &namespace_hybrid_modules {
+            let explicit_exports = module_exports_map.get(module_name).cloned().flatten();
+
+            // If no explicit __all__, extract all module-level symbols as exports
+            let exports = if explicit_exports.is_none() {
+                // Extract all module-level assignments, functions, and classes
+                let mut symbols = Vec::new();
+                for stmt in &ast.body {
+                    match stmt {
+                        Stmt::FunctionDef(func) => {
+                            symbols.push(func.name.to_string());
+                        }
+                        Stmt::ClassDef(class) => {
+                            symbols.push(class.name.to_string());
+                        }
+                        Stmt::Assign(assign) => {
+                            if assign.targets.len() == 1 {
+                                if let Expr::Name(name) = &assign.targets[0] {
+                                    symbols.push(name.id.to_string());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if symbols.is_empty() {
+                    None
+                } else {
+                    Some(symbols)
+                }
+            } else {
+                explicit_exports
+            };
+
+            self.module_exports.insert(module_name.clone(), exports);
         }
 
         // Add imports first
@@ -5526,17 +5565,42 @@ impl HybridStaticBundler {
 
         if !self.bundled_modules.contains(&module_name) {
             log::debug!(
-                "Module '{}' not found in bundled modules, keeping original import",
+                "Module '{}' not found in bundled modules, checking if importing submodules",
                 module_name
             );
-            // For relative imports from non-bundled modules, convert to absolute import
-            if import_from.level > 0 {
-                let mut absolute_import = import_from.clone();
-                absolute_import.level = 0;
-                absolute_import.module = Some(Identifier::new(&module_name, TextRange::default()));
-                return vec![Stmt::ImportFrom(absolute_import)];
+
+            // Check if we're importing submodules from a namespace package
+            // e.g., from greetings import greeting where greeting is actually greetings.greeting
+            let mut has_bundled_submodules = false;
+            for alias in &import_from.names {
+                let imported_name = alias.name.as_str();
+                let full_module_path = format!("{}.{}", module_name, imported_name);
+                if self.bundled_modules.contains(&full_module_path) {
+                    has_bundled_submodules = true;
+                    break;
+                }
             }
-            return vec![Stmt::ImportFrom(import_from)];
+
+            if !has_bundled_submodules {
+                // No bundled submodules, keep original import
+                // For relative imports from non-bundled modules, convert to absolute import
+                if import_from.level > 0 {
+                    let mut absolute_import = import_from.clone();
+                    absolute_import.level = 0;
+                    absolute_import.module =
+                        Some(Identifier::new(&module_name, TextRange::default()));
+                    return vec![Stmt::ImportFrom(absolute_import)];
+                }
+                return vec![Stmt::ImportFrom(import_from)];
+            }
+
+            // We have bundled submodules, need to transform them
+            log::debug!(
+                "Module '{}' has bundled submodules, transforming imports",
+                module_name
+            );
+            // Transform each submodule import
+            return self.transform_namespace_package_imports(import_from, &module_name);
         }
 
         log::debug!("Transforming bundled import from module: {}", module_name);
@@ -5560,6 +5624,122 @@ impl HybridStaticBundler {
                 module_name
             );
             self.create_assignments_for_inlined_imports(import_from, &module_name, symbol_renames)
+        }
+    }
+
+    /// Transform imports from a namespace package (package without __init__.py)
+    fn transform_namespace_package_imports(
+        &self,
+        import_from: StmtImportFrom,
+        module_name: &str,
+    ) -> Vec<Stmt> {
+        let mut result_stmts = Vec::new();
+
+        for alias in &import_from.names {
+            let imported_name = alias.name.as_str();
+            let local_name = alias.asname.as_ref().unwrap_or(&alias.name).as_str();
+            let full_module_path = format!("{}.{}", module_name, imported_name);
+
+            if self.bundled_modules.contains(&full_module_path) {
+                if self.module_registry.contains_key(&full_module_path) {
+                    // Wrapper module - create sys.modules access
+                    result_stmts.push(Stmt::Assign(StmtAssign {
+                        targets: vec![Expr::Name(ExprName {
+                            id: local_name.into(),
+                            ctx: ExprContext::Store,
+                            range: TextRange::default(),
+                        })],
+                        value: Box::new(Expr::Subscript(ruff_python_ast::ExprSubscript {
+                            value: Box::new(Expr::Attribute(ExprAttribute {
+                                value: Box::new(Expr::Name(ExprName {
+                                    id: "sys".into(),
+                                    ctx: ExprContext::Load,
+                                    range: TextRange::default(),
+                                })),
+                                attr: Identifier::new("modules", TextRange::default()),
+                                ctx: ExprContext::Load,
+                                range: TextRange::default(),
+                            })),
+                            slice: Box::new(self.create_string_literal(&full_module_path)),
+                            ctx: ExprContext::Load,
+                            range: TextRange::default(),
+                        })),
+                        range: TextRange::default(),
+                    }));
+                } else {
+                    // Inlined module - create a namespace object for it
+                    log::debug!(
+                        "Submodule '{}' from namespace package '{}' was inlined, creating namespace",
+                        imported_name,
+                        module_name
+                    );
+
+                    // For namespace hybrid modules, we need to create the namespace object
+                    // The inlined module's symbols are already renamed with module prefix
+                    // e.g., message -> message_greetings_greeting
+                    let inlined_key = full_module_path.cow_replace('.', "_").into_owned();
+
+                    // Get the exported symbols from this module
+                    let mut keywords = Vec::new();
+                    if let Some(Some(exports)) = self.module_exports.get(&full_module_path) {
+                        for symbol in exports {
+                            keywords.push(Keyword {
+                                arg: Some(Identifier::new(symbol.as_str(), TextRange::default())),
+                                value: Expr::Name(ExprName {
+                                    id: format!("{}_{}", symbol, inlined_key).into(),
+                                    ctx: ExprContext::Load,
+                                    range: TextRange::default(),
+                                }),
+                                range: TextRange::default(),
+                            });
+                        }
+                    }
+
+                    // Create a types.SimpleNamespace with the renamed attributes
+                    result_stmts.push(Stmt::Assign(StmtAssign {
+                        targets: vec![Expr::Name(ExprName {
+                            id: local_name.into(),
+                            ctx: ExprContext::Store,
+                            range: TextRange::default(),
+                        })],
+                        value: Box::new(Expr::Call(ExprCall {
+                            func: Box::new(Expr::Attribute(ExprAttribute {
+                                value: Box::new(Expr::Name(ExprName {
+                                    id: "types".into(),
+                                    ctx: ExprContext::Load,
+                                    range: TextRange::default(),
+                                })),
+                                attr: Identifier::new("SimpleNamespace", TextRange::default()),
+                                ctx: ExprContext::Load,
+                                range: TextRange::default(),
+                            })),
+                            arguments: Arguments {
+                                args: Box::new([]),
+                                keywords: keywords.into_boxed_slice(),
+                                range: TextRange::default(),
+                            },
+                            range: TextRange::default(),
+                        })),
+                        range: TextRange::default(),
+                    }));
+                }
+            } else {
+                // Not a bundled submodule, keep as attribute access
+                // This might be importing a symbol from the namespace package's __init__.py
+                // But since we're here, the namespace package has no __init__.py
+                log::warn!(
+                    "Import '{}' from namespace package '{}' is not a bundled module",
+                    imported_name,
+                    module_name
+                );
+            }
+        }
+
+        if result_stmts.is_empty() {
+            // If we didn't transform anything, return the original
+            vec![Stmt::ImportFrom(import_from)]
+        } else {
+            result_stmts
         }
     }
 
