@@ -601,8 +601,9 @@ impl ModuleResolver {
                 let parent_module = parts[..i].join(".");
                 if !self.first_party_modules.contains(&parent_module) {
                     debug!("Adding parent package: {}", parent_module);
-                    self.first_party_modules.insert(parent_module);
-                    // Note: We don't add to module_cache here since the parent might not have a file
+                    self.first_party_modules.insert(parent_module.clone());
+                    // Cache the absence of a physical file to avoid repeated scans later
+                    self.module_cache.entry(parent_module).or_insert(None);
                 }
             }
 
