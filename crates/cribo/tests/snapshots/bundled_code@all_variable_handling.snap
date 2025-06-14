@@ -126,6 +126,5 @@ print("\nTesting conflict resolution:")
 print(f"message = {message}")
 simple_module = sys.modules['simple_module']
 print(f"\nsimple_module.__all__ = {simple_module.__all__}")
-nested_package = sys.modules['nested_package']
 sub = sys.modules['nested_package.submodule']
 print(f"submodule.__all__ = {sub.__all__}")

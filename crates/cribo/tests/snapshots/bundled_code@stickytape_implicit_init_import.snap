@@ -49,6 +49,4 @@ __cribo_init___cribo_e3b0c4_greetings_irrelevant()
 __cribo_init___cribo_e6b571_greetings()
 greetings = sys.modules['greetings']
 greetings.irrelevant = sys.modules['greetings.irrelevant']
-greetings = sys.modules['greetings']
-greetings.irrelevant = sys.modules['greetings.irrelevant']
 print(greetings.message)

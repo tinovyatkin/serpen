@@ -2270,8 +2270,19 @@ impl HybridStaticBundler {
         for module in modules_to_assign {
             // Only assign if it's a wrapper module (exists in module_registry)
             if self.module_registry.contains_key(&module) {
-                // Generate: module = sys.modules['module']
-                final_body.push(self.create_sys_modules_assignment(&module, &module));
+                // Check if this module has already been assigned in final_body
+                let already_assigned = final_body.iter().any(|stmt| {
+                    matches!(stmt, Stmt::Assign(assign) if
+                        assign.targets.iter().any(|target|
+                            matches!(target, Expr::Name(name) if name.id.as_str() == module)
+                        )
+                    )
+                });
+
+                if !already_assigned {
+                    // Generate: module = sys.modules['module']
+                    final_body.push(self.create_sys_modules_assignment(&module, &module));
+                }
             }
         }
 
@@ -6031,8 +6042,9 @@ impl HybridStaticBundler {
 
                     // If there's no alias, we need to handle the dotted name specially
                     if alias.asname.is_none() && module_name.contains('.') {
-                        // Create assignments for each level of nesting
-                        self.create_dotted_assignments(&parts, &mut result_stmts);
+                        // For dotted imports without alias, we need to ensure the parent has the child as an attribute
+                        // e.g., for "import greetings.greeting", we need "greetings.greeting = sys.modules['greetings.greeting']"
+                        self.handle_dotted_import_attribute(&parts, module_name, &mut result_stmts);
                     } else {
                         // For aliased imports or non-dotted imports, just assign to the target
                         result_stmts.push(
@@ -6076,6 +6088,28 @@ impl HybridStaticBundler {
         }
     }
 
+    /// Handle dotted import attribute assignment
+    fn handle_dotted_import_attribute(
+        &self,
+        parts: &[&str],
+        module_name: &str,
+        result_stmts: &mut Vec<Stmt>,
+    ) {
+        if parts.len() > 1 {
+            let parent = parts[..parts.len() - 1].join(".");
+            let attr = parts[parts.len() - 1];
+
+            // Only add the attribute assignment if the parent is a namespace (not a real module)
+            if !parent.is_empty() && !self.module_registry.contains_key(&parent) {
+                result_stmts.push(self.create_dotted_attribute_assignment(
+                    &parent,
+                    attr,
+                    module_name,
+                ));
+            }
+        }
+    }
+
     /// Create parent namespaces for dotted imports in entry module
     fn create_parent_namespaces_entry_module(
         &mut self,
@@ -6086,8 +6120,8 @@ impl HybridStaticBundler {
             let parent_path = parts[..i].join(".");
 
             if self.module_registry.contains_key(&parent_path) {
-                // Parent is a wrapper module, get it from sys.modules
-                result_stmts.push(self.create_sys_modules_assignment(&parent_path, &parent_path));
+                // Parent is a wrapper module - don't create assignment here
+                // generate_submodule_attributes will handle all necessary parent assignments
             } else if !self.bundled_modules.contains(&parent_path) {
                 // Check if we haven't already created this namespace globally or in result_stmts
                 let already_created = self.created_namespace_modules.contains(&parent_path)
