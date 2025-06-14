@@ -221,4 +221,4 @@ jobs:
         env:
           VALGRINDFLAGS: '--error-exitcode=1 --leak-check=full --show-leak-kinds=all'
         run: |
-          cargo valgrind run -- --entry crates/cribo/tests/fixtures/bundling/mixed_import_patterns/main.py --stdout
+          cargo valgrind run -- --entry crates/cribo/tests/fixtures/bundling/comprehensive_ast_rewrite/main.py --stdout
