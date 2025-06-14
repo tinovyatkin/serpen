@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.29](https://github.com/ophidiarium/cribo/compare/v0.4.28...v0.4.29) (2025-06-14)
+
+
+### Features
+
+* **ci:** add rust-code-analysis-cli ([c40aff3](https://github.com/ophidiarium/cribo/commit/c40aff371307c65d71ac780795167e1c864932a7))
+
 ## [0.4.28](https://github.com/ophidiarium/cribo/compare/v0.4.27...v0.4.28) (2025-06-14)
 
 
