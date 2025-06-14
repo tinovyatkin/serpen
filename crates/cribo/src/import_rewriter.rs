@@ -145,7 +145,10 @@ impl ImportRewriter {
                 // Check if the import is only used in functions
                 let usage = self.analyze_import_usage(module_graph, &item_data.imported_names);
 
-                if usage.is_function_only && !usage.has_side_effects {
+                // Additionally check if the module itself has side effects
+                let module_has_side_effects = Self::is_likely_side_effect_import(&imported_module);
+
+                if usage.is_function_only && !usage.has_side_effects && !module_has_side_effects {
                     trace!(
                         "Import {:?} in {} can be moved to functions: {:?}",
                         import_stmt, module_name, usage.used_in_functions
@@ -193,8 +196,9 @@ impl ImportRewriter {
             has_side_effects: false,
         };
 
-        // Conservative approach: mark imports of certain modules as having side effects
-        // This can be enhanced with more sophisticated analysis later
+        // Check if any imported names are from modules with side effects
+        // Note: This only checks the imported symbol names, not the source module.
+        // The source module is checked separately in find_movable_imports_in_module
         for name in imported_names {
             if Self::is_likely_side_effect_import(name) {
                 analysis.has_side_effects = true;
