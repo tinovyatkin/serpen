@@ -4202,18 +4202,21 @@ impl HybridStaticBundler {
                 }
                 Stmt::ClassDef(class_def) => {
                     // Check methods inside the class (including async methods)
-                    for class_stmt in &class_def.body {
-                        if let Stmt::FunctionDef(method_def) = class_stmt {
-                            if Self::function_has_imports(&method_def.body) {
-                                return true;
-                            }
-                        }
+                    if self.class_has_method_imports(class_def) {
+                        return true;
                     }
                 }
                 _ => {}
             }
         }
         false
+    }
+
+    /// Check if a class has methods with imports
+    fn class_has_method_imports(&self, class_def: &StmtClassDef) -> bool {
+        class_def.body.iter().any(|class_stmt| {
+            matches!(class_stmt, Stmt::FunctionDef(method_def) if Self::function_has_imports(&method_def.body))
+        })
     }
 
     /// Check if a function body contains import statements

@@ -312,37 +312,7 @@ impl ImportRewriter {
                     }
                 }
                 Stmt::ImportFrom(import_from) => {
-                    // Check if this import statement matches any movable import
-                    let stmt_module = import_from.module.as_ref().map(|m| m.to_string());
-                    let stmt_level = import_from.level;
-
-                    // Check if any movable import matches this statement
-                    let has_match = movable_imports.iter().any(|mi| {
-                        if let ImportStatement::FromImport {
-                            module,
-                            level,
-                            names,
-                        } = &mi.import_stmt
-                        {
-                            // Module and level must match
-                            if module != &stmt_module || level != &stmt_level {
-                                return false;
-                            }
-
-                            // Check if all names in the movable import are present in the statement
-                            names.iter().all(|(name, alias)| {
-                                import_from.names.iter().any(|stmt_alias| {
-                                    stmt_alias.name.as_str() == name
-                                        && stmt_alias.asname.as_ref().map(|n| n.as_str())
-                                            == alias.as_deref()
-                                })
-                            })
-                        } else {
-                            false
-                        }
-                    });
-
-                    if has_match {
+                    if self.matches_any_movable_import(import_from, movable_imports) {
                         indices_to_remove.insert(idx);
                     }
                 }
@@ -351,6 +321,60 @@ impl ImportRewriter {
         }
 
         indices_to_remove
+    }
+
+    /// Check if an import statement matches any movable import
+    fn matches_any_movable_import(
+        &self,
+        import_from: &StmtImportFrom,
+        movable_imports: &[&MovableImport],
+    ) -> bool {
+        let stmt_module = import_from.module.as_ref().map(|m| m.to_string());
+        let stmt_level = import_from.level;
+
+        movable_imports.iter().any(|mi| {
+            self.import_matches_statement(&mi.import_stmt, &stmt_module, stmt_level, import_from)
+        })
+    }
+
+    /// Check if a movable import matches an import statement
+    fn import_matches_statement(
+        &self,
+        import: &ImportStatement,
+        stmt_module: &Option<String>,
+        stmt_level: u32,
+        import_from: &StmtImportFrom,
+    ) -> bool {
+        match import {
+            ImportStatement::FromImport {
+                module,
+                level,
+                names,
+            } => {
+                // Module and level must match
+                if module != stmt_module || level != &stmt_level {
+                    return false;
+                }
+
+                // Check if all names in the movable import are present in the statement
+                self.all_names_present_in_statement(names, &import_from.names)
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if all names are present in the statement
+    fn all_names_present_in_statement(
+        &self,
+        names: &[(String, Option<String>)],
+        stmt_names: &[ast::Alias],
+    ) -> bool {
+        names.iter().all(|(name, alias)| {
+            stmt_names.iter().any(|stmt_alias| {
+                stmt_alias.name.as_str() == name
+                    && stmt_alias.asname.as_ref().map(|n| n.as_str()) == alias.as_deref()
+            })
+        })
     }
 
     /// Remove module-level imports
