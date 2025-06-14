@@ -97,29 +97,37 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const path = `${process.env.HOME}/rca-json`;
-            let commentBody = "## Rust Code Analysis Metrics\n";
-            // Recursively collect all JSON files
-            function collectFiles(dir) {
-              return fs.readdirSync(dir).flatMap(name => {
-                const full = `${dir}/${name}`;
-                return fs.statSync(full).isDirectory()
-                  ? collectFiles(full)
-                  : [full];
+            const dir = `${process.env.HOME}/rca-json`;
+            const { withFileTypes } = { withFileTypes: true };
+            // Collect JSON files
+            function collectFiles(d) {
+              return fs.readdirSync(d, { withFileTypes: true }).flatMap(dirent => {
+                const full = `${d}/${dirent.name}`;
+                return dirent.isDirectory() ? collectFiles(full) : [full];
               });
             }
-            const files = collectFiles(path);
-            for (const fullPath of files) {
-              const rel = fullPath.substring(path.length + 1);
-              const data = fs.readFileSync(fullPath, 'utf8');
-              commentBody += '### ' + rel + '\n';
-              commentBody += '```json\n' + data + '\n```\n\n';
-            }
+            const files = collectFiles(dir).filter(f => f.endsWith('.json'));
+            let rows = [];
+            files.forEach(fullPath => {
+              const rel = fullPath.slice(dir.length + 1);
+              const items = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
+              const count = items.length || 1;
+              // Sum and average key metrics
+              const totalCyclo = items.reduce((sum, o) => sum + o.metrics.cyclomatic.sum, 0);
+              const totalCog  = items.reduce((sum, o) => sum + o.metrics.cognitive.sum, 0);
+              const totalFunc = items.reduce((sum, o) => sum + o.metrics.nom.functions, 0);
+              rows.push({ file: rel, funcs: totalFunc, cyclo: (totalCyclo/count).toFixed(1), cog: (totalCog/count).toFixed(1) });
+            });
+            // Build markdown table
+            let body = '## Rust Code Analysis Summary\n\n';
+            body += '| File | Functions | Avg Cyclomatic | Avg Cognitive |\n';
+            body += '|---|---:|---:|---:|\n';
+            rows.forEach(r => body += `| ${r.file} | ${r.funcs} | ${r.cyclo} | ${r.cog} |\n`);
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: commentBody
+              body
             });
 
       - name: Cargo Machete
