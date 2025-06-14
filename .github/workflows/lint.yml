@@ -110,7 +110,8 @@ jobs:
             let rows = [];
             files.forEach(fullPath => {
               const rel = fullPath.slice(dir.length + 1);
-              const items = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
+              let itemsRaw = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
+              const items = Array.isArray(itemsRaw) ? itemsRaw : [itemsRaw];
               const count = items.length || 1;
               // Sum and average key metrics
               const totalCyclo = items.reduce((sum, o) => sum + o.metrics.cyclomatic.sum, 0);
