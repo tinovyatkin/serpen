@@ -101,8 +101,11 @@ impl<'a> EnhancedGraphBuilder<'a> {
                     all_imported.push(local_name.to_string());
 
                     // Also track root module for dotted imports
-                    if !alias.asname.is_some() && module_name.contains('.') {
-                        let root = module_name.split('.').next().unwrap();
+                    if alias.asname.is_none() && module_name.contains('.') {
+                        let root = module_name
+                            .split('.')
+                            .next()
+                            .expect("Module name should have at least one part");
                         all_imported.push(root.to_string());
                     }
                 }
@@ -241,7 +244,7 @@ impl<'a> EnhancedGraphBuilder<'a> {
             reexported_names: FxHashSet::default(),
         };
 
-        let class_item_id = self.graph.add_item(item_data);
+        let _class_item_id = self.graph.add_item(item_data);
 
         // Push class scope
         self.scope_stack.push(ScopeContext {
@@ -292,7 +295,7 @@ impl<'a> EnhancedGraphBuilder<'a> {
             read_vars: if in_function {
                 FxHashSet::default()
             } else {
-                read_vars
+                read_vars.clone()
             },
             eventual_read_vars: if in_function {
                 read_vars
@@ -335,7 +338,7 @@ impl<'a> EnhancedGraphBuilder<'a> {
             read_vars: if in_function {
                 FxHashSet::default()
             } else {
-                read_vars
+                read_vars.clone()
             },
             eventual_read_vars: if in_function {
                 read_vars
@@ -441,12 +444,8 @@ impl<'a> EnhancedGraphBuilder<'a> {
 
     fn collect_vars_in_expr(&self, expr: &Expr, vars: &mut FxHashSet<String>) {
         // Simplified - would use the full implementation from graph_builder.rs
-        match expr {
-            Expr::Name(name) => {
-                vars.insert(name.id.to_string());
-            }
-            // ... other cases
-            _ => {}
+        if let Expr::Name(name) = expr {
+            vars.insert(name.id.to_string());
         }
     }
 
