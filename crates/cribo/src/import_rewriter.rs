@@ -369,12 +369,31 @@ impl ImportRewriter {
         names: &[(String, Option<String>)],
         stmt_names: &[ast::Alias],
     ) -> bool {
-        names.iter().all(|(name, alias)| {
-            stmt_names.iter().any(|stmt_alias| {
-                stmt_alias.name.as_str() == name
-                    && stmt_alias.asname.as_ref().map(|n| n.as_str()) == alias.as_deref()
+        // For exact matching, both lists must have the same length
+        if names.len() != stmt_names.len() {
+            return false;
+        }
+
+        // Create sorted representations for order-independent comparison
+        let mut sorted_names: Vec<_> = names
+            .iter()
+            .map(|(name, alias)| (name.as_str(), alias.as_deref()))
+            .collect();
+        sorted_names.sort();
+
+        let mut sorted_stmt_names: Vec<_> = stmt_names
+            .iter()
+            .map(|alias| {
+                (
+                    alias.name.as_str(),
+                    alias.asname.as_ref().map(|n| n.as_str()),
+                )
             })
-        })
+            .collect();
+        sorted_stmt_names.sort();
+
+        // Compare the sorted lists
+        sorted_names == sorted_stmt_names
     }
 
     /// Remove module-level imports
