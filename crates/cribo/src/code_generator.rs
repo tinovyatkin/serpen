@@ -4194,7 +4194,7 @@ impl HybridStaticBundler {
     fn module_has_function_scoped_imports(&self, ast: &ModModule) -> bool {
         for stmt in &ast.body {
             if let Stmt::FunctionDef(func_def) = stmt {
-                if self.function_has_imports(&func_def.body) {
+                if Self::function_has_imports(&func_def.body) {
                     return true;
                 }
             }
@@ -4203,57 +4203,54 @@ impl HybridStaticBundler {
     }
 
     /// Check if a function body contains import statements
-    fn function_has_imports(&self, body: &[Stmt]) -> bool {
+    fn function_has_imports(body: &[Stmt]) -> bool {
         for stmt in body {
             match stmt {
                 Stmt::Import(_) | Stmt::ImportFrom(_) => return true,
                 Stmt::If(if_stmt) => {
-                    if self.function_has_imports(&if_stmt.body) {
+                    if Self::function_has_imports(&if_stmt.body) {
                         return true;
                     }
                     for clause in &if_stmt.elif_else_clauses {
-                        if self.function_has_imports(&clause.body) {
+                        if Self::function_has_imports(&clause.body) {
                             return true;
                         }
                     }
                 }
                 Stmt::While(while_stmt) => {
-                    if self.function_has_imports(&while_stmt.body) {
+                    if Self::function_has_imports(&while_stmt.body) {
                         return true;
                     }
                 }
                 Stmt::For(for_stmt) => {
-                    if self.function_has_imports(&for_stmt.body) {
+                    if Self::function_has_imports(&for_stmt.body) {
                         return true;
                     }
                 }
                 Stmt::Try(try_stmt) => {
-                    if self.function_has_imports(&try_stmt.body) {
+                    if Self::function_has_imports(&try_stmt.body) {
                         return true;
                     }
                     for handler in &try_stmt.handlers {
-                        match handler {
-                            ExceptHandler::ExceptHandler(except_handler) => {
-                                if self.function_has_imports(&except_handler.body) {
-                                    return true;
-                                }
-                            }
+                        let ExceptHandler::ExceptHandler(except_handler) = handler;
+                        if Self::function_has_imports(&except_handler.body) {
+                            return true;
                         }
                     }
-                    if self.function_has_imports(&try_stmt.orelse) {
+                    if Self::function_has_imports(&try_stmt.orelse) {
                         return true;
                     }
-                    if self.function_has_imports(&try_stmt.finalbody) {
+                    if Self::function_has_imports(&try_stmt.finalbody) {
                         return true;
                     }
                 }
                 Stmt::With(with_stmt) => {
-                    if self.function_has_imports(&with_stmt.body) {
+                    if Self::function_has_imports(&with_stmt.body) {
                         return true;
                     }
                 }
                 Stmt::FunctionDef(nested_func) => {
-                    if self.function_has_imports(&nested_func.body) {
+                    if Self::function_has_imports(&nested_func.body) {
                         return true;
                     }
                 }

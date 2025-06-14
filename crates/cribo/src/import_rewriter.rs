@@ -213,11 +213,13 @@ impl ImportRewriter {
                 }
 
                 // Check if used in function bodies (eventual reads)
-                if item_data.eventual_read_vars.contains(imported_name) {
-                    if let ItemType::FunctionDef { name } = &item_data.item_type {
-                        if !analysis.used_in_functions.contains(name) {
-                            analysis.used_in_functions.push(name.clone());
-                        }
+                if !item_data.eventual_read_vars.contains(imported_name) {
+                    continue;
+                }
+
+                if let ItemType::FunctionDef { name } = &item_data.item_type {
+                    if !analysis.used_in_functions.contains(name) {
+                        analysis.used_in_functions.push(name.clone());
                     }
                 }
             }
