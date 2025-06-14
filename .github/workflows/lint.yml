@@ -81,12 +81,15 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const path = `${process.env.HOME}/rca-json`;
+            const rcaPath = `${process.env.HOME}/rca-json`;
             let commentBody = "## Rust Code Analysis Metrics\n";
-            const files = fs.readdirSync(path);
-            for (const file of files) {
-              const data = fs.readFileSync(`${path}/${file}`, 'utf8');
-              commentBody += '### ' + file + '\n';
+            const entries = fs.readdirSync(rcaPath);
+            for (const entry of entries) {
+              const fullPath = `${rcaPath}/${entry}`;
+              // Only process files, skip directories
+              if (!fs.statSync(fullPath).isFile()) continue;
+              const data = fs.readFileSync(fullPath, 'utf8');
+              commentBody += '### ' + entry + '\n';
               commentBody += '```json\n' + data + '\n```\n\n';
             }
             await github.rest.issues.createComment({
