@@ -206,3 +206,19 @@ jobs:
 
       - name: Cargo Machete
         uses: bnjbvr/cargo-machete@v0.8.0
+
+      - name: Install valgrind
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y valgrind
+
+      # FIXME Use binaries
+      - name: Install cargo-valgrind
+        run: |
+          cargo install cargo-valgrind
+
+      - name: Run cargo-valgrind
+        env:
+          VALGRINDFLAGS: '--error-exitcode=1 --leak-check=full --show-leak-kinds=all'
+        run: |
+          cargo valgrind run -- --entry crates/cribo/tests/fixtures/bundling/mixed_import_patterns/main.py --stdout
