@@ -109,7 +109,7 @@ jobs:
             const files = collectFiles(dir).filter(f => f.endsWith('.json'));
             let rows = [];
             files.forEach(fullPath => {
-              const rel = fullPath.slice(dir.length + 1);
+              const rel = fullPath.slice(dir.length + 1).replace(/\.json$/, '');
               let itemsRaw = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
               const items = Array.isArray(itemsRaw) ? itemsRaw : [itemsRaw];
               const count = items.length || 1;
