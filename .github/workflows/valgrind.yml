@@ -9,7 +9,7 @@ permissions:
   pull-requests: write
   issues: write
 
-name: Code Quality Checks
+name: Memory Leak Detection
 
 env:
   CLICOLOR: 1
@@ -49,12 +49,12 @@ jobs:
 
       - name: Run cargo-valgrind
         env:
-          VALGRINDFLAGS: '--show-reachable=no --show-possibly-lost=no --fair-sched=yes --error-exitcode=1 --leak-check=full --show-leak-kinds=all --track-origins=yes --log-file=$HOME/valgrind-out.txt'
+          VALGRINDFLAGS: '--show-reachable=no --show-possibly-lost=no --fair-sched=yes --error-exitcode=1 --leak-check=full --show-leak-kinds=all --track-origins=yes --log-file=valgrind.log'
         run: |
           cargo valgrind run -- --entry crates/cribo/tests/fixtures/bundling/comprehensive_ast_rewrite/main.py --stdout
 
       - name: Upload valgrind-out.txt
         uses: actions/upload-artifact@v4
         with:
-          name: valgrind-out.txt
-          path: ~/
+          name: valgrind.log
+          path: valgrind.log
