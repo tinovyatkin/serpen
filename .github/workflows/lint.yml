@@ -5,6 +5,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+permissions:
+  pull-requests: write
+  issues: write
+
 name: Code Quality Checks
 
 # see https://doc.rust-lang.org/stable/clippy/continuous_integration/github_actions.html
