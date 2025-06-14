@@ -1069,8 +1069,9 @@ impl HybridStaticBundler {
                 }
             }
 
-            // Note: Post-init attribute generation is disabled because wrapper modules
-            // already handle their own imports correctly in their init functions
+            // After all modules are initialized, ensure sub-modules are attached to parent modules
+            // This is necessary for relative imports like "from . import messages" to work correctly
+            self.generate_submodule_attributes(params.sorted_modules, &mut final_body);
         }
 
         // Finally, add entry module code (it's always last in topological order)
@@ -2223,6 +2224,83 @@ impl HybridStaticBundler {
             Stmt::Pass(ruff_python_ast::StmtPass {
                 range: TextRange::default(),
             })
+        }
+    }
+
+    /// Generate statements to attach sub-modules to their parent modules
+    fn generate_submodule_attributes(
+        &self,
+        sorted_modules: &[(String, PathBuf, Vec<String>)],
+        final_body: &mut Vec<Stmt>,
+    ) {
+        // First, collect all modules that need to be assigned
+        let mut modules_to_assign: Vec<String> = Vec::new();
+        let mut parent_child_pairs: Vec<(String, String, String)> = Vec::new(); // (parent, attr_name, full_child)
+
+        for (module_name, _, _) in sorted_modules {
+            if module_name.contains('.') {
+                let parts: Vec<&str> = module_name.split('.').collect();
+                for i in 1..parts.len() {
+                    let parent = parts[..i].join(".");
+                    let child = parts[..i + 1].join(".");
+                    let attr_name = parts[i];
+
+                    // Skip if not both parent and child are bundled modules AND child is a wrapper module
+                    if !self.bundled_modules.contains(&parent)
+                        || !self.bundled_modules.contains(&child)
+                        || !self.module_registry.contains_key(&child)
+                    {
+                        continue;
+                    }
+
+                    // Ensure parent module is assigned first
+                    if !modules_to_assign.contains(&parent) {
+                        modules_to_assign.push(parent.clone());
+                    }
+                    parent_child_pairs.push((parent, attr_name.to_string(), child));
+                }
+            }
+        }
+
+        // Sort to ensure deterministic output
+        modules_to_assign.sort();
+        parent_child_pairs.sort();
+
+        // First, ensure all parent modules are assigned from sys.modules
+        for module in modules_to_assign {
+            // Only assign if it's a wrapper module (exists in module_registry)
+            if self.module_registry.contains_key(&module) {
+                // Generate: module = sys.modules['module']
+                final_body.push(self.create_sys_modules_assignment(&module, &module));
+            }
+        }
+
+        // Create a set to track which namespaces we've already created
+        let mut created_namespaces = FxIndexSet::default();
+
+        // Then, assign all sub-modules as attributes of their parents
+        for (parent, attr_name, child) in parent_child_pairs {
+            // Ensure parent namespace exists before setting attributes on it
+            // If parent is not a wrapper module, create it as a namespace
+            if !self.module_registry.contains_key(&parent) && self.bundled_modules.contains(&parent)
+            {
+                // For nested namespaces, ensure all parent levels exist
+                let parts: Vec<&str> = parent.split('.').collect();
+                for i in 1..=parts.len() {
+                    let namespace = parts[..i].join(".");
+                    if !self.module_registry.contains_key(&namespace)
+                        && self.bundled_modules.contains(&namespace)
+                        && !created_namespaces.contains(&namespace)
+                    {
+                        // Create a simple namespace module if it doesn't exist
+                        final_body.push(self.create_namespace_module(&namespace));
+                        created_namespaces.insert(namespace);
+                    }
+                }
+            }
+
+            // Generate: parent.attr = sys.modules['child']
+            final_body.push(self.create_dotted_attribute_assignment(&parent, &attr_name, &child));
         }
     }
 

@@ -682,6 +682,10 @@ impl BundleOrchestrator {
                 if !imports.contains(module_name) {
                     imports.push(module_name.clone());
                 }
+
+                // Check if any imported names are actually submodules
+                // Only do this for non-relative imports to avoid issues
+                self.check_submodule_imports(module_name, import, &mut resolver, &mut imports);
             } else if import.names.len() == 1 {
                 self.process_single_name_import(import, &mut resolver, &mut imports);
             }
@@ -719,11 +723,22 @@ impl BundleOrchestrator {
                     format!("{}.{}", base_module, module_name)
                 };
                 imports.push(full_module);
-            } else if !import.names.is_empty()
-                && !base_module.is_empty()
-                && !imports.contains(&base_module)
-            {
-                imports.push(base_module);
+            } else if !import.names.is_empty() && !base_module.is_empty() {
+                // Add the base module if not already present
+                if !imports.contains(&base_module) {
+                    imports.push(base_module.clone());
+                }
+
+                // For "from . import X", check if X is actually a submodule
+                for (name, _) in &import.names {
+                    let potential_submodule = format!("{}.{}", base_module, name);
+                    // Check if this is actually a submodule by checking if it exists in our modules
+                    // This will be validated later in the bundling process
+                    if !imports.contains(&potential_submodule) {
+                        imports.push(potential_submodule);
+                        debug!("Added potential submodule from relative import: {}", name);
+                    }
+                }
             }
         } else if let Some(ref module_name) = import.module_name {
             let formatted = self.format_module_name(module_name, import.level);
@@ -746,6 +761,30 @@ impl BundleOrchestrator {
                         imports.push(name.clone());
                     }
                 }
+            }
+        }
+    }
+
+    /// Check if any imported names are actually submodules
+    fn check_submodule_imports(
+        &self,
+        module_name: &str,
+        import: &crate::visitors::DiscoveredImport,
+        resolver: &mut Option<&mut ModuleResolver>,
+        imports: &mut Vec<String>,
+    ) {
+        let Some(resolver) = resolver else { return };
+
+        for (name, _) in &import.names {
+            let full_module_name = format!("{}.{}", module_name, name);
+            // Try to resolve the full module name to see if it's a module
+            if resolver
+                .resolve_module_path(&full_module_name)
+                .is_ok_and(|path| path.is_some())
+                && !imports.contains(&full_module_name)
+            {
+                imports.push(full_module_name);
+                debug!("Detected submodule import: {} from {}", name, module_name);
             }
         }
     }
