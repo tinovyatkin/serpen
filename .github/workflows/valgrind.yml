@@ -53,7 +53,8 @@ jobs:
         run: |
           cargo valgrind run -- --entry crates/cribo/tests/fixtures/bundling/comprehensive_ast_rewrite/main.py --stdout
 
-      - name: Upload valgrind-out.txt
+      - name: Upload valgrind.log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: valgrind.log
