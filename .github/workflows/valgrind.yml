@@ -1,0 +1,60 @@
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+name: Code Quality Checks
+
+env:
+  CLICOLOR: 1
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: '-D warnings'
+  RUSTDOCFLAGS: '-D warnings'
+  RUST_BACKTRACE: 1
+  RUST_LIB_BACKTRACE: 0
+
+jobs:
+  valgrind:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install valgrind
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libc6-dbg valgrind
+
+      - name: Install cargo-valgrind
+        run: |
+          cargo install cargo-valgrind
+
+      - name: Run cargo-valgrind
+        env:
+          VALGRINDFLAGS: '--show-reachable=no --show-possibly-lost=no --fair-sched=yes --error-exitcode=1 --leak-check=full --show-leak-kinds=all --track-origins=yes --log-file=$HOME/valgrind-out.txt'
+        run: |
+          cargo valgrind run -- --entry crates/cribo/tests/fixtures/bundling/comprehensive_ast_rewrite/main.py --stdout
+
+      - name: Upload valgrind-out.txt
+        uses: actions/upload-artifact@v4
+        with:
+          name: valgrind-out.txt
+          path: ~/

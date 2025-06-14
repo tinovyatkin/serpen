@@ -16,10 +16,11 @@ name: Code Quality Checks
 # Make sure CI fails on all warnings, including Clippy lints
 env:
   RUSTFLAGS: '-Dwarnings'
+  CARGO_TERM_COLOR: always
   CLICOLOR: 1
 
 jobs:
-  clippy_check:
+  static-analysis:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,12 +29,12 @@ jobs:
           persist-credentials: false
 
       - name: Cache Cargo registry
-        uses: actions/cache@v4.2.3
+        uses: actions/cache@v4
         with:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
       - name: Cache build artifacts
-        uses: actions/cache@v4.2.3
+        uses: actions/cache@v4
         with:
           path: target
           key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
@@ -49,7 +50,7 @@ jobs:
       - run: cargo fmt --all --check
 
       - name: Spell Check Repo
-        uses: crate-ci/typos@v1.33.1
+        uses: crate-ci/typos@v1
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v5
@@ -206,19 +207,3 @@ jobs:
 
       - name: Cargo Machete
         uses: bnjbvr/cargo-machete@v0.8.0
-
-      - name: Install valgrind
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y valgrind
-
-      # FIXME Use binaries
-      - name: Install cargo-valgrind
-        run: |
-          cargo install cargo-valgrind
-
-      - name: Run cargo-valgrind
-        env:
-          VALGRINDFLAGS: '--error-exitcode=1 --leak-check=full --show-leak-kinds=all'
-        run: |
-          cargo valgrind run -- --entry crates/cribo/tests/fixtures/bundling/comprehensive_ast_rewrite/main.py --stdout
