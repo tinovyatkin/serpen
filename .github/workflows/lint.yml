@@ -5,6 +5,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+permissions:
+  pull-requests: write
+  issues: write
+
 name: Code Quality Checks
 
 # see https://doc.rust-lang.org/stable/clippy/continuous_integration/github_actions.html
@@ -52,6 +56,7 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
+      # Install rust-code-analysis
       - name: Install rust-code-analysis
         env:
           RCA_LINK: https://github.com/mozilla/rust-code-analysis/releases/download
@@ -62,10 +67,21 @@ jobs:
           tar xz -C $HOME/.local/bin
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Run rust-code-analysis
+      # Prepare output directory for rust-code-analysis
+      - name: Prepare rust-code-analysis output dir
+        run: mkdir -p $HOME/rca-json
+
+      # Run rust-code-analysis on PR-diff files
+      - name: Run rust-code-analysis on PR-diff
+        if: ${{ github.event_name == 'pull_request' }}
         run: |
-          mkdir $HOME/rca-json
           rust-code-analysis-cli --metrics -O json --pr -o "$HOME/rca-json" -p crates/cribo/src
+
+      # Run rust-code-analysis on all files (push to main)
+      - name: Run rust-code-analysis on all files
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          rust-code-analysis-cli --metrics -O json -o "$HOME/rca-json" -p crates/cribo/src
 
       - name: Upload rust-code-analysis json
         uses: actions/upload-artifact@v4
@@ -81,20 +97,57 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const path = `${process.env.HOME}/rca-json`;
-            let commentBody = "## Rust Code Analysis Metrics\n";
-            const files = fs.readdirSync(path);
-            for (const file of files) {
-              const data = fs.readFileSync(`${path}/${file}`, 'utf8');
-              commentBody += '### ' + file + '\n';
-              commentBody += '```json\n' + data + '\n```\n\n';
+            const dir = `${process.env.HOME}/rca-json`;
+            const { withFileTypes } = { withFileTypes: true };
+            // Collect JSON files
+            function collectFiles(d) {
+              return fs.readdirSync(d, { withFileTypes: true }).flatMap(dirent => {
+                const full = `${d}/${dirent.name}`;
+                return dirent.isDirectory() ? collectFiles(full) : [full];
+              });
             }
-            await github.rest.issues.createComment({
+            const files = collectFiles(dir).filter(f => f.endsWith('.json'));
+            let rows = [];
+            files.forEach(fullPath => {
+              const rel = fullPath.slice(dir.length + 1).replace(/\.json$/, '');
+              let itemsRaw = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
+              const items = Array.isArray(itemsRaw) ? itemsRaw : [itemsRaw];
+              const count = items.length || 1;
+              // Sum and average key metrics
+              const totalCyclo = items.reduce((sum, o) => sum + o.metrics.cyclomatic.sum, 0);
+              const totalCog  = items.reduce((sum, o) => sum + o.metrics.cognitive.sum, 0);
+              const totalFunc = items.reduce((sum, o) => sum + o.metrics.nom.functions, 0);
+              rows.push({ file: rel, funcs: totalFunc, cyclo: (totalCyclo/count).toFixed(1), cog: (totalCog/count).toFixed(1) });
+            });
+            // Build markdown table
+            let body = '## Rust Code Analysis Summary\n\n';
+            body += '| File | Functions | Avg Cyclomatic | Avg Cognitive |\n';
+            body += '|---|---:|---:|---:|\n';
+            rows.forEach(r => body += `| ${r.file} | ${r.funcs} | ${r.cyclo} | ${r.cog} |\n`);
+            // find existing summary comment
+            const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: commentBody
             });
+            const prev = comments.find(c => c.body.startsWith('## Rust Code Analysis Summary'));
+            if (prev) {
+              // update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: prev.id,
+                body,
+              });
+            } else {
+              // create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
 
       - name: Cargo Machete
         uses: bnjbvr/cargo-machete@v0.8.0
