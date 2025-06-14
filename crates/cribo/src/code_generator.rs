@@ -4190,13 +4190,27 @@ impl HybridStaticBundler {
         modules_with_function_imports
     }
 
-    /// Check if a module has imports inside function bodies
+    /// Check if a module has imports inside function bodies or class methods
     fn module_has_function_scoped_imports(&self, ast: &ModModule) -> bool {
         for stmt in &ast.body {
-            if let Stmt::FunctionDef(func_def) = stmt {
-                if Self::function_has_imports(&func_def.body) {
-                    return true;
+            match stmt {
+                // FunctionDef covers both sync and async functions (is_async field)
+                Stmt::FunctionDef(func_def) => {
+                    if Self::function_has_imports(&func_def.body) {
+                        return true;
+                    }
                 }
+                Stmt::ClassDef(class_def) => {
+                    // Check methods inside the class (including async methods)
+                    for class_stmt in &class_def.body {
+                        if let Stmt::FunctionDef(method_def) = class_stmt {
+                            if Self::function_has_imports(&method_def.body) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         false

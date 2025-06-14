@@ -375,10 +375,9 @@ fn test_bundling_fixtures() {
             //    a. Fail during execution (different exit code)
             //    b. Produce different output than original
             let bundled_success = python_output.status.success();
-            let original_success = original_output.status.success();
 
-            if bundled_success && original_success {
-                // Both succeeded - check if outputs match
+            if bundled_success {
+                // Both original and bundled succeeded - check if outputs match
                 if bundled_stdout == original_stdout {
                     panic!(
                         "Fixture '{}' with xfail_ prefix: bundled code succeeded and produced same output as original.\n\

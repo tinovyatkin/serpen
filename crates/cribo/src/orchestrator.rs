@@ -103,7 +103,7 @@ impl BundleOrchestrator {
     }
 
     /// Core bundling logic shared between file and string output modes
-    /// Returns the entry module name and circular dependency analysis, with graph and resolver populated via mutable references
+    /// Returns the entry module name, parsed modules, and circular dependency analysis, with graph and resolver populated via mutable references
     fn bundle_core(
         &mut self,
         entry_path: &Path,
@@ -205,9 +205,10 @@ impl BundleOrchestrator {
     fn get_sorted_modules_from_graph(
         &self,
         graph: &CriboGraph,
+        circular_dep_analysis: Option<&CircularDependencyAnalysis>,
     ) -> Result<Vec<(String, PathBuf, Vec<String>)>> {
-        let module_ids = if graph.has_cycles() {
-            let analysis = graph.analyze_circular_dependencies();
+        let module_ids = if let Some(analysis) = circular_dep_analysis {
+            // We already have the analysis from bundle_core
             let all_resolvable = analysis
                 .resolvable_cycles
                 .iter()
@@ -216,7 +217,7 @@ impl BundleOrchestrator {
 
             if all_resolvable {
                 // For resolvable cycles, use a custom ordering that breaks cycles
-                self.get_modules_with_cycle_resolution(graph, &analysis)?
+                self.get_modules_with_cycle_resolution(graph, analysis)?
             } else {
                 // This should have been caught earlier, but be safe
                 return Err(anyhow!("Unresolvable circular dependencies detected"));
@@ -290,7 +291,8 @@ impl BundleOrchestrator {
         // Extract the resolver (it's guaranteed to be Some after bundle_core)
         let resolver = resolver_opt.expect("Resolver should be initialized by bundle_core");
 
-        let sorted_modules = self.get_sorted_modules_from_graph(&graph)?;
+        let sorted_modules =
+            self.get_sorted_modules_from_graph(&graph, circular_dep_analysis.as_ref())?;
 
         // Extract module data from sorted_modules
         let module_data = sorted_modules
@@ -337,7 +339,8 @@ impl BundleOrchestrator {
         // Extract the resolver (it's guaranteed to be Some after bundle_core)
         let resolver = resolver_opt.expect("Resolver should be initialized by bundle_core");
 
-        let sorted_modules = self.get_sorted_modules_from_graph(&graph)?;
+        let sorted_modules =
+            self.get_sorted_modules_from_graph(&graph, circular_dep_analysis.as_ref())?;
 
         // Generate bundled code
         info!("Using hybrid static bundler");

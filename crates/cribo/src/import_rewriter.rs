@@ -155,7 +155,7 @@ impl ImportRewriter {
                         import_stmt,
                         target_functions: usage.used_in_functions,
                         source_module: module_name.to_string(),
-                        line_number: 0, // TODO: Extract from span if available
+                        line_number: item_data.span.map(|(start, _)| start).unwrap_or(0),
                     });
                 }
             }
@@ -193,6 +193,14 @@ impl ImportRewriter {
             has_side_effects: false,
         };
 
+        // Conservative approach: mark imports of certain modules as having side effects
+        // This can be enhanced with more sophisticated analysis later
+        for name in imported_names {
+            if Self::is_likely_side_effect_import(name) {
+                analysis.has_side_effects = true;
+            }
+        }
+
         // Check all items in the module for usage of these imported names
         for item_data in module_graph.items.values() {
             // Check if any imported name is used at module level
@@ -226,6 +234,24 @@ impl ImportRewriter {
         }
 
         analysis
+    }
+
+    /// Check if an import is likely to have side effects
+    fn is_likely_side_effect_import(name: &str) -> bool {
+        // Modules that modify global state or have initialization side effects
+        matches!(
+            name,
+            // From is_safe_stdlib_module's exclusion list
+            "antigravity" | "this" | "__hello__" | "__phello__" |
+            "site" | "sitecustomize" | "usercustomize" |
+            "readline" | "rlcompleter" | 
+            "turtle" | "tkinter" |
+            "webbrowser" |
+            "platform" | "locale" |
+            // Additional modules with common side effects
+            "os" | "sys" | "logging" | "warnings" | "encodings" |
+            "pygame" | "matplotlib"
+        ) || name.starts_with("_") // Private modules often have initialization side effects
     }
 
     /// Rewrite a module's AST to move imports into function scope
@@ -272,6 +298,7 @@ impl ImportRewriter {
         for (idx, stmt) in body.iter().enumerate() {
             match stmt {
                 Stmt::Import(import_stmt) => {
+                    // For regular imports, check each alias individually
                     for alias in &import_stmt.names {
                         let import = ImportStatement::Import {
                             module: alias.name.to_string(),
@@ -280,28 +307,42 @@ impl ImportRewriter {
 
                         if movable_imports.iter().any(|mi| mi.import_stmt == import) {
                             indices_to_remove.insert(idx);
+                            break; // Once we find a match, mark the whole statement for removal
                         }
                     }
                 }
                 Stmt::ImportFrom(import_from) => {
-                    let names: Vec<_> = import_from
-                        .names
-                        .iter()
-                        .map(|alias| {
-                            (
-                                alias.name.to_string(),
-                                alias.asname.as_ref().map(|n| n.to_string()),
-                            )
-                        })
-                        .collect();
+                    // Check if this import statement matches any movable import
+                    let stmt_module = import_from.module.as_ref().map(|m| m.to_string());
+                    let stmt_level = import_from.level;
 
-                    let import = ImportStatement::FromImport {
-                        module: import_from.module.as_ref().map(|m| m.to_string()),
-                        names,
-                        level: import_from.level,
-                    };
+                    // Check if any movable import matches this statement
+                    let has_match = movable_imports.iter().any(|mi| {
+                        if let ImportStatement::FromImport {
+                            module,
+                            level,
+                            names,
+                        } = &mi.import_stmt
+                        {
+                            // Module and level must match
+                            if module != &stmt_module || level != &stmt_level {
+                                return false;
+                            }
 
-                    if movable_imports.iter().any(|mi| mi.import_stmt == import) {
+                            // Check if all names in the movable import are present in the statement
+                            names.iter().all(|(name, alias)| {
+                                import_from.names.iter().any(|stmt_alias| {
+                                    stmt_alias.name.as_str() == name
+                                        && stmt_alias.asname.as_ref().map(|n| n.as_str())
+                                            == alias.as_deref()
+                                })
+                            })
+                        } else {
+                            false
+                        }
+                    });
+
+                    if has_match {
                         indices_to_remove.insert(idx);
                     }
                 }
@@ -367,11 +408,16 @@ impl ImportRewriter {
         func_def: &mut StmtFunctionDef,
         imports: &[&MovableImport],
     ) -> Result<()> {
+        // Deduplicate imports based on their ImportStatement
+        let mut seen_imports = FxHashSet::default();
         let mut import_stmts = Vec::new();
 
         for movable_import in imports {
-            let stmt = self.create_import_statement(&movable_import.import_stmt)?;
-            import_stmts.push(stmt);
+            // Only add the import if we haven't seen this exact import statement before
+            if seen_imports.insert(movable_import.import_stmt.clone()) {
+                let stmt = self.create_import_statement(&movable_import.import_stmt)?;
+                import_stmts.push(stmt);
+            }
         }
 
         // Insert imports at the beginning of the function body
@@ -381,9 +427,14 @@ impl ImportRewriter {
                 func_def.body.splice(0..0, import_stmts);
             }
             ImportDeduplicationStrategy::BeforeFirstUse => {
-                // TODO: Implement more sophisticated placement
-                // For now, just place at start
-                func_def.body.splice(0..0, import_stmts);
+                // NOTE: BeforeFirstUse strategy is not yet implemented
+                // This would require tracking variable usage locations within the function
+                // and inserting imports just before their first use.
+                // For now, we fall back to FunctionStart behavior.
+                unimplemented!(
+                    "BeforeFirstUse import placement strategy is not yet implemented. \
+                     Use FunctionStart strategy instead."
+                );
             }
         }
 
