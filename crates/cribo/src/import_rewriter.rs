@@ -50,29 +50,14 @@ pub enum ImportStatement {
 
 /// Import rewriter that transforms module-level imports to function-level
 pub struct ImportRewriter {
-    /// Imports to move and their target functions
-    imports_to_move: FxHashMap<ImportId, Vec<String>>,
     /// Import deduplication strategy
     dedup_strategy: ImportDeduplicationStrategy,
-    /// Track which imports have side effects
-    side_effect_imports: FxHashSet<String>,
-}
-
-/// Unique identifier for an import statement
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ImportId {
-    module_name: String,
-    line_number: usize,
 }
 
 impl ImportRewriter {
     /// Create a new import rewriter
     pub fn new(dedup_strategy: ImportDeduplicationStrategy) -> Self {
-        Self {
-            imports_to_move: FxHashMap::default(),
-            dedup_strategy,
-            side_effect_imports: FxHashSet::default(),
-        }
+        Self { dedup_strategy }
     }
 
     /// Analyze a module graph to identify imports that can be moved to break cycles

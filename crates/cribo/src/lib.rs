@@ -3,7 +3,6 @@ pub mod combine;
 pub mod config;
 pub mod cribo_graph;
 pub mod dirs;
-pub mod enhanced_graph_builder;
 pub mod graph_builder;
 pub mod import_rewriter;
 pub mod orchestrator;
