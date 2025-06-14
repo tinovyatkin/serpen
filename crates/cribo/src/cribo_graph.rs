@@ -1273,8 +1273,7 @@ impl CriboGraph {
             has_only_constants,
             has_class_definitions,
             has_module_level_imports,
-            imports_used_in_functions_only: has_module_level_imports
-                && imports_used_in_functions_only,
+            imports_used_in_functions_only: !has_module_level_imports || imports_used_in_functions_only,
         }
     }
 
