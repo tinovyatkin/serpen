@@ -1273,7 +1273,8 @@ impl CriboGraph {
             has_only_constants,
             has_class_definitions,
             has_module_level_imports,
-            imports_used_in_functions_only: !has_module_level_imports || imports_used_in_functions_only,
+            imports_used_in_functions_only: !has_module_level_imports
+                || imports_used_in_functions_only,
         }
     }
 
@@ -1343,10 +1344,24 @@ impl CriboGraph {
         // Get all imported names from this module
         let mut imported_names = FxHashSet::default();
 
+        // TODO: This has O(n*m) complexity where n is imported names and m is module items.
+        // For modules with many imports and items, consider building an index of variable
+        // usage upfront to reduce lookup time.
+
         for item in module.items.values() {
             match &item.item_type {
                 ItemType::Import { alias, module } => {
-                    imported_names.insert(alias.as_ref().unwrap_or(module).clone());
+                    let local_name = alias.as_ref().unwrap_or(module).clone();
+                    imported_names.insert(local_name.clone());
+
+                    // For dotted imports like `import xml.etree.ElementTree`,
+                    // also track the root module name (e.g., "xml")
+                    // since that's what appears in read_vars
+                    if alias.is_none() && module.contains('.') {
+                        if let Some(root) = module.split('.').next() {
+                            imported_names.insert(root.to_string());
+                        }
+                    }
                 }
                 ItemType::FromImport { names, .. } => {
                     for (name, alias) in names {

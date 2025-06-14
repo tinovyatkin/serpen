@@ -54,6 +54,10 @@ impl<'a> GraphBuilder<'a> {
                 Stmt::ImportFrom(import_from) => return self.process_import_from(import_from),
                 Stmt::FunctionDef(func_def) => return self.process_function_def(func_def),
                 Stmt::ClassDef(class_def) => return self.process_class_def(class_def),
+                // Recurse into control flow blocks that may contain imports
+                Stmt::If(_) | Stmt::For(_) | Stmt::While(_) | Stmt::With(_) | Stmt::Try(_) => {
+                    // Fall through to regular processing to handle nested imports
+                }
                 _ => return Ok(()),
             }
         }

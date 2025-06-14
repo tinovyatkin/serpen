@@ -9,7 +9,6 @@ use tempfile::TempDir;
 use cribo::config::Config;
 use cribo::orchestrator::BundleOrchestrator;
 use cribo::util::get_python_executable;
-use insta::{assert_snapshot, with_settings};
 use pretty_assertions::assert_eq;
 
 // Ruff linting integration for cross-validation
@@ -195,11 +194,11 @@ fn test_bundling_fixtures() {
                 let error_msg = format!("Bundling failed as expected: {}", e);
 
                 // Create error snapshot
-                with_settings!({
+                insta::with_settings!({
                     snapshot_suffix => fixture_name,
                     prepend_module_to_snapshot => false,
                 }, {
-                    assert_snapshot!("bundling_error", error_msg);
+                    insta::assert_snapshot!("bundling_error", error_msg);
                 });
 
                 return;
@@ -313,15 +312,31 @@ fn test_bundling_fixtures() {
             && original_output.status.success()
         {
             // This means both original and bundled succeed - the xfail is no longer needed
+            let stdout = String::from_utf8_lossy(&python_output.stdout);
+            let stderr = String::from_utf8_lossy(&python_output.stderr);
+
+            // Truncate long outputs for cleaner CI logs
+            let truncated_stdout = if stdout.len() > 200 {
+                format!("{}... (truncated)", &stdout[..200])
+            } else {
+                stdout.to_string()
+            };
+
+            let truncated_stderr = if stderr.len() > 200 {
+                format!("{}... (truncated)", &stderr[..200])
+            } else {
+                stderr.to_string()
+            };
+
             panic!(
                 "Expected fixture '{}' to fail (marked with xfail_), but both original and bundled succeeded!\n\
+                This test is now fully passing. Please remove the 'xfail_' prefix from the fixture directory name.\n\
                 Exit code: 0\n\
-                Stdout:\n{}\n\
-                Stderr:\n{}\n\n\
-                This test is now fully passing. Please remove the 'xfail_' prefix from the fixture directory name.",
+                Stdout: {}\n\
+                Stderr: {}",
                 fixture_name,
-                String::from_utf8_lossy(&python_output.stdout).trim(),
-                String::from_utf8_lossy(&python_output.stderr).trim()
+                truncated_stdout.trim(),
+                truncated_stderr.trim()
             );
         }
 
