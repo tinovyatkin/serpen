@@ -78,14 +78,12 @@ impl ImportDiscoveryVisitor {
         match &self.scope_stack[..] {
             [ScopeElement::Function(name)] => ImportLocation::Function(name.clone()),
             [ScopeElement::Class(name)] => ImportLocation::Class(name.clone()),
-            [
-                ScopeElement::Class(class),
-                ..,
-                ScopeElement::Function(method),
-            ] => ImportLocation::Method {
-                class: class.clone(),
-                method: method.clone(),
-            },
+            [ScopeElement::Class(class), ScopeElement::Function(method)] => {
+                ImportLocation::Method {
+                    class: class.clone(),
+                    method: method.clone(),
+                }
+            }
             _ => {
                 // Check if we're in any conditional
                 let conditional_depth = self
@@ -308,6 +306,32 @@ if True:
         assert!(matches!(
             imports[1].location,
             ImportLocation::Conditional { depth: 2 }
+        ));
+    }
+
+    #[test]
+    fn test_nested_function_in_method_not_misclassified() {
+        let source = r#"
+class MyClass:
+    def method(self):
+        def nested_function():
+            import os
+            return os.path.join('a', 'b')
+        return nested_function()
+"#;
+        let parsed = parse_module(source).expect("Failed to parse test module");
+        let mut visitor = ImportDiscoveryVisitor::new();
+        visitor.visit_module(parsed.syntax());
+        let imports = visitor.into_imports();
+
+        assert_eq!(imports.len(), 1);
+        // The import should be classified as Nested, not Method
+        assert!(matches!(
+            imports[0].location,
+            ImportLocation::Nested(ref scopes) if scopes.len() == 3 &&
+                matches!(&scopes[0], ScopeElement::Class(c) if c == "MyClass") &&
+                matches!(&scopes[1], ScopeElement::Function(m) if m == "method") &&
+                matches!(&scopes[2], ScopeElement::Function(f) if f == "nested_function")
         ));
     }
 }
