@@ -670,26 +670,32 @@ impl BundleOrchestrator {
         visitor.visit_module(parsed.syntax());
 
         let discovered_imports = visitor.into_imports();
-        let mut imports = Vec::new();
+        let mut imports_set = IndexSet::new();
 
         // Convert discovered imports to module names, handling relative imports
         for import in &discovered_imports {
             // All import locations are valid for discovery
             if import.level > 0 {
-                self.process_relative_import(import, file_path, &mut imports);
+                self.process_relative_import_set(import, file_path, &mut imports_set);
             } else if let Some(ref module_name) = import.module_name {
                 // Absolute imports
-                if !imports.contains(module_name) {
-                    imports.push(module_name.clone());
-                }
+                imports_set.insert(module_name.clone());
 
                 // Check if any imported names are actually submodules
                 // Only do this for non-relative imports to avoid issues
-                self.check_submodule_imports(module_name, import, &mut resolver, &mut imports);
+                self.check_submodule_imports_set(
+                    module_name,
+                    import,
+                    &mut resolver,
+                    &mut imports_set,
+                );
             } else if import.names.len() == 1 {
-                self.process_single_name_import(import, &mut resolver, &mut imports);
+                self.process_single_name_import_set(import, &mut resolver, &mut imports_set);
             }
         }
+
+        // Convert IndexSet to Vec to maintain the existing API
+        let imports: Vec<String> = imports_set.into_iter().collect();
 
         // Log discovery of function-scoped imports for debugging
         for import in &discovered_imports {
@@ -708,70 +714,77 @@ impl BundleOrchestrator {
         Ok(imports)
     }
 
-    /// Process a relative import and add to imports list
-    fn process_relative_import(
+    /// Process relative imports and add to IndexSet
+    fn process_relative_import_set(
         &self,
         import: &crate::visitors::DiscoveredImport,
         file_path: &Path,
-        imports: &mut Vec<String>,
+        imports: &mut IndexSet<String>,
     ) {
-        if let Some(base_module) = self.resolve_relative_import(file_path, import.level) {
+        let base_module = match self.resolve_relative_import(file_path, import.level) {
+            Some(module) => module,
+            None => {
+                debug!(
+                    "Could not resolve relative import with level {}",
+                    import.level
+                );
+                return;
+            }
+        };
+
+        if import.names.is_empty() {
             if let Some(ref module_name) = import.module_name {
                 let full_module = if base_module.is_empty() {
                     module_name.clone()
                 } else {
                     format!("{}.{}", base_module, module_name)
                 };
-                imports.push(full_module);
-            } else if !import.names.is_empty() && !base_module.is_empty() {
-                // Add the base module if not already present
-                if !imports.contains(&base_module) {
-                    imports.push(base_module.clone());
-                }
-
-                // For "from . import X", check if X is actually a submodule
-                for (name, _) in &import.names {
-                    let potential_submodule = format!("{}.{}", base_module, name);
-                    // Check if this is actually a submodule by checking if it exists in our modules
-                    // This will be validated later in the bundling process
-                    if !imports.contains(&potential_submodule) {
-                        imports.push(potential_submodule);
-                        debug!("Added potential submodule from relative import: {}", name);
-                    }
-                }
+                imports.insert(full_module);
             }
         } else if let Some(ref module_name) = import.module_name {
-            let formatted = self.format_module_name(module_name, import.level);
-            imports.push(formatted);
+            let full_module = if base_module.is_empty() {
+                module_name.clone()
+            } else {
+                format!("{}.{}", base_module, module_name)
+            };
+            imports.insert(full_module);
+        } else if !import.names.is_empty() && !base_module.is_empty() {
+            // Add the base module
+            imports.insert(base_module.clone());
+
+            // For "from . import X", check if X is actually a submodule
+            for (name, _) in &import.names {
+                let potential_submodule = format!("{}.{}", base_module, name);
+                imports.insert(potential_submodule);
+                debug!("Added potential submodule from relative import: {}", name);
+            }
         }
     }
 
-    /// Process a single name import that might be a submodule
-    fn process_single_name_import(
+    /// Process a single name import that might be a submodule (IndexSet version)
+    fn process_single_name_import_set(
         &self,
         import: &crate::visitors::DiscoveredImport,
         resolver: &mut Option<&mut ModuleResolver>,
-        imports: &mut Vec<String>,
+        imports: &mut IndexSet<String>,
     ) {
         if let Some(resolver) = resolver {
             let (name, _) = &import.names[0];
             match resolver.classify_import(name) {
                 ImportType::StandardLibrary | ImportType::ThirdParty | ImportType::FirstParty => {
-                    if !imports.contains(name) {
-                        imports.push(name.clone());
-                    }
+                    imports.insert(name.clone());
                 }
             }
         }
     }
 
-    /// Check if any imported names are actually submodules
-    fn check_submodule_imports(
+    /// Check if any imported names are actually submodules (IndexSet version)
+    fn check_submodule_imports_set(
         &self,
         module_name: &str,
         import: &crate::visitors::DiscoveredImport,
         resolver: &mut Option<&mut ModuleResolver>,
-        imports: &mut Vec<String>,
+        imports: &mut IndexSet<String>,
     ) {
         let Some(resolver) = resolver else { return };
 
@@ -781,9 +794,8 @@ impl BundleOrchestrator {
             if resolver
                 .resolve_module_path(&full_module_name)
                 .is_ok_and(|path| path.is_some())
-                && !imports.contains(&full_module_name)
             {
-                imports.push(full_module_name);
+                imports.insert(full_module_name);
                 debug!("Detected submodule import: {} from {}", name, module_name);
             }
         }
