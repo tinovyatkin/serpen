@@ -13,14 +13,14 @@ import re
 """Validation utilities."""
 def validate_email(email: str) -> bool:
     """Simple email validation."""
-    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
     return bool(re.match(pattern, email))
 def sanitize_input(text: str) -> str:
     """Sanitize input text."""
-    dangerous_chars = ['<', '>', '"', "'", '&']
+    dangerous_chars = ["<", ">", '"', "'", "&"]
     sanitized = text
     for char in dangerous_chars:
-        sanitized = sanitized.replace(char, '')
+        sanitized = sanitized.replace(char, "")
     return sanitized.strip()
 def validate_age(age: Union[int, str]) -> bool:
     """Validate age value."""
@@ -42,7 +42,7 @@ class UserSchema(BaseModel):
     class Config:
         """Pydantic configuration."""
         json_encoders = {}
-        schema_extra = {"example": {"name": "John Doe", "email": "john@example.com", "age": 30, "is_active": True, "bio": "Software developer"}}
+        json_schema_extra = {"example": {"name": "John Doe", "email": "john@example.com", "age": 30, "is_active": True, "bio": "Software developer"}}
 class CreateUserRequest(BaseModel):
     """Request model for creating a new user."""
     name: str = Field(..., min_length=1, max_length=100)

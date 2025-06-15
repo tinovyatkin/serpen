@@ -19,7 +19,7 @@ class UserSchema(BaseModel):
         json_encoders = {
             # Custom encoders if needed
         }
-        schema_extra = {"example": {"name": "John Doe", "email": "john@example.com", "age": 30, "is_active": True, "bio": "Software developer"}}
+        json_schema_extra = {"example": {"name": "John Doe", "email": "john@example.com", "age": 30, "is_active": True, "bio": "Software developer"}}
 
 
 class CreateUserRequest(BaseModel):
