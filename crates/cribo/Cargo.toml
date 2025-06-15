@@ -17,6 +17,7 @@ etcetera = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
 petgraph = { workspace = true }
+pprof = { version = "0.15.0", features = ["flamegraph"] }
 ruff_linter = { workspace = true }
 ruff_python_ast = { workspace = true }
 ruff_python_codegen = { workspace = true }

@@ -16,7 +16,7 @@ description = "Python source bundler that produces a single .py file from multi-
 once_cell = "1.21.3"
 
 # CLI and argument parsing
-clap = { version = "4.5.39", features = ["derive"] }
+clap = { version = "4.5.39", features = ["derive", "env"] }
 
 # Python parsing - using git dependencies as ruff internals are not published to crates.io
 ruff_linter = { git = "https://github.com/astral-sh/ruff/", rev = "0.11.13" }

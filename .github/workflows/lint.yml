@@ -207,3 +207,34 @@ jobs:
 
       - name: Cargo Machete
         uses: bnjbvr/cargo-machete@v0.8.0
+
+  profiling:
+    name: Flamegraph Profiling
+    runs-on: ubuntu-latest
+    needs: static-analysis
+    if: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build release
+        run: cargo build --release --package cribo
+      - name: Run Flamegraph Profiling
+        env:
+          CRIBO_FLAMEGRAPH: 1
+        run: |
+          cargo run --release --package cribo -- --entry test_stdlib.py --stdout
+      - name: Comment Flamegraph on PR
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const svg = fs.readFileSync('flamegraph.svg', 'utf8');
+            const body = '## Flamegraph Profile\n\n' + svg;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
