@@ -58,7 +58,7 @@ jobs:
 
       - name: Run cargo-valgrind
         env:
-          VALGRINDFLAGS: '--show-reachable=no --show-possibly-lost=no --fair-sched=yes --error-exitcode=1 --leak-check=full --show-leak-kinds=all --track-origins=yes --log-file=valgrind.log'
+          VALGRINDFLAGS: '--show-reachable=no --show-possibly-lost=no --fair-sched=yes --error-exitcode=1 --leak-check=full --show-leak-kinds=all --track-origins=yes --log-file=valgrind.log --suppressions=valgrind.supp'
         run: |
           cargo valgrind run -- --entry crates/cribo/tests/fixtures/bundling/comprehensive_ast_rewrite/main.py --stdout
 
