@@ -223,7 +223,7 @@ jobs:
         env:
           CRIBO_FLAMEGRAPH: 1
         run: |
-          cargo run --release --package cribo -- --entry test_stdlib.py --stdout
+          cargo run --release --package cribo -- --entry crates/cribo/tests/fixtures/bundling/ast_rewriting_regular_import_aliases/main.py --stdout
       - name: Comment Flamegraph on PR
         uses: actions/github-script@v7
         with:
@@ -231,10 +231,26 @@ jobs:
           script: |
             const fs = require('fs');
             const svg = fs.readFileSync('flamegraph.svg', 'utf8');
-            const body = '## Flamegraph Profile\n\n' + svg;
-            await github.rest.issues.createComment({
+            const commentTitle = '## Flamegraph Profile';
+            const body = commentTitle + '\n\n' + svg;
+            const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body,
             });
+            const prev = comments.find(c => c.body.startsWith(commentTitle));
+            if (prev) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: prev.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

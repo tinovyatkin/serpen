@@ -40,7 +40,7 @@ struct Cli {
     target_version: Option<String>,
 
     /// Enable flamegraph profiling (use `CRIBO_FLAMEGRAPH` env var)
-    #[arg(long, env("CRIBO_FLAMEGRAPH"), action = ArgAction::SetTrue)]
+    #[arg(long, env_os = "CRIBO_FLAMEGRAPH", action = ArgAction::SetTrue)]
     flamegraph: bool,
 }
 
