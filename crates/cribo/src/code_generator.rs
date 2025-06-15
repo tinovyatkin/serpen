@@ -2271,17 +2271,10 @@ impl HybridStaticBundler {
             // Only assign if it's a wrapper module (exists in module_registry)
             if self.module_registry.contains_key(&module) {
                 // Check if this module has already been assigned in final_body
-                let already_assigned = final_body.iter().any(|stmt| {
-                    matches!(stmt, Stmt::Assign(assign) if
-                        assign.targets.iter().any(|target|
-                            matches!(target, Expr::Name(name) if name.id.as_str() == module)
-                        )
-                    )
-                });
+                let already_assigned = self.is_module_already_assigned(final_body, &module);
 
                 if !already_assigned {
-                    // Generate: module = sys.modules['module']
-                    final_body.push(self.create_sys_modules_assignment(&module, &module));
+                    self.create_module_assignment(final_body, &module);
                 }
             }
         }
@@ -6295,6 +6288,95 @@ impl HybridStaticBundler {
             })),
             range: TextRange::default(),
         })
+    }
+
+    /// Create a module assignment, handling dotted names properly
+    fn create_module_assignment(&self, final_body: &mut Vec<Stmt>, module: &str) {
+        if module.contains('.') {
+            // For dotted module names, we need to create proper attribute assignments
+            // e.g., for "a.b.c", create: a.b.c = sys.modules['a.b.c']
+            // But this needs to be done as: parent.attr = sys.modules['a.b.c']
+            let parts: Vec<&str> = module.split('.').collect();
+            if parts.len() > 1 {
+                let parent = parts[..parts.len() - 1].join(".");
+                let attr = parts[parts.len() - 1];
+                final_body.push(self.create_dotted_attribute_assignment(&parent, attr, module));
+            }
+        } else {
+            // Simple module name without dots
+            final_body.push(self.create_sys_modules_assignment(module, module));
+        }
+    }
+
+    /// Check if an assignment statement has a dotted target matching parent.attr
+    fn assignment_has_dotted_target(&self, assign: &StmtAssign, parent: &str, attr: &str) -> bool {
+        assign.targets.iter().any(|target| {
+            if let Expr::Attribute(attr_expr) = target {
+                attr_expr.attr.as_str() == attr && self.is_name_chain(&attr_expr.value, parent)
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Check if a module has already been assigned in the final body
+    fn is_module_already_assigned(&self, final_body: &[Stmt], module: &str) -> bool {
+        if module.contains('.') {
+            // For dotted names, check if there's already an attribute assignment
+            let parts: Vec<&str> = module.split('.').collect();
+            if parts.len() > 1 {
+                let parent = parts[..parts.len() - 1].join(".");
+                let attr = parts[parts.len() - 1];
+                final_body.iter().any(|stmt| {
+                    matches!(stmt, Stmt::Assign(assign) if
+                        self.assignment_has_dotted_target(assign, &parent, attr)
+                    )
+                })
+            } else {
+                false
+            }
+        } else {
+            // For simple names, check for name assignment
+            final_body.iter().any(|stmt| {
+                matches!(stmt, Stmt::Assign(assign) if
+                    assign.targets.iter().any(|target|
+                        matches!(target, Expr::Name(name) if name.id.as_str() == module)
+                    )
+                )
+            })
+        }
+    }
+
+    /// Check if an expression represents a dotted name chain (e.g., "a.b.c")
+    fn is_name_chain(&self, expr: &Expr, expected_chain: &str) -> bool {
+        let parts: Vec<&str> = expected_chain.split('.').collect();
+        if parts.is_empty() {
+            return false;
+        }
+
+        let mut current_expr = expr;
+        let mut index = parts.len() - 1;
+
+        loop {
+            match current_expr {
+                Expr::Attribute(attr) => {
+                    // Check if this part matches
+                    if index < parts.len() && attr.attr.as_str() != parts[index] {
+                        return false;
+                    }
+                    if index == 0 {
+                        return false; // Still have attribute but no more parts
+                    }
+                    index -= 1;
+                    current_expr = &attr.value;
+                }
+                Expr::Name(name) => {
+                    // This should be the base name
+                    return index == 0 && name.id.as_str() == parts[0];
+                }
+                _ => return false,
+            }
+        }
     }
 
     /// Inline a class definition
