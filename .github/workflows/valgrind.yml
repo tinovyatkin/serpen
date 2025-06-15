@@ -22,6 +22,8 @@ env:
 jobs:
   valgrind:
     runs-on: ubuntu-latest
+    env:
+      CARGO_VALGRIND_VERSION: '2.3.1'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,6 +39,12 @@ jobs:
         with:
           path: target
           key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cache cargo-valgrind binary
+        id: cache-cargo-valgrind
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-valgrind
+          key: ${{ runner.os }}-cargo-valgrind-${{ env.CARGO_VALGRIND_VERSION }}
 
       - name: Install valgrind
         run: |
@@ -44,8 +52,9 @@ jobs:
           sudo apt-get install -y libc6-dbg valgrind
 
       - name: Install cargo-valgrind
+        if: steps.cache-cargo-valgrind.outputs.cache-hit != 'true'
         run: |
-          cargo install cargo-valgrind
+          cargo install cargo-valgrind --version ${{ env.CARGO_VALGRIND_VERSION }}
 
       - name: Run cargo-valgrind
         env:
