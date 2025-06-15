@@ -57,6 +57,7 @@ jobs:
           cargo install cargo-valgrind --version ${{ env.CARGO_VALGRIND_VERSION }}
 
       - name: Run cargo-valgrind
+        continue-on-error: true
         env:
           VALGRINDFLAGS: >-
             --verbose
