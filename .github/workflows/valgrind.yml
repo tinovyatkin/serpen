@@ -58,10 +58,9 @@ jobs:
 
       - name: Run cargo-valgrind
         env:
-          # --error-exitcode=1
-          VALGRINDFLAGS: '--show-reachable=no --show-possibly-lost=no --fair-sched=yes --leak-check=full --show-leak-kinds=all --track-origins=yes --log-file=valgrind.log --suppressions=valgrind.supp'
+          VALGRINDFLAGS: '--show-reachable=no --gen-suppressions=all --error-exitcode=1 --show-possibly-lost=no --fair-sched=yes --leak-check=full --show-leak-kinds=all --track-origins=yes --log-fd=9 --suppressions=valgrind.supp'
         run: |
-          cargo valgrind run -- --entry crates/cribo/tests/fixtures/bundling/comprehensive_ast_rewrite/main.py --stdout
+          cargo valgrind run -- --entry crates/cribo/tests/fixtures/bundling/comprehensive_ast_rewrite/main.py --stdout 9>>valgrind.log
 
       - name: Upload valgrind.log
         if: always()
