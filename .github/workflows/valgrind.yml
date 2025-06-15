@@ -58,7 +58,7 @@ jobs:
 
       - name: Run cargo-valgrind
         env:
-          VALGRINDFLAGS: >
+          VALGRINDFLAGS: >-
             --verbose
             --show-reachable=no
             --error-exitcode=1
